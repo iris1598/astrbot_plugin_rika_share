@@ -1,0 +1,61 @@
+{
+  "BILI_CK": {
+    "description": "哔哩哔哩 Cookie (SESSDATA)",
+    "type": "string",
+    "hint": "从浏览器获取 bilibili.com 的 SESSDATA 值",
+    "obvious_hint": true
+  },
+  "YTB_CK": {
+    "description": "YouTube Cookie",
+    "type": "string",
+    "hint": "从浏览器获取 youtube.com 的 cookie (可选)",
+    "obvious_hint": true
+  },
+  "XHS_CK": {
+    "description": "小红书 Cookie",
+    "type": "string",
+    "hint": "从浏览器获取 xiaohongshu.com 的 cookie (可选)",
+    "obvious_hint": true
+  },
+  "PROXY": {
+    "description": "代理地址",
+    "type": "string",
+    "hint": "例如 http://127.0.0.1:7890 (可选)",
+    "obvious_hint": false
+  },
+  "VIDEO_DURATION_MAXIMUM": {
+    "description": "视频/音频最大时长(秒)",
+    "type": "int",
+    "default": 480,
+    "hint": "超过此时长的视频将不会被下载",
+    "obvious_hint": true
+  },
+  "MAX_SIZE": {
+    "description": "资源最大大小(MB)",
+    "type": "int",
+    "default": 90,
+    "hint": "超过此大小的媒体资源将不会被下载",
+    "obvious_hint": true
+  },
+  "DISABLED_PLATFORMS": {
+    "description": "禁用的平台(逗号分隔)",
+    "type": "string",
+    "default": "",
+    "hint": "例如: tiktok,youtube (留空表示全部启用)",
+    "obvious_hint": false
+  },
+  "CACHE_TTL_HOURS": {
+    "description": "缓存文件过期时间(小时)",
+    "type": "int",
+    "default": 24,
+    "hint": "缓存文件超过此时间未被使用将被清理。设为 0 禁用自动清理",
+    "obvious_hint": true
+  },
+  "CACHE_CLEANUP_INTERVAL_MINUTES": {
+    "description": "缓存清理检查间隔(分钟)",
+    "type": "int",
+    "default": 60,
+    "hint": "每隔多少分钟检查一次过期缓存",
+    "obvious_hint": false
+  }
+}
