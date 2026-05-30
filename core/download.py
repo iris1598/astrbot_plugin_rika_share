@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from functools import partial
 from contextlib import contextmanager
+from urllib.parse import urljoin
 
 import httpx
 import aiofiles
@@ -119,6 +120,54 @@ class StreamDownloader:
         return await self._download_file(
             url, file_name=video_name, ext_headers=ext_headers, chunk_size=1024 * 1024,
         )
+
+    async def download_m3u8(
+        self,
+        m3u8_url: str,
+        *,
+        video_name: str | None = None,
+        ext_headers: dict[str, str] | None = None,
+    ) -> Path:
+        """下载 m3u8 视频 - 解析分片列表并合并下载"""
+        if video_name is None:
+            video_name = generate_file_name(m3u8_url, ".mp4")
+
+        video_path = self.cache_dir / video_name
+        if video_path.exists():
+            return video_path
+
+        headers = {**self.headers, **(ext_headers or {})}
+
+        try:
+            # 1. 获取并解析 m3u8 分片列表
+            response = await self.client.get(m3u8_url, headers=headers)
+            response.raise_for_status()
+            slices_text = response.text
+
+            slices: list[str] = []
+            for line in slices_text.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                slices.append(urljoin(m3u8_url, line))
+
+            if not slices:
+                raise DownloadException("m3u8 分片列表为空")
+
+            # 2. 逐个下载分片并追加到文件
+            async with aiofiles.open(video_path, "wb") as f:
+                for seg_url in slices:
+                    async with self.client.stream("GET", seg_url, headers=headers) as response:
+                        response.raise_for_status()
+                        async for chunk in response.aiter_bytes(chunk_size=1024 * 1024):
+                            await f.write(chunk)
+
+        except httpx.HTTPError:
+            await safe_unlink(video_path)
+            logger.opt(exception=True).error(f"m3u8 视频下载失败 | url: {m3u8_url}")
+            raise DownloadException("m3u8 视频下载失败")
+
+        return video_path
 
     async def download_audio(
         self,
