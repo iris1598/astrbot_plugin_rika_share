@@ -40,7 +40,7 @@ KUAISHOU_PATTERN = re.compile(r"(v\.kuaishou\.com|kuaishou\.com|chenzhongtech\.c
 WEIBO_PATTERN = re.compile(r"(weibo\.com|weibo\.cn|m\.weibo\.cn|video\.weibo\.com|mapp\.api\.weibo\.cn)")
 XHS_PATTERN = re.compile(r"(xhslink\.com|xiaohongshu\.com)")
 TWITTER_PATTERN = re.compile(r"x\.com")
-NGA_PATTERN = re.compile(r"nga\.178\.com|ngabbs\.com")
+NGA_PATTERN = re.compile(r"nga\.178\.com|ngabbs\.com|bbs\.nga\.cn")
 ACFUN_PATTERN = re.compile(r"acfun\.cn")
 
 
