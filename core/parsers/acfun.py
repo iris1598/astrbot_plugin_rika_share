@@ -44,7 +44,7 @@ class AcfunParser(BaseParser):
             logger.warning(f"视频时长 {duration} 超过最大限制 {pconfig.VIDEO_DURATION_MAXIMUM}")
             raise IgnoreException
 
-        video_task = self.downloader.download_m3u8(
+        video_task = self.downloader.download_video(
             video_info.m3u8_url, video_name=f"acfun_{acid}.mp4",
         )
         video_content = self.create_video(video_task, cover_url=video_info.coverUrl)
