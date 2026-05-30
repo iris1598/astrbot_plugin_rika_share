@@ -1,5 +1,5 @@
 name: astrbot_plugin_rika_share
 desc: 莉卡解析 - 链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA
 version: v1.0.0
-author: fllesser (AstrBot port by RrOrange)
-repo: https://github.com/fllesser/nonebot-plugin-parser
+author: fllesser (AstrBot port by MIKU1598)
+repo: https://github.com/iris1598/astrbot_plugin_rika_share
