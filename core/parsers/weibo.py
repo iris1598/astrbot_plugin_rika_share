@@ -102,6 +102,9 @@ class WeiBoParser(BaseParser):
             "origin": "https://m.weibo.cn",
             "x-requested-with": "XMLHttpRequest",
             "mweibo-pwa": "1",
+            "sec-fetch-site": "same-origin",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-dest": "empty",
             **self.headers,
         }
         ts = int(time() * 1000)
