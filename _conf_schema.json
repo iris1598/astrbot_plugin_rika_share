@@ -30,13 +30,6 @@
     "hint": "超过此时长的视频将不会被下载",
     "obvious_hint": true
   },
-  "MAX_SIZE": {
-    "description": "资源最大大小(MB)",
-    "type": "int",
-    "default": 90,
-    "hint": "超过此大小的媒体资源将不会被下载",
-    "obvious_hint": true
-  },
   "DISABLED_PLATFORMS": {
     "description": "禁用的平台(逗号分隔)",
     "type": "string",

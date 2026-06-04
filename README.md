@@ -51,7 +51,6 @@ pip install -r requirements.txt
 | `YTB_CK` | string | — | YouTube Cookie |
 | `PROXY` | string | — | 代理地址 |
 | `VIDEO_DURATION_MAXIMUM` | int | 480 | 视频最大时长（秒），超时不会下载 |
-| `MAX_SIZE` | int | 90 | 媒体最大大小（MB），超出跳过 |
 | `DISABLED_PLATFORMS` | string | — | 禁用的平台（逗号分隔，如 `tiktok,youtube`） |
 
 ## 获取 Cookie

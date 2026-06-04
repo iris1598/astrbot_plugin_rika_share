@@ -34,10 +34,6 @@ class ParserConfig:
         return int(self._cfg.get("VIDEO_DURATION_MAXIMUM", 480))
 
     @property
-    def MAX_SIZE(self) -> int:
-        return int(self._cfg.get("MAX_SIZE", 90))
-
-    @property
     def APPEND_URL(self) -> bool:
         return bool(self._cfg.get("APPEND_URL", False))
 

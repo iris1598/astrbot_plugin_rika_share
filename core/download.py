@@ -28,16 +28,10 @@ class StreamDownloader:
 
     @staticmethod
     def _validate_content_length(response: httpx.Response) -> int:
-        from .config import get_config
-        pconfig = get_config()
         content_length = response.headers.get("Content-Length")
         content_length = int(content_length) if content_length else 0
         if content_length == 0:
             logger.warning(f"媒体 url: {response.url}, 大小为 0, 取消下载")
-            raise IgnoreException
-        max_size = getattr(pconfig, 'MAX_SIZE', 90)
-        if (file_size := content_length / 1024 / 1024) > max_size:
-            logger.warning(f"媒体 url: {response.url} 大小 {file_size:.2f} MB, 超过 {max_size} MB, 取消下载")
             raise IgnoreException
         return content_length
 
