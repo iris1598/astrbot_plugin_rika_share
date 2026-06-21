@@ -21,7 +21,7 @@ from .core.utils import cleanup_cache_dir
 from .core.config import init_config, get_config
 from .core.download import StreamDownloader
 from .core.data import ParseResult
-from .core.exception import ParseException, IgnoreException, DownloadException
+from .core.exception import ParseException, IgnoreException, DownloadException, SilentException
 from .core.parsers import (
     BilibiliParser, DouyinParser, KuaiShouParser, WeiBoParser,
     XiaoHongShuParser, TwitterParser, NGAParser, AcfunParser,
@@ -226,6 +226,8 @@ class ParserPlugin(Star):
             async for r in self._try_send_media(event, result):
                 yield r
 
+        except SilentException:
+            return  # 匹配不到模式时静默失败，不发送通知
         except IgnoreException as e:
             yield event.plain_result(f"ℹ️ {e.message}")
         except ParseException as e:

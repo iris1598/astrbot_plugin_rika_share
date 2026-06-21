@@ -12,7 +12,7 @@ from .data import Platform, ParseResult, Author, VideoContent, ImageContent, Aud
 from .task import PathTask
 from .download import StreamDownloader
 from .constants import IOS_HEADER, COMMON_HEADER, ANDROID_HEADER, COMMON_TIMEOUT, PlatformEnum
-from .exception import ParseException, IgnoreException, DownloadException
+from .exception import ParseException, IgnoreException, DownloadException, SilentException
 
 HandlerFunc = Any
 KeyPatterns = list[tuple[str, Pattern[str]]]
@@ -83,7 +83,7 @@ class BaseParser:
                 continue
             if searched := pattern.search(url):
                 return keyword, searched
-        raise ParseException(f"无法匹配 {url}")
+        raise SilentException(f"无法匹配 {url}")
 
     @classmethod
     def result(cls, **kwargs: Unpack[ParseResultKwargs]) -> ParseResult:

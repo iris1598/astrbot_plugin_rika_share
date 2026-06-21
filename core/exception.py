@@ -23,3 +23,7 @@ class IgnoreException(ParseException):
 
 class TipException(ParseException):
     """提示异常"""
+
+
+class SilentException(ParseException):
+    """静默异常 - 不发送通知，仅静默忽略"""
