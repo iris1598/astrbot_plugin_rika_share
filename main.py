@@ -56,6 +56,20 @@ class _EventUrlWrapper:
 @register("链接解析器", "fllesser (ported to AstrBot)",
           "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA", "2.6.5")
 class ParserPlugin(Star):
+    # QQ Official Bot 平台标识符（不支持 Comp.Nodes 合并转发）
+    # 同时检测字符串包含匹配，覆盖 "qq_official" / "qqofficial" / "qq_official_webhook" 等变体
+    @staticmethod
+    def _is_qqofficial(event: AstrMessageEvent) -> bool:
+        """检测当前平台是否为 QQ Official Bot。"""
+        try:
+            platform_name = event.get_platform_name().lower()
+            is_qqoff = "qqofficial" in platform_name or "qq_official" in platform_name
+            if is_qqoff:
+                logger.debug(f"[rika_share] 检测到 QQ Official Bot 平台: {platform_name}")
+            return is_qqoff
+        except Exception:
+            return False
+
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
@@ -213,16 +227,22 @@ class ParserPlugin(Star):
             # 根据平台构建：标题头 + 合并转发内容列表
             header, nodes_content = await self._build_platform_output(event, result, result.platform.name)
 
-            # 所有平台：标题头 + 正文内容 全放进合并转发
-            sender_name = event.get_sender_name()
-            sender_id = event.get_sender_id()
-            nodes = Comp.Nodes([])
-            nodes.nodes.append(Comp.Node(uin=sender_id, name=sender_name, content=[Comp.Plain(header)]))
-            for item in nodes_content:
-                nodes.nodes.append(Comp.Node(uin=sender_id, name=sender_name, content=item))
-            yield event.chain_result([nodes])
+            if self._is_qqofficial(event):
+                # QQ Official Bot: 拆分为独立消息序列（不支持 Comp.Nodes）
+                async for r in self._send_qqofficial_output(event, header, nodes_content):
+                    yield r
+            else:
+                # AIOCQHTTP / 其他平台：使用合并转发
+                sender_name = event.get_sender_name()
+                sender_id = event.get_sender_id()
+                nodes = Comp.Nodes([])
+                nodes.nodes.append(Comp.Node(uin=sender_id, name=sender_name, content=[Comp.Plain(header)]))
+                for item in nodes_content:
+                    nodes.nodes.append(Comp.Node(uin=sender_id, name=sender_name, content=item))
+                yield event.chain_result([nodes])
 
-            # 单独发送媒体文件（图片/封面已在合并转发中）
+            # 单独发送媒体文件（Video / Audio）
+            # 注意：图片已在 Nodes（AIOCQHTTP）或 _send_qqofficial_output（QQOFFICIAL）中处理
             async for r in self._try_send_media(event, result):
                 yield r
 
@@ -239,15 +259,32 @@ class ParserPlugin(Star):
             yield event.plain_result(f"❌ 处理出错: {str(e)[:100]}")
 
     async def _try_send_media(self, event: AstrMessageEvent, result: ParseResult):
-        """单独发送媒体文件。所有图片/封面已在合并转发中，不重复发送。"""
+        """单独发送媒体文件。所有图片/封面已在合并转发中，不重复发送。
+
+        QQ Official Bot 有文件上传大小限制，超限文件将跳过并给出提示。
+        """
         from .core.data import VideoContent, AudioContent
+
+        # QQ Official Bot 视频上传限制约 30MB，保守设为 28MB
+        QQOFFICIAL_VIDEO_MAX_BYTES = 28 * 1024 * 1024
+        is_qqoff = self._is_qqofficial(event)
+
         for cont in result.contents:
             if not isinstance(cont, (VideoContent, AudioContent)):
                 continue  # 图片已在合并转发中
             path = await cont.path_task.safe_get()
             if path is None:
                 continue
+
             if isinstance(cont, VideoContent):
+                if is_qqoff:
+                    file_size = path.stat().st_size
+                    if file_size > QQOFFICIAL_VIDEO_MAX_BYTES:
+                        size_mb = file_size / (1024 * 1024)
+                        yield event.plain_result(
+                            f"⚠️ 视频文件过大 ({size_mb:.1f}MB)，超过 QQ 官方机器人上传限制，已跳过"
+                        )
+                        continue
                 yield event.chain_result([Comp.Video.fromFileSystem(str(path))])
             elif isinstance(cont, AudioContent):
                 yield event.chain_result([Comp.Record(file=str(path))])
@@ -389,6 +426,39 @@ class ParserPlugin(Star):
                 if cover_path:
                     nodes.append([Comp.Image.fromFileSystem(str(cover_path))])
         return header, nodes
+
+    async def _send_qqofficial_output(
+        self,
+        event: AstrMessageEvent,
+        header: str,
+        nodes_content: list[list],
+    ):
+        """为 QQ Official Bot 合并所有非视频内容为一条消息。
+
+        QQ Official Bot 不支持 Comp.Nodes（合并转发），因此将
+        header + 所有文本 + 所有图片合并到一条 chain_result 中发送。
+        视频由 _try_send_media() 单独处理。
+        """
+        parts: list = []
+
+        # header 文本
+        if header:
+            parts.append(Comp.Plain(header + "\n"))
+
+        # 收集所有节点的文本和图片
+        text_lines: list[str] = []
+        for node_content in nodes_content:
+            for comp in node_content:
+                if isinstance(comp, Comp.Plain):
+                    text_lines.append(comp.text)
+                elif isinstance(comp, Comp.Image):
+                    parts.append(comp)
+
+        if text_lines:
+            parts.append(Comp.Plain("\n".join(text_lines)))
+
+        if parts:
+            yield event.chain_result(parts)
 
     def _format_generic(self, result) -> tuple[str, bool]:
         lines = [f"莉卡解析 | {result.platform.display_name}"]
