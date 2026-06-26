@@ -188,109 +188,24 @@ class ParserPlugin(Star):
 
     # ==================== JSON 卡片处理器 ====================
 
-    # 小程序卡片 source 字段 → parser 名称映射
-    _SOURCE_PARSER_MAP: dict[str, str] = {
-        "哔哩哔哩": "bilibili",
-        "bilibili": "bilibili",
-        "微博": "weibo",
-        "weibo": "weibo",
-        "抖音": "douyin",
-        "douyin": "douyin",
-        "快手": "kuaishou",
-        "kuaishou": "kuaishou",
-        "小红书": "xiaohongshu",
-        "xiaohongshu": "xiaohongshu",
-        "twitter": "twitter",
-        "x": "twitter",
-        "acfun": "acfun",
-        "AcFun": "acfun",
-        "NGA": "nga",
-        "nga": "nga",
-    }
-
     @filter.regex(r".*")
     async def json_card_handler(self, event: AstrMessageEvent):
         if not self._has_json_component(event):
             return
-
-        # 提取小程序来源平台，用于优先匹配
-        source = self._extract_miniprogram_source(event)
-
-        # 提取链接
         links = self._extract_links_from_event(event)
-
-        if links:
-            unique_links = list(dict.fromkeys(links))
-            parser_order: list = []
-            if source and source in self.parsers:
-                parser_order.append((source, self.parsers[source]))
-            for name, parser in self.parsers.items():
-                if name != source:
-                    parser_order.append((name, parser))
-
-            for link in unique_links:
-                for _, parser in parser_order:
-                    try:
-                        _, _ = parser.search_url(link)
-                        wrapped = _EventUrlWrapper(event, link)
-                        async for r in self._process_url(wrapped, parser):
-                            yield r
-                        return
-                    except ParseException:
-                        continue
-        else:
-            # 没有提取到链接时，记录卡片结构便于排查
-            logger.debug(f"[rika_share] 小程序卡片未提取到链接 (source={source})")
-
-    def _extract_miniprogram_source(self, event: AstrMessageEvent) -> str | None:
-        """从小程序卡片中提取来源平台名称，并映射到 parser 名称。"""
-        if not hasattr(event, "message_obj") or not hasattr(event.message_obj, "message"):
-            return None
-        for c in event.message_obj.message:
-            data = None
-            if isinstance(c, dict):
-                data = c.get("data", c)
-            elif isinstance(c, Comp.Json):
+        if not links:
+            return
+        unique_links = list(dict.fromkeys(links))
+        for link in unique_links:
+            for _, parser in self.parsers.items():
                 try:
-                    import json
-                    data = json.loads(c.data) if isinstance(c.data, str) else c.data
-                except Exception:
+                    _, _ = parser.search_url(link)
+                    wrapped = _EventUrlWrapper(event, link)
+                    async for r in self._process_url(wrapped, parser):
+                        yield r
+                    return
+                except ParseException:
                     continue
-
-            if data is None:
-                continue
-
-            # 递归搜索 source 字段
-            def find_source(obj, depth=0):
-                if depth > 5 or obj is None:
-                    return None
-                if isinstance(obj, dict):
-                    s = obj.get("source", "")
-                    if isinstance(s, str) and s:
-                        mapped = ParserPlugin._SOURCE_PARSER_MAP.get(s)
-                        if mapped:
-                            return mapped
-                    for v in obj.values():
-                        if isinstance(v, (dict, list)):
-                            r = find_source(v, depth + 1)
-                            if r:
-                                return r
-                    # 检查 prompt 字段: "[QQ小程序]标题" 可能包含来源线索
-                    prompt = obj.get("prompt", "")
-                    if isinstance(prompt, str) and "哔哩哔哩" in prompt:
-                        return "bilibili"
-                elif isinstance(obj, list):
-                    for item in obj:
-                        if isinstance(item, (dict, list)):
-                            r = find_source(item, depth + 1)
-                            if r:
-                                return r
-                return None
-
-            result = find_source(data)
-            if result:
-                return result
-        return None
 
     # ==================== 核心处理流程 ====================
 
@@ -558,22 +473,20 @@ class ParserPlugin(Star):
 
     @staticmethod
     def _has_json_component(event: AstrMessageEvent) -> bool:
-        """检测消息中是否包含 JSON 卡片 / 小程序卡片 / Ark 消息。"""
         if not hasattr(event, "message_obj") or not hasattr(event.message_obj, "message"):
             return False
         for c in event.message_obj.message:
             if isinstance(c, dict):
-                t = str(c.get("type", "")).lower()
+                t = c.get("type")
                 if t == "reply":
                     continue
-                # JSON 卡片、小程序卡片、Ark 消息
-                if t and any(kw in t for kw in ("json", "mini", "program", "ark", "app")):
+                if t and "json" in str(t).lower():
                     return True
                 continue
             if isinstance(c, Comp.Json):
                 return True
-            t = str(getattr(c, "type", "")).lower()
-            if t and any(kw in t for kw in ("json", "mini", "program", "ark", "app")):
+            t = getattr(c, "type", None)
+            if t and "json" in str(t).lower():
                 return True
         return False
 
@@ -588,11 +501,10 @@ class ParserPlugin(Star):
         if hasattr(event, "message_obj") and hasattr(event.message_obj, "message"):
             for c in event.message_obj.message:
                 if isinstance(c, dict):
-                    t = str(c.get("type", "")).lower()
+                    t = c.get("type")
                     if t == "reply":
                         continue
-                    # JSON 卡片、小程序卡片、Ark 消息
-                    if t and any(kw in t for kw in ("json", "mini", "program", "ark", "app")):
+                    if t and "json" in str(t).lower():
                         links.extend(self._extract_links_from_json(c.get("data", c)))
                     continue
                 if isinstance(c, Comp.Json):
@@ -620,7 +532,6 @@ class ParserPlugin(Star):
                             found.append(v)
                         elif isinstance(v, (dict, list)):
                             found.extend(search(v))
-                    # QQ 小程序卡片: meta → detail_1 / detail / news / music → qqdocurl / url / jumpUrl
                     meta = obj.get("meta", {})
                     if isinstance(meta, dict):
                         for dk in ("detail_1", "detail", "news", "music"):
@@ -630,11 +541,6 @@ class ParserPlugin(Star):
                                     v = d.get(uk, "")
                                     if isinstance(v, str) and v:
                                         found.append(v)
-                    # 小程序卡片顶层可能直接有 jumpUrl / url
-                    for uk in ("qqdocurl", "jumpUrl", "url"):
-                        v = obj.get(uk, "")
-                        if isinstance(v, str) and v:
-                            found.append(v)
                 elif isinstance(obj, list):
                     for item in obj:
                         if isinstance(item, (dict, list)):
