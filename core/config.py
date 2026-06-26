@@ -60,6 +60,10 @@ class ParserConfig:
     def CACHE_CLEANUP_INTERVAL_MINUTES(self) -> int:
         return int(self._cfg.get("CACHE_CLEANUP_INTERVAL_MINUTES", 60))
 
+    @property
+    def BILI_QUALITY(self) -> str:
+        return str(self._cfg.get("BILI_QUALITY", "1080P"))
+
 
 def init_config(astrbot_config: Any, cache_dir: Path, config_dir: Path) -> ParserConfig:
     global _config

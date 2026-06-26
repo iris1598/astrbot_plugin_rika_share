@@ -270,6 +270,23 @@ class BilibiliParser(BaseParser):
             AudioStreamDownloadURL, VideoStreamDownloadURL, FLVStreamDownloadURL,
             MP4StreamDownloadURL, VideoDownloadURLDataDetecter, VideoQuality, VideoCodecs,
         )
+        from ..config import get_config
+
+        # 清晰度字符串 → VideoQuality 枚举映射
+        QUALITY_MAP = {
+            "360P": VideoQuality._360P,
+            "480P": VideoQuality._480P,
+            "720P": VideoQuality._720P,
+            "1080P": VideoQuality._1080P,
+            "1080P+": VideoQuality._1080P_PLUS,
+            "4K": VideoQuality._4K,
+            "8K": VideoQuality._8K,
+        }
+
+        # 从配置读取用户设置的清晰度，不区分大小写
+        pconfig = get_config()
+        raw_quality = pconfig.BILI_QUALITY.strip().upper().replace("＋", "+")
+        target_quality = QUALITY_MAP.get(raw_quality, VideoQuality._1080P)
 
         if video is None:
             video = Video(bvid=bvid, aid=avid, credential=await self.credential)
@@ -277,7 +294,7 @@ class BilibiliParser(BaseParser):
         download_url_data = await video.get_download_url(page_index=page_index)
         detecter = VideoDownloadURLDataDetecter(download_url_data)
         streams = detecter.detect_best_streams(
-            video_max_quality=VideoQuality._1080P,
+            video_max_quality=target_quality,
             codecs=[VideoCodecs.AV1, VideoCodecs.AVC, VideoCodecs.HEV],
             no_dolby_video=True, no_hdr=True,
         )

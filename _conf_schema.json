@@ -50,5 +50,12 @@
     "default": 60,
     "hint": "每隔多少分钟检查一次过期缓存",
     "obvious_hint": false
+  },
+  "BILI_QUALITY": {
+    "description": "B站视频下载清晰度",
+    "type": "string",
+    "default": "1080P",
+    "hint": "可选: 360P, 480P, 720P, 1080P, 1080P+, 4K, 8K (需要对应账号权限)",
+    "obvious_hint": true
   }
 }
