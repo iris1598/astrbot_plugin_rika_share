@@ -1,8 +1,8 @@
 {
   "BILI_CK": {
-    "description": "哔哩哔哩 Cookie (SESSDATA)",
+    "description": "哔哩哔哩 Cookie（可选，也可用 /bili_login 扫码登录获取）",
     "type": "string",
-    "hint": "从浏览器获取 bilibili.com 的 SESSDATA 值",
+    "hint": "从浏览器获取 bilibili.com 的 SESSDATA 值，或使用 /bili_login 扫码登录自动获取",
     "obvious_hint": true
   },
   "YTB_CK": {
@@ -57,5 +57,26 @@
     "default": "1080P",
     "hint": "可选: 360P, 480P, 720P, 1080P, 1080P+, 4K, 8K (需要对应账号权限)",
     "obvious_hint": true
+  },
+  "BILI_COOKIE_MONITOR_ENABLED": {
+    "description": "启用B站Cookie定时监控",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后将定时检测B站Cookie是否有效，失效时自动通知",
+    "obvious_hint": true
+  },
+  "BILI_COOKIE_CHECK_INTERVAL": {
+    "description": "B站Cookie检测间隔(秒)",
+    "type": "int",
+    "default": 3600,
+    "hint": "每隔多少秒检测一次Cookie有效性，最小60秒",
+    "obvious_hint": false
+  },
+  "BILI_COOKIE_NOTIFY_COOLDOWN": {
+    "description": "B站Cookie失效通知冷却时间(秒)",
+    "type": "int",
+    "default": 3600,
+    "hint": "Cookie失效后，至少间隔多少秒才重复通知，最小60秒",
+    "obvious_hint": false
   }
 }

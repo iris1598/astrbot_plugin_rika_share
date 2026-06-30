@@ -5,17 +5,24 @@
 选项: YouTube | TikTok (需安装 yt-dlp)
 
 移植自 nonebot-plugin-parser (https://github.com/fllesser/nonebot-plugin-parser)
+内置B站扫码登录、Cookie监控、自动应用Cookie功能
 """
 
+import os
 import re
+import json
 import asyncio
+from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Optional, Dict
 
+import aiohttp
+import qrcode
+from cryptography.fernet import Fernet
 from astrbot.api import logger, AstrBotConfig
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult, MessageChain
 import astrbot.api.message_components as Comp
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, register, StarTools
 
 from .core.utils import cleanup_cache_dir
 from .core.config import init_config, get_config
@@ -26,6 +33,20 @@ from .core.parsers import (
     BilibiliParser, DouyinParser, KuaiShouParser, WeiBoParser,
     XiaoHongShuParser, TwitterParser, NGAParser, AcfunParser,
 )
+
+# ========== B站扫码登录 API ==========
+BILI_QR_GENERATE_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
+BILI_QR_POLL_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
+
+# 扫码状态码
+QR_CODE_UNSCANNED = 86101
+QR_CODE_SCANNED = 86090
+QR_CODE_EXPIRED = 86038
+QR_CODE_SUCCESS = 0
+
+# 二维码有效期（秒）
+QR_CODE_EXPIRE_TIME = 180
+POLL_INTERVAL = 5
 
 
 def _get_plugin_data_dir() -> Path:
@@ -90,6 +111,25 @@ class ParserPlugin(Star):
         self._result_cache: dict[str, ParseResult] = {}
         self._cache_cleanup_task: asyncio.Task | None = None
 
+        # ========== B站 Cookie 监控状态 ==========
+        self._bili_cookie: str = ""
+        self._bili_http_session: aiohttp.ClientSession | None = None
+        self._bili_monitor_running: bool = False
+        self._bili_monitor_task: asyncio.Task | None = None
+        self._bili_login_tasks: Dict[str, asyncio.Task] = {}
+        self._bili_cookie_lock = asyncio.Lock()
+        self._bili_file_lock = asyncio.Lock()
+        self._bili_last_status: Optional[Dict] = None
+        self._bili_last_check_time: Optional[datetime] = None
+        self._bili_was_invalid: bool = False
+        self._bili_last_notify_time: Optional[datetime] = None
+
+        # Cookie 持久化目录
+        self._bili_data_dir = StarTools.get_data_dir("astrbot_plugin_rika_share")
+        self._bili_data_dir.mkdir(parents=True, exist_ok=True)
+        self._bili_status_file = self._bili_data_dir / "bili_cookie_status.json"
+        self._bili_key_file = self._bili_data_dir / ".bili_cookie_key"
+
     def _init_parsers(self):
         pconfig = get_config()
         disabled = self.disabled_platforms
@@ -134,6 +174,19 @@ class ParserPlugin(Star):
             self._cache_cleanup_task = asyncio.create_task(_cache_cleanup_loop())
         else:
             logger.info("缓存自动清理已禁用 (CACHE_TTL_HOURS=0)")
+
+        # ========== B站 Cookie 初始化 ==========
+        await self._bili_load_last_status()
+        await self._bili_load_cookie()
+        self._bili_http_session = aiohttp.ClientSession()
+
+        # 如果已有cookie（从持久化加载或配置中），更新到BilibiliParser
+        if self._bili_cookie:
+            self._bili_apply_cookie_to_parser(self._bili_cookie)
+
+        # 启动监控循环
+        if pconfig.BILI_COOKIE_MONITOR_ENABLED and self._bili_cookie:
+            self._bili_start_monitor()
 
     # ==================== 平台处理器 ====================
 
@@ -460,6 +513,536 @@ class ParserPlugin(Star):
         if parts:
             yield event.chain_result(parts)
 
+    # ==================== B站 Cookie 扫码登录 / 监控 / 自动应用 ====================
+
+    @filter.command("bili_login")
+    async def bili_qr_login(self, event: AstrMessageEvent):
+        """B站扫码登录 - 获取二维码图片并轮询扫码结果"""
+        sender_id = event.get_sender_id()
+
+        # 检查是否有正在进行的登录
+        if sender_id in self._bili_login_tasks and not self._bili_login_tasks[sender_id].done():
+            yield event.plain_result("⏳ 你有一个正在进行的扫码登录，请先完成或等待超时")
+            return
+
+        try:
+            if not self._bili_http_session:
+                self._bili_http_session = aiohttp.ClientSession()
+
+            yield event.plain_result("🔄 正在生成B站登录二维码...")
+
+            async with self._bili_http_session.get(
+                BILI_QR_GENERATE_URL,
+                headers=self._bili_get_headers(),
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                data = await resp.json()
+
+            if data.get("code") != 0:
+                yield event.plain_result(f"❌ 获取二维码失败: {data.get('message', '未知错误')}")
+                return
+
+            qrcode_url = data["data"]["url"]
+            qrcode_key = data["data"]["qrcode_key"]
+
+            if not qrcode_key:
+                yield event.plain_result("❌ 获取qrcode_key失败")
+                return
+
+            # 生成二维码图片
+            qr_image = self._bili_generate_qrcode_image(qrcode_url)
+            if not qr_image:
+                yield event.plain_result("❌ 二维码生成失败，请检查是否已安装 qrcode 库")
+                return
+
+            # 保存并发送二维码图片
+            qr_path = self._bili_data_dir / f"qrcode_{sender_id}.png"
+            os.makedirs(self._bili_data_dir, exist_ok=True)
+            qr_image.save(str(qr_path), "PNG")
+
+            yield event.image_result(str(qr_path))
+
+            yield event.plain_result(
+                "📱 请使用 **B站App** 扫描上方二维码登录\n"
+                "⏱️ 二维码有效期约3分钟\n"
+                "📋 扫码后请在手机上点击「确认登录」"
+            )
+
+            logger.info(f"已发送B站登录二维码给用户 {sender_id}，qrcode_key: {qrcode_key[:8]}...")
+
+            # 启动异步轮询
+            task = asyncio.create_task(
+                self._bili_poll_qr_login(sender_id, qrcode_key, qr_path)
+            )
+            self._bili_login_tasks[sender_id] = task
+
+        except asyncio.TimeoutError:
+            yield event.plain_result("❌ 请求超时，请稍后重试")
+        except aiohttp.ClientError as e:
+            yield event.plain_result(f"❌ 网络错误: {e}")
+        except Exception as e:
+            logger.exception("扫码登录出错")
+            yield event.plain_result(f"❌ 生成二维码失败: {e}")
+
+    @filter.command("bili_check")
+    async def bili_check_cookie(self, event: AstrMessageEvent):
+        """手动检测B站Cookie状态"""
+        if not self._bili_cookie:
+            yield event.plain_result(
+                "⚠️ 尚未配置B站Cookie，请使用 /bili_login 扫码登录\n"
+                "或在插件配置中填入 BILI_CK"
+            )
+            return
+
+        if not self._bili_http_session:
+            yield event.plain_result("⚠️ 插件正在初始化中，请稍后再试")
+            return
+
+        result = await self._bili_check_cookie_valid()
+
+        if result["valid"]:
+            msg = f"✅ B站Cookie有效\n用户: {result.get('username', '未知')}\nUID: {result.get('uid', 0)}"
+        else:
+            msg = f"❌ B站Cookie失效\n错误: {result.get('error', '未知错误')}"
+
+        self._bili_last_status = result
+        self._bili_last_check_time = datetime.now()
+        await self._bili_save_last_status()
+
+        yield event.plain_result(msg)
+
+    @filter.command("bili_status")
+    async def bili_status(self, event: AstrMessageEvent):
+        """查看B站Cookie状态"""
+        lines = [
+            f"Cookie状态: {'已配置' if self._bili_cookie else '未配置'}",
+            f"监控状态: {'运行中' if self._bili_monitor_running else '已停止'}",
+        ]
+        if self._bili_last_status:
+            status = "有效" if self._bili_last_status.get("valid") else "失效"
+            lines.append(f"上次检测: {status}")
+            if self._bili_last_check_time:
+                lines.append(f"检测时间: {self._bili_last_check_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        yield event.plain_result("\n".join(lines))
+
+    # ---------- 内部方法 ----------
+
+    @staticmethod
+    def _bili_get_headers() -> dict:
+        """获取B站API请求头"""
+        return {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://www.bilibili.com/",
+            "Accept": "application/json, text/plain, */*",
+        }
+
+    @staticmethod
+    def _bili_generate_qrcode_image(url: str):
+        """生成二维码图片"""
+        try:
+            qr = qrcode.QRCode(
+                version=None,
+                error_correction=qrcode.constants.ERROR_CORRECT_M,
+                box_size=10,
+                border=4,
+            )
+            qr.add_data(url)
+            qr.make(fit=True)
+            return qr.make_image(fill_color="black", back_color="white")
+        except Exception as e:
+            logger.error(f"生成二维码失败: {e}")
+            return None
+
+    async def _bili_poll_qr_login(self, sender_id: str, qrcode_key: str, qr_path: Path):
+        """异步轮询扫码状态"""
+        try:
+            start_time = datetime.now()
+            last_notified_status = None
+
+            while True:
+                elapsed = (datetime.now() - start_time).total_seconds()
+
+                if elapsed >= QR_CODE_EXPIRE_TIME:
+                    logger.info(f"用户 {sender_id} 的二维码已过期")
+                    await self._bili_notify_user(sender_id, "⏱️ 二维码已过期\n请重新发送 /bili_login 获取新二维码")
+                    break
+
+                if not self._bili_http_session or self._bili_http_session.closed:
+                    break
+
+                try:
+                    async with self._bili_http_session.get(
+                        BILI_QR_POLL_URL,
+                        params={"qrcode_key": qrcode_key},
+                        headers=self._bili_get_headers(),
+                        timeout=aiohttp.ClientTimeout(total=15)
+                    ) as resp:
+                        poll_data = await resp.json()
+                        set_cookie_headers = resp.headers.getall("Set-Cookie", [])
+                except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+                    logger.warning(f"轮询扫码状态失败: {e}")
+                    await asyncio.sleep(POLL_INTERVAL)
+                    continue
+
+                code = poll_data.get("data", {}).get("code", -1)
+
+                if code == QR_CODE_UNSCANNED:
+                    pass
+
+                elif code == QR_CODE_SCANNED:
+                    if last_notified_status != QR_CODE_SCANNED:
+                        await self._bili_notify_user(sender_id, "✅ 已扫码\n请在手机上点击「确认登录」完成授权")
+                        last_notified_status = QR_CODE_SCANNED
+
+                elif code == QR_CODE_EXPIRED:
+                    await self._bili_notify_user(sender_id, "⏱️ 二维码已过期\n请重新发送 /bili_login 获取新二维码")
+                    break
+
+                elif code == QR_CODE_SUCCESS:
+                    logger.info(f"用户 {sender_id} 扫码登录成功")
+
+                    # 从Set-Cookie头提取cookie
+                    cookie_dict = {}
+                    for header in set_cookie_headers:
+                        cookie_part = header.split(";")[0].strip()
+                        if "=" in cookie_part:
+                            name, value = cookie_part.split("=", 1)
+                            cookie_dict[name.strip()] = value.strip()
+
+                    if not cookie_dict:
+                        await self._bili_notify_user(sender_id, "❌ 登录成功但未获取到Cookie，请重试")
+                        break
+
+                    cookie_str = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
+
+                    # 更新状态
+                    async with self._bili_cookie_lock:
+                        self._bili_cookie = cookie_str
+
+                    # 持久化保存
+                    await self._bili_save_cookie(cookie_str)
+
+                    # 立即应用到BilibiliParser
+                    self._bili_apply_cookie_to_parser(cookie_str)
+
+                    # 如果监控未启动，启动监控
+                    if not self._bili_monitor_running:
+                        self._bili_start_monitor()
+
+                    # 验证cookie
+                    result = await self._bili_check_cookie_valid()
+                    self._bili_last_status = result
+                    self._bili_last_check_time = datetime.now()
+                    await self._bili_save_last_status()
+
+                    if result["valid"]:
+                        await self._bili_notify_user(
+                            sender_id,
+                            f"🎉 登录成功，B站Cookie已生效并自动应用！\n"
+                            f"👤 用户: {result.get('username', '未知')}\n"
+                            f"🆔 UID: {result.get('uid', 0)}\n"
+                            f"{'👑 大会员' if result.get('vip') else '🐟 普通用户'}\n"
+                            f"{'🚀 监控已自动启动' if self._bili_monitor_running else '⚠️ 监控未运行'}"
+                        )
+                        self._bili_was_invalid = False
+                    else:
+                        await self._bili_notify_user(
+                            sender_id,
+                            f"⚠️ Cookie已保存但验证失败: {result.get('error')}"
+                        )
+                    break
+
+                else:
+                    logger.warning(f"未知扫码状态码: {code}")
+
+                await asyncio.sleep(POLL_INTERVAL)
+
+        except asyncio.CancelledError:
+            logger.info(f"用户 {sender_id} 的扫码轮询被取消")
+        except Exception:
+            logger.exception(f"扫码轮询出错 (用户: {sender_id})")
+        finally:
+            if sender_id in self._bili_login_tasks:
+                del self._bili_login_tasks[sender_id]
+            if qr_path.exists():
+                try:
+                    qr_path.unlink()
+                except Exception:
+                    pass
+
+    def _bili_apply_cookie_to_parser(self, cookie_str: str):
+        """将Cookie立即应用到BilibiliParser"""
+        parser = self.parsers.get("bilibili")
+        if parser and hasattr(parser, "update_cookie"):
+            parser.update_cookie(cookie_str)
+            logger.info("B站Cookie已自动应用到BilibiliParser")
+        else:
+            logger.warning("BilibiliParser 不可用，无法应用Cookie")
+
+    async def _bili_check_cookie_valid(self) -> dict:
+        """检测B站Cookie是否有效"""
+        if not self._bili_cookie:
+            return {"valid": False, "error": "Cookie为空"}
+        if not self._bili_http_session:
+            return {"valid": False, "error": "HTTP会话未初始化"}
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Cookie": self._bili_cookie,
+            "Referer": "https://www.bilibili.com/"
+        }
+
+        try:
+            async with self._bili_http_session.get(
+                "https://api.bilibili.com/x/web-interface/nav",
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                data = await resp.json()
+
+                if data.get("code") == 0 and data.get("data", {}).get("isLogin"):
+                    # Cookie有效时从响应头刷新
+                    set_cookie_headers = resp.headers.getall("Set-Cookie", [])
+                    if set_cookie_headers:
+                        await self._bili_refresh_cookie_from_headers(set_cookie_headers)
+
+                    u = data["data"]
+                    return {
+                        "valid": True,
+                        "username": u.get("uname", ""),
+                        "uid": u.get("mid", 0),
+                        "vip": u.get("vipStatus") == 1
+                    }
+                error_msg = data.get("message", "未知错误")
+                code = data.get("code")
+                if code == -101:
+                    error_msg = "账号未登录或Cookie已过期"
+                elif code == -352:
+                    error_msg = "请求被风控"
+                return {"valid": False, "error": error_msg, "code": code}
+
+        except asyncio.TimeoutError:
+            return {"valid": False, "error": "请求超时"}
+        except aiohttp.ClientError as e:
+            return {"valid": False, "error": f"网络错误: {e}"}
+        except Exception as e:
+            return {"valid": False, "error": f"未知错误: {e}"}
+
+    async def _bili_refresh_cookie_from_headers(self, set_cookie_headers: list) -> bool:
+        """从Set-Cookie响应头中刷新Cookie"""
+        if not set_cookie_headers:
+            return False
+
+        new_cookies = {}
+        for header in set_cookie_headers:
+            cookie_part = header.split(";")[0].strip()
+            if "=" in cookie_part:
+                name, value = cookie_part.split("=", 1)
+                name = name.strip()
+                value = value.strip()
+                if value:
+                    new_cookies[name] = value
+
+        if not new_cookies:
+            return False
+
+        async with self._bili_cookie_lock:
+            existing = {}
+            for part in self._bili_cookie.split(";"):
+                part = part.strip()
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    existing[k.strip()] = v.strip()
+
+            merged = {**existing, **new_cookies}
+            new_cookie_str = "; ".join(f"{k}={v}" for k, v in merged.items())
+
+            if new_cookie_str != self._bili_cookie:
+                self._bili_cookie = new_cookie_str
+                await self._bili_save_cookie(new_cookie_str)
+                self._bili_apply_cookie_to_parser(new_cookie_str)
+                logger.info(f"B站Cookie已自动刷新，更新了 {len(new_cookies)} 个字段")
+                return True
+
+        return False
+
+    def _bili_start_monitor(self):
+        """启动Cookie监控循环"""
+        if self._bili_monitor_task and not self._bili_monitor_task.done():
+            return
+        self._bili_monitor_running = True
+        self._bili_monitor_task = asyncio.create_task(self._bili_monitor_loop())
+        pconfig = get_config()
+        logger.info(f"B站Cookie监控已启动，检测间隔: {pconfig.BILI_COOKIE_CHECK_INTERVAL}秒")
+
+    async def _bili_monitor_loop(self):
+        """Cookie监控循环"""
+        pconfig = get_config()
+        while self._bili_monitor_running:
+            try:
+                result = await self._bili_check_cookie_valid()
+                self._bili_last_status = result
+                self._bili_last_check_time = datetime.now()
+                await self._bili_save_last_status()
+
+                if result["valid"]:
+                    if self._bili_was_invalid:
+                        await self._bili_notify_admin("✅ B站Cookie已恢复", f"用户: {result.get('username')}")
+                        self._bili_was_invalid = False
+                else:
+                    logger.warning(f"B站Cookie失效: {result.get('error')}")
+                    if not self._bili_was_invalid or self._bili_should_notify():
+                        await self._bili_notify_admin("❌ B站Cookie已失效", f"错误: {result.get('error')}")
+                        self._bili_last_notify_time = datetime.now()
+                    self._bili_was_invalid = True
+
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("B站Cookie监控出错")
+
+            if self._bili_monitor_running:
+                await asyncio.sleep(pconfig.BILI_COOKIE_CHECK_INTERVAL)
+
+    def _bili_should_notify(self) -> bool:
+        """检查是否应该发送失效通知（冷却机制）"""
+        if self._bili_last_notify_time is None:
+            return True
+        elapsed = (datetime.now() - self._bili_last_notify_time).total_seconds()
+        pconfig = get_config()
+        return elapsed >= pconfig.BILI_COOKIE_NOTIFY_COOLDOWN
+
+    async def _bili_notify_user(self, sender_id: str, message: str):
+        """向指定用户发送消息"""
+        try:
+            umo = sender_id if ":" in sender_id else f"default:FriendMessage:{sender_id}"
+            await self.context.send_message(umo, MessageChain().message(message))
+        except Exception as e:
+            logger.error(f"发送消息给 {sender_id} 失败: {e}")
+
+    async def _bili_notify_admin(self, title: str, message: str):
+        """向管理员发送Cookie状态通知"""
+        # 尝试私聊第一个可用的会话
+        try:
+            platforms = self.context.platform_manager.get_insts()
+            for platform in platforms:
+                if hasattr(platform, '_bot') or hasattr(platform, 'client'):
+                    from astrbot.api.platform import Platform
+                    break
+        except Exception:
+            pass
+        logger.info(f"[B站Cookie监控] {title}: {message}")
+
+    # ==================== 持久化 ====================
+
+    async def _bili_load_last_status(self):
+        """加载上次Cookie检测状态"""
+        async with self._bili_file_lock:
+            try:
+                if self._bili_status_file.exists():
+                    with open(self._bili_status_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    self._bili_last_status = data.get("last_status")
+                    self._bili_was_invalid = data.get("was_invalid", False)
+                    if data.get("last_check_time"):
+                        self._bili_last_check_time = datetime.fromisoformat(data["last_check_time"])
+                    if data.get("last_notify_time"):
+                        self._bili_last_notify_time = datetime.fromisoformat(data["last_notify_time"])
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                logger.error(f"加载B站Cookie状态失败: {e}")
+
+    async def _bili_save_last_status(self):
+        """保存当前Cookie检测状态"""
+        async with self._bili_file_lock:
+            try:
+                os.makedirs(self._bili_data_dir, exist_ok=True)
+                data = {
+                    "last_status": self._bili_last_status,
+                    "last_check_time": self._bili_last_check_time.isoformat() if self._bili_last_check_time else None,
+                    "was_invalid": self._bili_was_invalid,
+                    "last_notify_time": self._bili_last_notify_time.isoformat() if self._bili_last_notify_time else None
+                }
+                with open(self._bili_status_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except (IOError, OSError) as e:
+                logger.error(f"保存B站Cookie状态失败: {e}")
+
+    async def _bili_load_cookie(self):
+        """从持久化存储中加载Cookie（优先），其次从配置加载"""
+        # 先尝试从持久化文件加载
+        try:
+            config_path = self._bili_data_dir / "bili_cookie_encrypted.json"
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+                saved = config_data.get("cookie", "")
+                if saved:
+                    decrypted = self._bili_decrypt_cookie(saved)
+                    if decrypted:
+                        self._bili_cookie = decrypted
+                        logger.info("已从持久化存储加载B站Cookie")
+                        return
+                    logger.warning("B站Cookie解密失败")
+        except (IOError, OSError, json.JSONDecodeError) as e:
+            logger.error(f"加载持久化Cookie失败: {e}")
+
+        # 再从配置加载
+        pconfig = get_config()
+        if pconfig.BILI_CK:
+            self._bili_cookie = pconfig.BILI_CK
+            logger.info("已从插件配置加载B站Cookie")
+
+    async def _bili_save_cookie(self, cookie_str: str):
+        """加密持久化保存Cookie"""
+        if not cookie_str:
+            return
+        try:
+            config_path = self._bili_data_dir / "bili_cookie_encrypted.json"
+            config_data = {}
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+            config_data["cookie"] = self._bili_encrypt_cookie(cookie_str)
+            config_data["timestamp"] = datetime.now().isoformat()
+            os.makedirs(self._bili_data_dir, exist_ok=True)
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, ensure_ascii=False, indent=4)
+            logger.info("B站Cookie已加密保存")
+        except (IOError, OSError, json.JSONDecodeError) as e:
+            logger.error(f"保存B站Cookie失败: {e}")
+
+    def _bili_get_fernet(self) -> Fernet:
+        """获取或生成加密密钥"""
+        os.makedirs(self._bili_data_dir, exist_ok=True)
+        if self._bili_key_file.exists():
+            key = self._bili_key_file.read_bytes()
+            return Fernet(key)
+        key = Fernet.generate_key()
+        self._bili_key_file.write_bytes(key)
+        try:
+            os.chmod(str(self._bili_key_file), 0o600)
+        except (OSError, NotImplementedError):
+            pass
+        return Fernet(key)
+
+    def _bili_encrypt_cookie(self, cookie_str: str) -> str:
+        """加密Cookie字符串"""
+        if not cookie_str:
+            return ""
+        fernet = self._bili_get_fernet()
+        return fernet.encrypt(cookie_str.encode("utf-8")).decode("utf-8")
+
+    def _bili_decrypt_cookie(self, encrypted: str) -> str:
+        """解密Cookie字符串"""
+        if not encrypted:
+            return ""
+        try:
+            fernet = self._bili_get_fernet()
+            return fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8")
+        except Exception:
+            logger.error("B站Cookie解密失败，密钥可能已变更，请重新扫码登录")
+            return ""
+
     def _format_generic(self, result) -> tuple[str, bool]:
         lines = [f"莉卡解析 | {result.platform.display_name}"]
         if result.title:
@@ -560,3 +1143,25 @@ class ParserPlugin(Star):
                 pass
             self._cache_cleanup_task = None
         await self.downloader.aclose()
+
+        # ========== 清理B站监控 ==========
+        self._bili_monitor_running = False
+
+        # 取消扫码登录任务
+        for uid, task in list(self._bili_login_tasks.items()):
+            if not task.done():
+                task.cancel()
+        self._bili_login_tasks.clear()
+
+        if self._bili_monitor_task and not self._bili_monitor_task.done():
+            self._bili_monitor_task.cancel()
+            try:
+                await self._bili_monitor_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("终止B站监控任务时发生异常")
+
+        if self._bili_http_session and not self._bili_http_session.closed:
+            await self._bili_http_session.close()
+            logger.debug("B站 HTTP 会话已关闭")

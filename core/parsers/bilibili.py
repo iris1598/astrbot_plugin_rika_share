@@ -324,32 +324,71 @@ class BilibiliParser(BaseParser):
     def _load_credential(self):
         if self._cookies_file is None or not self._cookies_file.exists():
             return
-        self._credential = Credential.from_cookies(json.loads(self._cookies_file.read_text()))
+        try:
+            self._credential = Credential.from_cookies(json.loads(self._cookies_file.read_text()))
+        except Exception as e:
+            logger.error(f"加载已保存的凭证失败: {e}")
+
+    def _save_cookie_str(self, cookie_str: str):
+        """将cookie字符串持久化保存，供下次启动时自动加载"""
+        if self._cookies_file is None:
+            return
+        try:
+            ck_dict = ck2dict(cookie_str)
+            self._cookies_file.parent.mkdir(parents=True, exist_ok=True)
+            self._cookies_file.write_text(json.dumps(ck_dict))
+            logger.info("B站 Cookie 已持久化保存")
+        except Exception as e:
+            logger.error(f"保存 Cookie 失败: {e}")
 
     async def _init_credential(self):
+        # 优先从已持久化的cookie文件加载
+        self._load_credential()
+        if self._credential is not None:
+            if await self._credential.check_valid():
+                logger.info("从持久化文件加载的B站 Cookie 有效")
+                return
+            logger.info("持久化文件中的 Cookie 已过期")
+
+        # 其次从配置中的 BILI_CK 加载
         if self._bili_ck:
             credential = Credential.from_cookies(ck2dict(self._bili_ck))
             if await credential.check_valid():
-                logger.info(f"B站 Cookie 有效, 保存到 {self._cookies_file}")
+                logger.info(f"B站配置中的 Cookie 有效, 已持久化保存")
                 self._credential = credential
                 self._save_credential()
+                self._save_cookie_str(self._bili_ck)
                 return
-            logger.info("B站 Cookie 已过期, 尝试从文件加载")
-            self._load_credential()
-        else:
-            self._load_credential()
+            logger.info("B站配置中的 Cookie 已过期")
+
+    def update_cookie(self, cookie_str: str):
+        """运行时更新B站Cookie，立即生效"""
+        if not cookie_str:
+            return
+        self._bili_ck = cookie_str
+        self._credential = None
+        # 持久化保存，重启后自动生效
+        self._save_cookie_str(cookie_str)
+        logger.info("B站 Cookie 已更新，将在下次请求时重新初始化凭证")
 
     @property
     async def credential(self) -> Credential | None:
         if self._credential is None:
             await self._init_credential()
+            if self._credential is None:
+                return None
             return self._credential
 
+        # 已过期时尝试重新初始化
         if not await self._credential.check_valid():
-            logger.warning("哔哩哔哩凭证已过期, 请重新配置")
-            return None
+            logger.warning("哔哩哔哩凭证已过期, 尝试重新初始化")
+            self._credential = None
+            await self._init_credential()
+            if self._credential is None:
+                return None
 
-        if await self._credential.check_refresh():
+        # 尝试刷新
+        if self._credential and await self._credential.check_refresh():
             logger.info("哔哩哔哩凭证需要刷新")
             if self._credential.has_ac_time_value() and self._credential.has_bili_jct():
                 await self._credential.refresh()

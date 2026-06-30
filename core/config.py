@@ -64,6 +64,20 @@ class ParserConfig:
     def BILI_QUALITY(self) -> str:
         return str(self._cfg.get("BILI_QUALITY", "1080P"))
 
+    @property
+    def BILI_COOKIE_MONITOR_ENABLED(self) -> bool:
+        return bool(self._cfg.get("BILI_COOKIE_MONITOR_ENABLED", True))
+
+    @property
+    def BILI_COOKIE_CHECK_INTERVAL(self) -> int:
+        val = int(self._cfg.get("BILI_COOKIE_CHECK_INTERVAL", 3600))
+        return max(60, val)
+
+    @property
+    def BILI_COOKIE_NOTIFY_COOLDOWN(self) -> int:
+        val = int(self._cfg.get("BILI_COOKIE_NOTIFY_COOLDOWN", 3600))
+        return max(60, val)
+
 
 def init_config(astrbot_config: Any, cache_dir: Path, config_dir: Path) -> ParserConfig:
     global _config
