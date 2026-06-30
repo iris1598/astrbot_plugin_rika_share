@@ -514,6 +514,7 @@ class ParserPlugin(Star):
 
     # ==================== B站 Cookie 扫码登录 / 监控 / 自动应用 ====================
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili_login")
     async def bili_qr_login(self, event: AstrMessageEvent):
         """B站扫码登录 - 获取二维码图片并轮询扫码结果"""
