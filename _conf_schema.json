@@ -72,11 +72,11 @@
     "hint": "每隔多少秒检测一次Cookie有效性，最小60秒",
     "obvious_hint": false
   },
-  "BILI_COOKIE_NOTIFY_COOLDOWN": {
-    "description": "B站Cookie失效通知冷却时间(秒)",
-    "type": "int",
-    "default": 3600,
-    "hint": "Cookie失效后，至少间隔多少秒才重复通知，最小60秒",
-    "obvious_hint": false
+  "BILI_NOTIFY_USER_ID": {
+    "description": "Cookie失效/恢复时通知的QQ号",
+    "type": "string",
+    "default": "",
+    "hint": "留空则不发送通知，只记录日志",
+    "obvious_hint": true
   }
 }

@@ -74,9 +74,8 @@ class ParserConfig:
         return max(60, val)
 
     @property
-    def BILI_COOKIE_NOTIFY_COOLDOWN(self) -> int:
-        val = int(self._cfg.get("BILI_COOKIE_NOTIFY_COOLDOWN", 3600))
-        return max(60, val)
+    def BILI_NOTIFY_USER_ID(self) -> str:
+        return str(self._cfg.get("BILI_NOTIFY_USER_ID", ""))
 
 
 def init_config(astrbot_config: Any, cache_dir: Path, config_dir: Path) -> ParserConfig:

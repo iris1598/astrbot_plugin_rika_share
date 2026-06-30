@@ -122,7 +122,6 @@ class ParserPlugin(Star):
         self._bili_last_status: Optional[Dict] = None
         self._bili_last_check_time: Optional[datetime] = None
         self._bili_was_invalid: bool = False
-        self._bili_last_notify_time: Optional[datetime] = None
 
         # Cookie 持久化目录
         self._bili_data_dir = StarTools.get_data_dir("astrbot_plugin_rika_share")
@@ -200,49 +199,49 @@ class ParserPlugin(Star):
             yield r
 
     @filter.regex(BILIBILI_PATTERN)
-    async def bilibili_handler(self, event: AstrMessageEvent):
+    async def bilibili_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
         async for r in self._dispatch(event, "bilibili"):
             yield r
 
     @filter.regex(DOUYIN_PATTERN)
-    async def douyin_handler(self, event: AstrMessageEvent):
+    async def douyin_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
         async for r in self._dispatch(event, "douyin"):
             yield r
 
     @filter.regex(KUAISHOU_PATTERN)
-    async def kuaishou_handler(self, event: AstrMessageEvent):
+    async def kuaishou_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
         async for r in self._dispatch(event, "kuaishou"):
             yield r
 
     @filter.regex(WEIBO_PATTERN)
-    async def weibo_handler(self, event: AstrMessageEvent):
+    async def weibo_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
         async for r in self._dispatch(event, "weibo"):
             yield r
 
     @filter.regex(XHS_PATTERN)
-    async def xiaohongshu_handler(self, event: AstrMessageEvent):
+    async def xiaohongshu_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
         async for r in self._dispatch(event, "xiaohongshu"):
             yield r
 
     @filter.regex(TWITTER_PATTERN)
-    async def twitter_handler(self, event: AstrMessageEvent):
+    async def twitter_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
         async for r in self._dispatch(event, "twitter"):
             yield r
 
     @filter.regex(NGA_PATTERN)
-    async def nga_handler(self, event: AstrMessageEvent):
+    async def nga_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
         async for r in self._dispatch(event, "nga"):
             yield r
 
     @filter.regex(ACFUN_PATTERN)
-    async def acfun_handler(self, event: AstrMessageEvent):
+    async def acfun_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
         async for r in self._dispatch(event, "acfun"):
             yield r
 
     # ==================== JSON 卡片处理器 ====================
 
     @filter.regex(r".*")
-    async def json_card_handler(self, event: AstrMessageEvent):
+    async def json_card_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
         if not self._has_json_component(event):
             return
         links = self._extract_links_from_event(event)
@@ -876,7 +875,7 @@ class ParserPlugin(Star):
         logger.info(f"B站Cookie监控已启动，检测间隔: {pconfig.BILI_COOKIE_CHECK_INTERVAL}秒")
 
     async def _bili_monitor_loop(self):
-        """Cookie监控循环"""
+        """Cookie监控循环 - 只在状态翻转时通知一次"""
         pconfig = get_config()
         while self._bili_monitor_running:
             try:
@@ -885,16 +884,18 @@ class ParserPlugin(Star):
                 self._bili_last_check_time = datetime.now()
                 await self._bili_save_last_status()
 
-                if result["valid"]:
+                is_valid = result["valid"]
+                if is_valid:
                     if self._bili_was_invalid:
+                        # 从失效→恢复，发一次通知
                         await self._bili_notify_admin("✅ B站Cookie已恢复", f"用户: {result.get('username')}")
                         self._bili_was_invalid = False
                 else:
-                    logger.warning(f"B站Cookie失效: {result.get('error')}")
-                    if not self._bili_was_invalid or self._bili_should_notify():
+                    if not self._bili_was_invalid:
+                        # 从有效→失效，发一次通知
                         await self._bili_notify_admin("❌ B站Cookie已失效", f"错误: {result.get('error')}")
-                        self._bili_last_notify_time = datetime.now()
-                    self._bili_was_invalid = True
+                        self._bili_was_invalid = True
+                    logger.warning(f"B站Cookie仍处于失效状态: {result.get('error')}")
 
             except asyncio.CancelledError:
                 break
@@ -903,14 +904,6 @@ class ParserPlugin(Star):
 
             if self._bili_monitor_running:
                 await asyncio.sleep(pconfig.BILI_COOKIE_CHECK_INTERVAL)
-
-    def _bili_should_notify(self) -> bool:
-        """检查是否应该发送失效通知（冷却机制）"""
-        if self._bili_last_notify_time is None:
-            return True
-        elapsed = (datetime.now() - self._bili_last_notify_time).total_seconds()
-        pconfig = get_config()
-        return elapsed >= pconfig.BILI_COOKIE_NOTIFY_COOLDOWN
 
     async def _bili_notify_user(self, sender_id: str, message: str):
         """向指定用户发送消息"""
@@ -921,17 +914,18 @@ class ParserPlugin(Star):
             logger.error(f"发送消息给 {sender_id} 失败: {e}")
 
     async def _bili_notify_admin(self, title: str, message: str):
-        """向管理员发送Cookie状态通知"""
-        # 尝试私聊第一个可用的会话
+        """向配置的通知目标QQ号发送Cookie状态通知（只发一次，不重复）"""
+        pconfig = get_config()
+        user_id = pconfig.BILI_NOTIFY_USER_ID
+        if not user_id:
+            logger.info(f"[B站Cookie监控] {title}: {message} (未配置通知目标，仅记录日志)")
+            return
         try:
-            platforms = self.context.platform_manager.get_insts()
-            for platform in platforms:
-                if hasattr(platform, '_bot') or hasattr(platform, 'client'):
-                    from astrbot.api.platform import Platform
-                    break
-        except Exception:
-            pass
-        logger.info(f"[B站Cookie监控] {title}: {message}")
+            umo = user_id if ":" in user_id else f"default:FriendMessage:{user_id}"
+            await self.context.send_message(umo, MessageChain().message(f"{title}\n{message}"))
+            logger.info(f"已发送B站Cookie通知到 {user_id}: {title}")
+        except Exception as e:
+            logger.error(f"发送B站Cookie通知失败: {e}")
 
     # ==================== 持久化 ====================
 
@@ -946,8 +940,6 @@ class ParserPlugin(Star):
                     self._bili_was_invalid = data.get("was_invalid", False)
                     if data.get("last_check_time"):
                         self._bili_last_check_time = datetime.fromisoformat(data["last_check_time"])
-                    if data.get("last_notify_time"):
-                        self._bili_last_notify_time = datetime.fromisoformat(data["last_notify_time"])
             except (json.JSONDecodeError, KeyError, ValueError) as e:
                 logger.error(f"加载B站Cookie状态失败: {e}")
 
@@ -960,7 +952,6 @@ class ParserPlugin(Star):
                     "last_status": self._bili_last_status,
                     "last_check_time": self._bili_last_check_time.isoformat() if self._bili_last_check_time else None,
                     "was_invalid": self._bili_was_invalid,
-                    "last_notify_time": self._bili_last_notify_time.isoformat() if self._bili_last_notify_time else None
                 }
                 with open(self._bili_status_file, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
