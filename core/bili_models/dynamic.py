@@ -7,7 +7,7 @@ class AuthorInfo(Struct):
     face: str
     mid: int
     pub_time: str
-    pub_ts: int
+    pub_ts: int | str
 
 
 class VideoArchive(Struct):
@@ -109,7 +109,10 @@ class DynamicModule(Struct):
 
     @property
     def pub_ts(self) -> int:
-        return self.module_author.pub_ts
+        ts = self.module_author.pub_ts
+        if isinstance(ts, str):
+            return int(ts)
+        return ts
 
     @property
     def _major_info(self) -> dict[str, Any] | None:

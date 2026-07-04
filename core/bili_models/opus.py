@@ -8,7 +8,7 @@ class Author(Struct):
     face: str
     mid: int
     pub_time: str
-    pub_ts: int
+    pub_ts: int | str
 
 
 class Image(Struct):
@@ -81,7 +81,13 @@ class OpusItem(Struct):
     def timestamp(self) -> int | None:
         for module in self.item.modules:
             if module.module_type == "MODULE_TYPE_AUTHOR" and module.module_author:
-                return module.module_author.pub_ts
+                ts = module.module_author.pub_ts
+                if isinstance(ts, str):
+                    try:
+                        return int(ts)
+                    except (ValueError, TypeError):
+                        return None
+                return ts
         return None
 
     def extract_nodes(self):
