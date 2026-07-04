@@ -385,6 +385,20 @@ class ParserPlugin(Star):
                 nodes.append(node2)
             if node3:
                 nodes.append(node3)
+            # 图片内容：来自图文(Opus)解析的 graphics
+            for g in result.graphics:
+                if isinstance(g, ImageContent):
+                    path = await g.path_task.safe_get()
+                    if path:
+                        nodes.append([Comp.Image.fromFileSystem(str(path))])
+                elif isinstance(g, str):
+                    nodes.append([Comp.Plain(g)])
+            # 图片内容：来自动态解析的 contents
+            for c in result.contents:
+                if isinstance(c, ImageContent):
+                    path = await c.path_task.safe_get()
+                    if path:
+                        nodes.append([Comp.Image.fromFileSystem(str(path))])
             return header, nodes
 
         if platform == "xiaohongshu":
