@@ -1139,6 +1139,29 @@ class ParserPlugin(Star):
             self._cache_cleanup_task = None
         await self.downloader.aclose()
 
+        # 关闭 bilibili-api 库在当前事件循环下缓存的 HTTP client，
+        # 否则重载插件时旧 client 仍留在 session_pool 中继续被复用，
+        # 长期运行后连接老化导致 bilibili 解析不获取视频文件。
+        try:
+            from bilibili_api.utils.network import (
+                get_selected_client, session_pool, lazy_settings,
+            )
+            name, _ = get_selected_client()
+            loop = asyncio.get_event_loop()
+            pool = session_pool.get(name, {})
+            old = pool.pop(loop, None)
+            if old is not None:
+                try:
+                    await old.close()
+                except Exception:
+                    pass
+            lz = lazy_settings.get(name)
+            if lz is not None:
+                lz.pop(loop, None)
+            logger.debug("已清理 bilibili-api session_pool 中的客户端")
+        except Exception:
+            pass
+
         # ========== 清理B站监控 ==========
         self._bili_monitor_running = False
 

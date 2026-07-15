@@ -1,6 +1,7 @@
 """下载系统 - 提供媒体文件下载功能"""
 
 import asyncio
+import time
 from pathlib import Path
 from functools import partial
 from contextlib import contextmanager
@@ -15,6 +16,11 @@ from .constants import COMMON_HEADER, DOWNLOAD_TIMEOUT
 from .exception import IgnoreException, DownloadException
 
 
+# httpx.AsyncClient 单例最长复用时长（秒）。
+# 超过后在下次下载前关闭并重建，避免 keep-alive 连接被远端关闭后请求挂起。
+_DOWNLOADER_CLIENT_MAX_AGE = 1800  # 30 分钟
+
+
 class StreamDownloader:
     def __init__(self, cache_dir: Path):
         self.headers: dict[str, str] = COMMON_HEADER.copy()
@@ -22,9 +28,21 @@ class StreamDownloader:
         self.client: httpx.AsyncClient = httpx.AsyncClient(
             timeout=DOWNLOAD_TIMEOUT, verify=False
         )
+        self._client_born_at: float = time.monotonic()
 
     async def aclose(self):
         await self.client.aclose()
+
+    async def _ensure_fresh_client(self):
+        """若 httpx client 复用超过阈值，关闭并重建，防止连接老化。"""
+        if time.monotonic() - self._client_born_at < _DOWNLOADER_CLIENT_MAX_AGE:
+            return
+        try:
+            await self.client.aclose()
+        except Exception:
+            pass
+        self.client = httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, verify=False)
+        self._client_born_at = time.monotonic()
 
     @staticmethod
     def _validate_content_length(response: httpx.Response) -> int:
@@ -87,6 +105,9 @@ class StreamDownloader:
         file_path = self.cache_dir / file_name
         if file_path.exists():
             return file_path
+
+        # 重建可能老化的 httpx client
+        await self._ensure_fresh_client()
 
         headers = {**self.headers, **(ext_headers or {})}
 

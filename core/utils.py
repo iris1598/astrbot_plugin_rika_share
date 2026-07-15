@@ -224,3 +224,54 @@ def is_module_available(module_name: str) -> bool:
     """检查模块是否可用"""
     import importlib.util
     return importlib.util.find_spec(module_name) is not None
+
+
+async def reset_bili_api_client():
+    """重建 bilibili-api 库在当前事件循环下缓存的 HTTP 客户端。
+
+    bilibili-api 的 session_pool 按 event loop 缓存 BiliAPIClient（curl_cffi /
+    httpx），长期复用不关闭。底层 keep-alive 连接被服务端单方面关闭后，
+    客户端侧无感知，导致 get_download_url 等请求挂起或返回空——表现为
+    "bilibili 解析不获取视频文件"。重载插件不会清这个 pool，只有新进程才行。
+
+    本函数主动关闭并移除当前 loop 的旧 client，下次 get_client() 会新建。
+    应在每次 bilibili 视频解析前调用，或在解析失败时作为兜底重试。
+    """
+    try:
+        from bilibili_api.utils.network import (
+            get_selected_client, session_pool, lazy_settings,
+        )
+    except ImportError:
+        return
+
+    try:
+        name, _ = get_selected_client()
+    except Exception:
+        return
+
+    loop = asyncio.get_event_loop()
+    pool = session_pool.get(name)
+    if pool is None:
+        return
+
+    old = pool.get(loop)
+    if old is None:
+        return
+
+    try:
+        await old.close()
+    except Exception:
+        pass
+
+    pool.pop(loop, None)
+    lz = lazy_settings.get(name)
+    if lz is not None:
+        lz.pop(loop, None)
+
+
+async def reset_bili_api_client_safely():
+    """reset_bili_api_client 的同步包装，吞掉所有异常，绝不影响主流程。"""
+    try:
+        await reset_bili_api_client()
+    except Exception:
+        pass
