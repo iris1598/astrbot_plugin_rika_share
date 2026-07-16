@@ -270,12 +270,6 @@ class ParserPlugin(Star):
             cache_key = url[:64]
             result = self._result_cache.get(cache_key)
 
-            if result is not None and self._is_result_stale(result):
-                # 缓存中的下载 task 已失败/取消，清除并重新解析
-                logger.warning(f"缓存命中但下载任务已失效，清除缓存重新解析: {url[:48]}")
-                self._result_cache.pop(cache_key, None)
-                result = None
-
             if result is None:
                 keyword, searched = parser.search_url(url)
                 result = await parser.parse(keyword, searched)
@@ -317,52 +311,6 @@ class ParserPlugin(Star):
             logger.exception(f"解析异常")
             yield event.plain_result(f"❌ 处理出错: {str(e)[:100]}")
 
-    @staticmethod
-    def _is_result_stale(result: ParseResult) -> bool:
-        """检查缓存中的 ParseResult 是否包含已失败的下载 task。
-
-        长时间运行后，首次解析创建的下载 task 可能因连接老化而失败。
-        若此时命中缓存复用旧 result，下载 task 仍然是坏的，
-        导致 safe_get 返回 None 后静默跳过——既不下视频也不报错。
-        本方法检测这种情况，让 _process_url 能清除坏缓存重新解析。
-        """
-        from .core.data import VideoContent, AudioContent
-        for cont in result.contents:
-            if isinstance(cont, (VideoContent, AudioContent)):
-                if cont.path_task.is_failed():
-                    return True
-                # 视频的封面 task 单独检查
-                if isinstance(cont, VideoContent) and cont.cover and cont.cover.is_failed():
-                    return True
-        return False
-
-    @staticmethod
-    def _log_download_failure(media_type: str, exc: Exception | None, *, url: str | None = None):
-        """按失败原因分类打印日志，便于排查。
-
-        失败类型区分:
-        - IgnoreException: 视频时长超限或 Content-Length=0，主动跳过，INFO 级别
-        - DownloadException: 视频流地址拿到了但文件下载失败（httpx+curl_cffi 均失败），WARNING
-        - ParseException / 子类: 获取视频流地址失败（bilibili-api 请求异常），WARNING
-        - 其他: 未预期的异常，ERROR
-        """
-        from .core.exception import IgnoreException, DownloadException, ParseException
-
-        ctx = f"[{media_type}] url={url}" if url else f"[{media_type}]"
-
-        if exc is None:
-            logger.warning(f"{ctx} 下载失败（未知原因，task 无异常对象）")
-            return
-
-        if isinstance(exc, IgnoreException):
-            logger.info(f"{ctx} 跳过下载: {exc.message}")
-        elif isinstance(exc, DownloadException):
-            logger.warning(f"{ctx} 文件下载失败: {exc.message}")
-        elif isinstance(exc, ParseException):
-            logger.warning(f"{ctx} 解析失败（可能连接过期/风控/Cookie失效）: {exc.message}")
-        else:
-            logger.error(f"{ctx} 未预期的下载异常: {exc}", exc_info=True)
-
     async def _try_send_media(self, event: AstrMessageEvent, result: ParseResult):
         """单独发送媒体文件。所有图片/封面已在合并转发中，不重复发送。
 
@@ -370,22 +318,11 @@ class ParserPlugin(Star):
         因此不再在插件层做文件大小限制，交由适配器处理。
         """
         from .core.data import VideoContent, AudioContent
-        from .core.exception import IgnoreException, DownloadException
 
         for cont in result.contents:
             if not isinstance(cont, (VideoContent, AudioContent)):
                 continue  # 图片已在合并转发中
-
-            media_type = "视频" if isinstance(cont, VideoContent) else "音频"
-
-            # task 已完成但失败了——按异常类型区分原因
-            if cont.path_task.is_failed():
-                exc = cont.path_task.get_error()
-                self._log_download_failure(media_type, exc, url=result.url)
-                continue
-
-            # task 还在跑，safe_get 等结果
-            path = await cont.path_task.safe_get(on_error=lambda e: self._log_download_failure(media_type, e, url=result.url))
+            path = await cont.path_task.safe_get()
             if path is None:
                 continue
 
@@ -409,9 +346,7 @@ class ParserPlugin(Star):
                 from .core.data import VideoContent
                 vc = next((c for c in result.contents if isinstance(c, VideoContent)), None)
                 if vc and vc.cover:
-                    cover_path = await vc.cover.safe_get(
-                        on_error=lambda e: self._log_download_failure("封面", e, url=result.url)
-                    )
+                    cover_path = await vc.cover.safe_get()
                     if cover_path:
                         node1.append(Comp.Image.fromFileSystem(str(cover_path)))
             # 第二条消息：时长
@@ -1203,29 +1138,6 @@ class ParserPlugin(Star):
                 pass
             self._cache_cleanup_task = None
         await self.downloader.aclose()
-
-        # 关闭 bilibili-api 库在当前事件循环下缓存的 HTTP client，
-        # 否则重载插件时旧 client 仍留在 session_pool 中继续被复用，
-        # 长期运行后连接老化导致 bilibili 解析不获取视频文件。
-        try:
-            from bilibili_api.utils.network import (
-                get_selected_client, session_pool, lazy_settings,
-            )
-            name, _ = get_selected_client()
-            loop = asyncio.get_event_loop()
-            pool = session_pool.get(name, {})
-            old = pool.pop(loop, None)
-            if old is not None:
-                try:
-                    await old.close()
-                except Exception:
-                    pass
-            lz = lazy_settings.get(name)
-            if lz is not None:
-                lz.pop(loop, None)
-            logger.debug("已清理 bilibili-api session_pool 中的客户端")
-        except Exception:
-            pass
 
         # ========== 清理B站监控 ==========
         self._bili_monitor_running = False

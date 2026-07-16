@@ -3,7 +3,6 @@
 import re
 import json
 import asyncio
-import time
 from typing import ClassVar
 
 from astrbot.api import logger
@@ -17,7 +16,6 @@ from ..base_parser import BaseParser, PlatformEnum, ParseException, IgnoreExcept
 from ..data import Platform, ImageContent, MediaContent
 from ..cookie import ck2dict
 from ..utils_parser import fmt_duration
-from ..utils import reset_bili_api_client, reset_bili_api_client_safely
 
 try:
     select_client("curl_cffi")
@@ -25,11 +23,6 @@ try:
 except Exception:
     logger.warning("curl_cffi 未注册/未安装，B站解析器将使用默认 httpx 客户端")
     select_client("httpx")
-
-
-# 客户端最长复用时长（秒）。超过则在下一次解析前主动重建，
-# 避免底层 keep-alive 连接被服务端单方面关闭后请求挂起。
-_BILI_CLIENT_MAX_AGE = 1800  # 30 分钟
 
 
 class BilibiliParser(BaseParser):
@@ -41,14 +34,6 @@ class BilibiliParser(BaseParser):
         self._credential: Credential | None = None
         self._bili_ck = bili_ck
         self._cookies_file = (config_dir / "bilibili_cookies.json") if config_dir else None
-        self._client_born_at: float = 0.0  # bilibili-api client 上次重建时间
-
-    async def _ensure_fresh_client(self):
-        """若 bilibili-api 的 HTTP client 复用超过阈值，主动重建，防止连接老化。"""
-        if time.monotonic() - self._client_born_at < _BILI_CLIENT_MAX_AGE:
-            return
-        await reset_bili_api_client_safely()
-        self._client_born_at = time.monotonic()
 
     @handle("b23.tv", r"b23\.tv/[0-9a-zA-Z._?%&+-=/#]+")
     @handle("bili2233", r"bili2233\.cn/[0-9a-zA-Z._?%&+-=/#]+")
@@ -97,9 +82,6 @@ class BilibiliParser(BaseParser):
 
     async def parse_video(self, *, bvid: str | None = None, avid: int | None = None, page_num: int = 1):
         from ..bili_models.video import VideoInfo, AIConclusion
-
-        # 重建可能已经老化的 bilibili-api HTTP client，防止连接池失效
-        await self._ensure_fresh_client()
 
         video = Video(bvid=bvid, aid=avid, credential=await self.credential)
         video_info = convert(await video.get_info(), VideoInfo)
@@ -168,14 +150,7 @@ class BilibiliParser(BaseParser):
             output_path = pconfig.cache_dir / f"{video_info.bvid}-{page_num}.mp4"
             if output_path.exists():
                 return output_path
-            try:
-                v_url, a_url = await self.extract_download_urls(video=video, page_index=page_info.index)
-            except Exception as e:
-                # 兜底：重建 bilibili-api client 后重试一次，应对连接池老化
-                logger.warning(f"获取下载地址失败，重建 client 重试: {e}")
-                await reset_bili_api_client()
-                self._client_born_at = time.monotonic()
-                v_url, a_url = await self.extract_download_urls(video=video, page_index=page_info.index)
+            v_url, a_url = await self.extract_download_urls(video=video, page_index=page_info.index)
             if page_info.duration > pconfig.VIDEO_DURATION_MAXIMUM:
                 raise IgnoreException
             if a_url is not None:

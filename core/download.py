@@ -1,7 +1,6 @@
 """下载系统 - 提供媒体文件下载功能"""
 
 import asyncio
-import time
 from pathlib import Path
 from functools import partial
 from contextlib import contextmanager
@@ -16,11 +15,6 @@ from .constants import COMMON_HEADER, DOWNLOAD_TIMEOUT
 from .exception import IgnoreException, DownloadException
 
 
-# httpx.AsyncClient 单例最长复用时长（秒）。
-# 超过后在下次下载前关闭并重建，避免 keep-alive 连接被远端关闭后请求挂起。
-_DOWNLOADER_CLIENT_MAX_AGE = 1800  # 30 分钟
-
-
 class StreamDownloader:
     def __init__(self, cache_dir: Path):
         self.headers: dict[str, str] = COMMON_HEADER.copy()
@@ -28,21 +22,9 @@ class StreamDownloader:
         self.client: httpx.AsyncClient = httpx.AsyncClient(
             timeout=DOWNLOAD_TIMEOUT, verify=False
         )
-        self._client_born_at: float = time.monotonic()
 
     async def aclose(self):
         await self.client.aclose()
-
-    async def _ensure_fresh_client(self):
-        """若 httpx client 复用超过阈值，关闭并重建，防止连接老化。"""
-        if time.monotonic() - self._client_born_at < _DOWNLOADER_CLIENT_MAX_AGE:
-            return
-        try:
-            await self.client.aclose()
-        except Exception:
-            pass
-        self.client = httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, verify=False)
-        self._client_born_at = time.monotonic()
 
     @staticmethod
     def _validate_content_length(response: httpx.Response) -> int:
@@ -106,9 +88,6 @@ class StreamDownloader:
         if file_path.exists():
             return file_path
 
-        # 重建可能老化的 httpx client
-        await self._ensure_fresh_client()
-
         headers = {**self.headers, **(ext_headers or {})}
 
         try:
@@ -116,11 +95,11 @@ class StreamDownloader:
                 url, file_path=file_path, headers=headers, chunk_size=chunk_size
             )
         except httpx.HTTPError:
-            logger.warning(f"下载失败(httpx) | url: {url}", exc_info=True)
+            logger.opt(exception=True).warning(f"下载失败(httpx) | url: {url}")
             try:
                 return await self._download_file_with_curl_cffi(url, file_path=file_path, headers=headers)
             except Exception:
-                logger.warning(f"下载失败(curl_cffi) | url: {url}", exc_info=True)
+                logger.opt(exception=True).warning(f"下载失败(curl_cffi) | url: {url}")
                 raise DownloadException("媒体下载失败")
 
     async def download_video(
@@ -179,7 +158,7 @@ class StreamDownloader:
 
         except httpx.HTTPError:
             await safe_unlink(video_path)
-            logger.error(f"m3u8 视频下载失败 | url: {m3u8_url}", exc_info=True)
+            logger.opt(exception=True).error(f"m3u8 视频下载失败 | url: {m3u8_url}")
             raise DownloadException("m3u8 视频下载失败")
 
         return video_path
