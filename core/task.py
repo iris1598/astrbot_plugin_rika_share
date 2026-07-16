@@ -36,6 +36,15 @@ class PathTask:
                 on_error(e)
             return None
 
+    def is_failed(self) -> bool:
+        """检查底层 task 是否已完成且抛出了异常。"""
+        if self._path is not None:
+            return False  # 已成功拿到路径
+        task = self._task
+        if not isinstance(task, asyncio.Task):
+            return False  # 还是裸 coroutine，未调度
+        return task.done() and not task.cancelled() and task.exception() is not None
+
     @property
     async def uri(self) -> str | None:
         path = await self.safe_get()

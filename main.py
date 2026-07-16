@@ -270,6 +270,12 @@ class ParserPlugin(Star):
             cache_key = url[:64]
             result = self._result_cache.get(cache_key)
 
+            if result is not None and self._is_result_stale(result):
+                # 缓存中的下载 task 已失败/取消，清除并重新解析
+                logger.warning(f"缓存命中但下载任务已失效，清除缓存重新解析: {url[:48]}")
+                self._result_cache.pop(cache_key, None)
+                result = None
+
             if result is None:
                 keyword, searched = parser.search_url(url)
                 result = await parser.parse(keyword, searched)
@@ -311,6 +317,25 @@ class ParserPlugin(Star):
             logger.exception(f"解析异常")
             yield event.plain_result(f"❌ 处理出错: {str(e)[:100]}")
 
+    @staticmethod
+    def _is_result_stale(result: ParseResult) -> bool:
+        """检查缓存中的 ParseResult 是否包含已失败的下载 task。
+
+        长时间运行后，首次解析创建的下载 task 可能因连接老化而失败。
+        若此时命中缓存复用旧 result，下载 task 仍然是坏的，
+        导致 safe_get 返回 None 后静默跳过——既不下视频也不报错。
+        本方法检测这种情况，让 _process_url 能清除坏缓存重新解析。
+        """
+        from .core.data import VideoContent, AudioContent
+        for cont in result.contents:
+            if isinstance(cont, (VideoContent, AudioContent)):
+                if cont.path_task.is_failed():
+                    return True
+                # 视频的封面 task 单独检查
+                if isinstance(cont, VideoContent) and cont.cover and cont.cover.is_failed():
+                    return True
+        return False
+
     async def _try_send_media(self, event: AstrMessageEvent, result: ParseResult):
         """单独发送媒体文件。所有图片/封面已在合并转发中，不重复发送。
 
@@ -322,8 +347,17 @@ class ParserPlugin(Star):
         for cont in result.contents:
             if not isinstance(cont, (VideoContent, AudioContent)):
                 continue  # 图片已在合并转发中
+
+            # 检查下载 task 是否已失败，给出明确提示而非静默跳过
+            if cont.path_task.is_failed():
+                media_type = "视频" if isinstance(cont, VideoContent) else "音频"
+                yield event.plain_result(f"⚠️ {media_type}下载失败（连接可能已过期），请稍后重试")
+                continue
+
             path = await cont.path_task.safe_get()
             if path is None:
+                media_type = "视频" if isinstance(cont, VideoContent) else "音频"
+                yield event.plain_result(f"⚠️ {media_type}下载失败，请稍后重试")
                 continue
 
             if isinstance(cont, VideoContent):
@@ -349,6 +383,8 @@ class ParserPlugin(Star):
                     cover_path = await vc.cover.safe_get()
                     if cover_path:
                         node1.append(Comp.Image.fromFileSystem(str(cover_path)))
+                    elif vc.cover.is_failed():
+                        node1.append(Comp.Plain("⚠️ 封面下载失败"))
             # 第二条消息：时长
             node2 = []
             if dur := result.extra.get("duration"):
