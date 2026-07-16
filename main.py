@@ -336,6 +336,33 @@ class ParserPlugin(Star):
                     return True
         return False
 
+    @staticmethod
+    def _log_download_failure(media_type: str, exc: Exception | None, *, url: str | None = None):
+        """按失败原因分类打印日志，便于排查。
+
+        失败类型区分:
+        - IgnoreException: 视频时长超限或 Content-Length=0，主动跳过，INFO 级别
+        - DownloadException: 视频流地址拿到了但文件下载失败（httpx+curl_cffi 均失败），WARNING
+        - ParseException / 子类: 获取视频流地址失败（bilibili-api 请求异常），WARNING
+        - 其他: 未预期的异常，ERROR
+        """
+        from .core.exception import IgnoreException, DownloadException, ParseException
+
+        ctx = f"[{media_type}] url={url}" if url else f"[{media_type}]"
+
+        if exc is None:
+            logger.warning(f"{ctx} 下载失败（未知原因，task 无异常对象）")
+            return
+
+        if isinstance(exc, IgnoreException):
+            logger.info(f"{ctx} 跳过下载: {exc.message}")
+        elif isinstance(exc, DownloadException):
+            logger.warning(f"{ctx} 文件下载失败: {exc.message}")
+        elif isinstance(exc, ParseException):
+            logger.warning(f"{ctx} 解析失败（可能连接过期/风控/Cookie失效）: {exc.message}")
+        else:
+            logger.opt(exception=True).error(f"{ctx} 未预期的下载异常: {exc}")
+
     async def _try_send_media(self, event: AstrMessageEvent, result: ParseResult):
         """单独发送媒体文件。所有图片/封面已在合并转发中，不重复发送。
 
@@ -343,21 +370,23 @@ class ParserPlugin(Star):
         因此不再在插件层做文件大小限制，交由适配器处理。
         """
         from .core.data import VideoContent, AudioContent
+        from .core.exception import IgnoreException, DownloadException
 
         for cont in result.contents:
             if not isinstance(cont, (VideoContent, AudioContent)):
                 continue  # 图片已在合并转发中
 
-            # 检查下载 task 是否已失败，给出明确提示而非静默跳过
+            media_type = "视频" if isinstance(cont, VideoContent) else "音频"
+
+            # task 已完成但失败了——按异常类型区分原因
             if cont.path_task.is_failed():
-                media_type = "视频" if isinstance(cont, VideoContent) else "音频"
-                yield event.plain_result(f"⚠️ {media_type}下载失败（连接可能已过期），请稍后重试")
+                exc = cont.path_task.get_error()
+                self._log_download_failure(media_type, exc, url=result.url)
                 continue
 
-            path = await cont.path_task.safe_get()
+            # task 还在跑，safe_get 等结果
+            path = await cont.path_task.safe_get(on_error=lambda e: self._log_download_failure(media_type, e, url=result.url))
             if path is None:
-                media_type = "视频" if isinstance(cont, VideoContent) else "音频"
-                yield event.plain_result(f"⚠️ {media_type}下载失败，请稍后重试")
                 continue
 
             if isinstance(cont, VideoContent):
@@ -380,11 +409,11 @@ class ParserPlugin(Star):
                 from .core.data import VideoContent
                 vc = next((c for c in result.contents if isinstance(c, VideoContent)), None)
                 if vc and vc.cover:
-                    cover_path = await vc.cover.safe_get()
+                    cover_path = await vc.cover.safe_get(
+                        on_error=lambda e: self._log_download_failure("封面", e, url=result.url)
+                    )
                     if cover_path:
                         node1.append(Comp.Image.fromFileSystem(str(cover_path)))
-                    elif vc.cover.is_failed():
-                        node1.append(Comp.Plain("⚠️ 封面下载失败"))
             # 第二条消息：时长
             node2 = []
             if dur := result.extra.get("duration"):
