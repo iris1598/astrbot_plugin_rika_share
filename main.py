@@ -361,7 +361,7 @@ class ParserPlugin(Star):
         elif isinstance(exc, ParseException):
             logger.warning(f"{ctx} 解析失败（可能连接过期/风控/Cookie失效）: {exc.message}")
         else:
-            logger.opt(exception=True).error(f"{ctx} 未预期的下载异常: {exc}")
+            logger.error(f"{ctx} 未预期的下载异常: {exc}", exc_info=True)
 
     async def _try_send_media(self, event: AstrMessageEvent, result: ParseResult):
         """单独发送媒体文件。所有图片/封面已在合并转发中，不重复发送。

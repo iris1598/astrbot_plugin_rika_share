@@ -116,11 +116,11 @@ class StreamDownloader:
                 url, file_path=file_path, headers=headers, chunk_size=chunk_size
             )
         except httpx.HTTPError:
-            logger.opt(exception=True).warning(f"下载失败(httpx) | url: {url}")
+            logger.warning(f"下载失败(httpx) | url: {url}", exc_info=True)
             try:
                 return await self._download_file_with_curl_cffi(url, file_path=file_path, headers=headers)
             except Exception:
-                logger.opt(exception=True).warning(f"下载失败(curl_cffi) | url: {url}")
+                logger.warning(f"下载失败(curl_cffi) | url: {url}", exc_info=True)
                 raise DownloadException("媒体下载失败")
 
     async def download_video(
@@ -179,7 +179,7 @@ class StreamDownloader:
 
         except httpx.HTTPError:
             await safe_unlink(video_path)
-            logger.opt(exception=True).error(f"m3u8 视频下载失败 | url: {m3u8_url}")
+            logger.error(f"m3u8 视频下载失败 | url: {m3u8_url}", exc_info=True)
             raise DownloadException("m3u8 视频下载失败")
 
         return video_path
