@@ -78,5 +78,45 @@
     "default": "",
     "hint": "留空则不发送通知，只记录日志",
     "obvious_hint": true
+  },
+  "CLOUDFLARE_FALLBACK_ENABLED": {
+    "description": "启用 Cloudflare 网页截图 Fallback",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，链接不匹配任何已适配平台时，自动使用 Cloudflare Browser Rendering 渲染网页截图为图片发送",
+    "obvious_hint": true
+  },
+  "CLOUDFLARE_ACCOUNT_ID": {
+    "description": "Cloudflare 账号 ID",
+    "type": "string",
+    "hint": "Cloudflare Dashboard 可查看，需开通 Browser Rendering 服务",
+    "obvious_hint": true
+  },
+  "CLOUDFLARE_API_TOKEN": {
+    "description": "Cloudflare API Token",
+    "type": "string",
+    "hint": "需拥有 Browser Rendering - Edit 权限",
+    "obvious_hint": true
+  },
+  "CLOUDFLARE_TIMEOUT": {
+    "description": "截图 API 超时时间(秒)",
+    "type": "int",
+    "default": 60,
+    "hint": "Cloudflare 渲染页面超时，建议 30-120 秒",
+    "obvious_hint": false
+  },
+  "CLOUDFLARE_VIEWPORT_WIDTH": {
+    "description": "截图视窗宽度(px)",
+    "type": "int",
+    "default": 1280,
+    "hint": "渲染页面使用的浏览器视窗宽度",
+    "obvious_hint": false
+  },
+  "CLOUDFLARE_VIEWPORT_HEIGHT": {
+    "description": "截图视窗高度(px)",
+    "type": "int",
+    "default": 720,
+    "hint": "渲染页面使用的浏览器视窗高度",
+    "obvious_hint": false
   }
 }

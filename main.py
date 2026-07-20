@@ -29,6 +29,7 @@ from .core.config import init_config, get_config
 from .core.download import StreamDownloader
 from .core.data import ParseResult
 from .core.exception import ParseException, IgnoreException, DownloadException, SilentException
+from .core.cloudflare_screenshot import CloudflareScreenshotClient, fetch_page_title
 from .core.parsers import (
     BilibiliParser, DouyinParser, KuaiShouParser, WeiBoParser,
     XiaoHongShuParser, TwitterParser, NGAParser, AcfunParser,
@@ -63,6 +64,9 @@ XHS_PATTERN = re.compile(r"(xhslink\.com|xiaohongshu\.com)")
 TWITTER_PATTERN = re.compile(r"x\.com")
 NGA_PATTERN = re.compile(r"nga\.178\.com|ngabbs\.com|bbs\.nga\.cn")
 ACFUN_PATTERN = re.compile(r"acfun\.cn")
+
+# 通用 URL 匹配（用于 Cloudflare 截图 Fallback）
+GENERIC_URL_PATTERN = re.compile(r"https?://[^\s'\"<>]+")
 
 
 class _EventUrlWrapper:
@@ -129,6 +133,18 @@ class ParserPlugin(Star):
         self._bili_data_dir.mkdir(parents=True, exist_ok=True)
         self._bili_status_file = self._bili_data_dir / "bili_cookie_status.json"
         self._bili_key_file = self._bili_data_dir / ".bili_cookie_key"
+
+        # ========== Cloudflare 截图 Fallback ==========
+        self._cloudflare_client: CloudflareScreenshotClient | None = None
+        if pconfig.CLOUDFLARE_FALLBACK_ENABLED:
+            self._cloudflare_client = CloudflareScreenshotClient(config)
+            if self._cloudflare_client.is_configured:
+                logger.info("Cloudflare 网页截图 Fallback 已启用")
+            else:
+                logger.warning(
+                    "Cloudflare 截图 Fallback 已开启但未配置 Account ID / API Token，"
+                    "请检查插件配置"
+                )
 
     def _init_parsers(self):
         pconfig = get_config()
@@ -259,6 +275,90 @@ class ParserPlugin(Star):
                     return
                 except ParseException:
                     continue
+
+    # ==================== Cloudflare 截图 Fallback ====================
+
+    def _is_cloudflare_available(self) -> bool:
+        """Cloudflare 截图 Fallback 是否可用"""
+        if self._cloudflare_client is None:
+            return False
+        return self._cloudflare_client.is_configured
+
+    async def _do_cloudflare_fallback(
+        self, event: AstrMessageEvent, url: str
+    ):
+        """Cloudflare 网页截图 fallback 处理：渲染网页并发送截图"""
+        # 先获取标题（并发：和截图并行）
+        title_task = asyncio.create_task(fetch_page_title(url))
+
+        save_dir = self.cache_dir / "cloudflare_screenshots"
+        path = await self._cloudflare_client.screenshot(url, save_dir)
+
+        title = await title_task
+        # 对齐其它解析器的 header 格式：平台名 | 标题
+        fallback_title = title or url[:80]
+        header = f"网页解析 | {fallback_title}"
+
+        if path is None:
+            msg = header
+            if title:
+                msg += f"\n{url}"
+            yield event.plain_result(msg)
+            return
+
+        # 发送截图
+        if self._is_onebot(event):
+            sender_name = event.get_sender_name()
+            sender_id = event.get_sender_id()
+            nodes = Comp.Nodes([])
+            nodes.nodes.append(Comp.Node(
+                uin=sender_id, name=sender_name,
+                content=[Comp.Plain(header)]
+            ))
+            nodes.nodes.append(Comp.Node(
+                uin=sender_id, name=sender_name,
+                content=[Comp.Image.fromFileSystem(str(path))]
+            ))
+            yield event.chain_result([nodes])
+        else:
+            parts = [
+                Comp.Plain(f"{header}\n"),
+                Comp.Image.fromFileSystem(str(path)),
+            ]
+            yield event.chain_result(parts)
+
+    @filter.regex(GENERIC_URL_PATTERN)
+    async def cloudflare_fallback_handler(
+        self, event: AstrMessageEvent, matched: re.Match | None = None
+    ):
+        """通用 URL 兜底处理：不匹配任何适配器的链接 → Cloudflare 网页截图"""
+        if not self._is_cloudflare_available():
+            return
+        # JSON 卡片由 json_card_handler 处理，避免重复
+        if self._has_json_component(event):
+            return
+
+        # 注意：AstrBot 的 @filter.regex 不传递 match 对象给 handler
+        # 需要自己从 event.message_str 中提取 URL
+        msg = event.message_str.strip()
+        m = GENERIC_URL_PATTERN.search(msg)
+        if not m:
+            return
+        url = m.group(0)
+        # 清理 URL 尾部可能带上的标点
+        url = url.rstrip(".,!?;:)'\"】」》）")
+
+        # 遍历所有已启用的解析器，若已有适配器能处理则跳过
+        for parser in self.parsers.values():
+            try:
+                parser.search_url(url)
+                return  # 已有适配器，让平台专用 handler 处理
+            except Exception:
+                continue
+
+        logger.info(f"Cloudflare Fallback: 未匹配适配器，渲染网页截图: {url[:80]}")
+        async for r in self._do_cloudflare_fallback(event, url):
+            yield r
 
     # ==================== 核心处理流程 ====================
 

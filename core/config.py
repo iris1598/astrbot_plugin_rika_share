@@ -77,6 +77,38 @@ class ParserConfig:
     def BILI_NOTIFY_USER_ID(self) -> str:
         return str(self._cfg.get("BILI_NOTIFY_USER_ID", ""))
 
+    # ==================== Cloudflare 截图 Fallback ====================
+
+    @property
+    def CLOUDFLARE_FALLBACK_ENABLED(self) -> bool:
+        """是否启用 Cloudflare 截图 fallback"""
+        return bool(self._cfg.get("CLOUDFLARE_FALLBACK_ENABLED", False))
+
+    @property
+    def CLOUDFLARE_ACCOUNT_ID(self) -> str:
+        """Cloudflare 账号 ID"""
+        return str(self._cfg.get("CLOUDFLARE_ACCOUNT_ID", ""))
+
+    @property
+    def CLOUDFLARE_API_TOKEN(self) -> str:
+        """Cloudflare API Token（需要 Browser Rendering - Edit 权限）"""
+        return str(self._cfg.get("CLOUDFLARE_API_TOKEN", ""))
+
+    @property
+    def CLOUDFLARE_TIMEOUT(self) -> int:
+        """截图 API 超时时间（秒）"""
+        return int(self._cfg.get("CLOUDFLARE_TIMEOUT", 30))
+
+    @property
+    def CLOUDFLARE_VIEWPORT_WIDTH(self) -> int:
+        """截图视窗宽度"""
+        return int(self._cfg.get("CLOUDFLARE_VIEWPORT_WIDTH", 1280))
+
+    @property
+    def CLOUDFLARE_VIEWPORT_HEIGHT(self) -> int:
+        """截图视窗高度"""
+        return int(self._cfg.get("CLOUDFLARE_VIEWPORT_HEIGHT", 720))
+
 
 def init_config(astrbot_config: Any, cache_dir: Path, config_dir: Path) -> ParserConfig:
     global _config
