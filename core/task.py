@@ -5,6 +5,8 @@ from pathlib import Path
 from collections.abc import Callable, Coroutine
 from typing import Any
 
+from astrbot.api import logger
+
 
 class PathTask:
     __slots__ = ("_path", "_task")
@@ -32,6 +34,9 @@ class PathTask:
         try:
             return await self.get()
         except Exception as e:
+            from .config import get_config
+            if get_config().DEBUG_LOG_ENABLED:
+                logger.exception(f"PathTask 获取失败 | task={self._task.get_name()}")
             if on_error is not None:
                 on_error(e)
             return None

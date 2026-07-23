@@ -118,5 +118,12 @@
     "default": 720,
     "hint": "渲染页面使用的浏览器视窗高度",
     "obvious_hint": false
+  },
+  "DEBUG_LOG_ENABLED": {
+    "description": "启用详细错误日志",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后，下载失败等错误将不会在日志中打印详细堆栈",
+    "obvious_hint": false
   }
 }

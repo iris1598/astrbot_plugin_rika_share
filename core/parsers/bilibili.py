@@ -150,18 +150,35 @@ class BilibiliParser(BaseParser):
             output_path = pconfig.cache_dir / f"{video_info.bvid}-{page_num}.mp4"
             if output_path.exists():
                 return output_path
-            v_url, a_url = await self.extract_download_urls(video=video, page_index=page_info.index)
+            v_url, v_backups, a_url, a_backups = await self.extract_download_urls(video=video, page_index=page_info.index)
             if page_info.duration > pconfig.VIDEO_DURATION_MAXIMUM:
                 raise IgnoreException
-            if a_url is not None:
-                path = await self.downloader.download_av_and_merge(
-                    v_url, a_url, output_path=output_path, ext_headers=self.headers,
-                )
-            else:
-                path = await self.downloader._download_file(
-                    v_url, file_name=output_path.name, ext_headers=self.headers,
-                )
-            return path
+
+            url_pairs = [(v_url, a_url)]
+            for i, v_bu in enumerate(v_backups):
+                a_bu = a_backups[i] if i < len(a_backups) else a_url
+                url_pairs.append((v_bu, a_bu))
+
+            last_error = None
+            for idx, (v_try, a_try) in enumerate(url_pairs):
+                try:
+                    if idx > 0:
+                        logger.info(f"B站 CDN 重试 ({idx+1}/{len(url_pairs)})")
+                    if a_try is not None:
+                        return await self.downloader.download_av_and_merge(
+                            v_try, a_try, output_path=output_path, ext_headers=self.headers,
+                        )
+                    else:
+                        return await self.downloader._download_file(
+                            v_try, file_name=output_path.name, ext_headers=self.headers,
+                        )
+                except Exception as e:
+                    if idx > 0:
+                        logger.warning(f"B站 CDN 重试 ({idx+1}/{len(url_pairs)}) 失败: {e}")
+                    last_error = e
+                    continue
+
+            raise DownloadException("视频下载失败，已尝试所有CDN") from last_error
 
         video_content = self.create_video(
             asyncio.create_task(download_video()),
@@ -311,10 +328,13 @@ class BilibiliParser(BaseParser):
         if video_stream is None:
             raise DownloadException("未找到可下载的视频流")
 
-        if audio_stream is None:
-            return video_stream.url, None
+        v_backups = video_stream.backup_url if isinstance(video_stream, VideoStreamDownloadURL) else []
+        a_backups = audio_stream.backup_url if audio_stream and isinstance(audio_stream, AudioStreamDownloadURL) else []
 
-        return video_stream.url, audio_stream.url
+        if audio_stream is None:
+            return video_stream.url, v_backups, None, []
+
+        return video_stream.url, v_backups, audio_stream.url, a_backups
 
     def _save_credential(self):
         if self._credential is None or self._cookies_file is None:

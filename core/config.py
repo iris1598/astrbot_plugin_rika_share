@@ -109,6 +109,11 @@ class ParserConfig:
         """截图视窗高度"""
         return int(self._cfg.get("CLOUDFLARE_VIEWPORT_HEIGHT", 720))
 
+    @property
+    def DEBUG_LOG_ENABLED(self) -> bool:
+        """是否启用详细错误日志"""
+        return bool(self._cfg.get("DEBUG_LOG_ENABLED", True))
+
 
 def init_config(astrbot_config: Any, cache_dir: Path, config_dir: Path) -> ParserConfig:
     global _config
