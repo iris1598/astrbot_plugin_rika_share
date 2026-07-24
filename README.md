@@ -49,7 +49,6 @@ pip install -r requirements.txt
 | `BILI_CK` | string | — | B站 Cookie (SESSDATA)，获取 AI 总结和高清下载 |
 | `XHS_CK` | string | — | 小红书 Cookie，获取图片/视频下载 |
 | `YTB_CK` | string | — | YouTube Cookie |
-| `PROXY` | string | — | 代理地址 |
 | `VIDEO_DURATION_MAXIMUM` | int | 480 | 视频最大时长（秒），超时不会下载 |
 | `DISABLED_PLATFORMS` | string | — | 禁用的平台（逗号分隔，如 `tiktok,youtube`） |
 

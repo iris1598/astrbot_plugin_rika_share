@@ -26,10 +26,6 @@ class ParserConfig:
         return self._cfg.get("XHS_CK", None)
 
     @property
-    def PROXY(self) -> str | None:
-        return self._cfg.get("PROXY", None)
-
-    @property
     def VIDEO_DURATION_MAXIMUM(self) -> int:
         return int(self._cfg.get("VIDEO_DURATION_MAXIMUM", 480))
 

@@ -61,6 +61,7 @@ class DouyinParser(BaseParser):
         if image_urls := video_data.image_urls:
             result.contents.extend(self.create_images(image_urls))
         elif video_url := video_data.video_url:
+            self._add_limit_warning(result, video_data.duration)
             result.video = self.create_video(video_url, video_data.cover_url, video_data.duration)
         return result
 

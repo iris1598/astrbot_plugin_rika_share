@@ -380,6 +380,11 @@ class ParserPlugin(Star):
             # 根据平台构建：标题头 + 合并转发内容列表
             header, nodes_content = await self._build_platform_output(event, result, result.platform.name)
 
+            # 所有平台统一在末尾追加时长超限提示（参考 B站 limit_warnings 机制）
+            if warnings := result.extra.get("limit_warnings"):
+                for w in warnings:
+                    nodes_content.append([Comp.Plain(w)])
+
             if self._is_onebot(event):
                 # OneBot v11: 使用合并转发（Comp.Nodes）
                 sender_name = event.get_sender_name()
@@ -463,10 +468,6 @@ class ParserPlugin(Star):
             if online := result.extra.get("online"):
                 prefix = "\n" if node3_parts else ""
                 node3_parts.append(f"{prefix}{online}")
-            if warnings := result.extra.get("limit_warnings"):
-                for w in warnings:
-                    prefix = "\n" if node3_parts else ""
-                    node3_parts.append(f"{prefix}{w}")
             node3 = [Comp.Plain("".join(node3_parts))] if node3_parts else []
             nodes = []
             if node1:

@@ -90,8 +90,10 @@ class WeiBoParser(BaseParser):
         data = show_decoder.decode(response.content).data
         play_info = data.Component_Play_Playinfo
         author = self.create_author(play_info.name, play_info.avatar, play_info.description)
-        video_content = self.create_video(play_info.video_url, play_info.cover_url, duration=play_info.duration)
-        return self.result(author=author, title=play_info.title, text=play_info.text, contents=[video_content], timestamp=play_info.real_date)
+        result = self.result(title=play_info.title, text=play_info.text, author=author, timestamp=play_info.real_date)
+        self._add_limit_warning(result, play_info.duration)
+        result.contents = [self.create_video(play_info.video_url, play_info.cover_url, duration=play_info.duration)]
+        return result
 
     async def parse_weibo_id(self, weibo_id: str):
         from ..weibo_models.common import decoder as weibo_decoder
@@ -126,6 +128,7 @@ class WeiBoParser(BaseParser):
         author = self.create_author(data.display_name, data.user.profile_image_url)
         result = self.result(title=data.title, text=data.text_content, author=author, timestamp=data.timestamp, url=data.url)
         if video_url := data.video_url:
+            self._add_limit_warning(result, data.duration)
             result.video = self.create_video(video_url, data.cover_url, data.duration)
         if image_urls := data.image_urls:
             result.contents.extend(self.create_images(image_urls))

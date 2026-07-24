@@ -73,6 +73,7 @@ class TwitterParser(BaseParser):
         result = self.result(author=author, title=title, text=data.text, timestamp=data.date_epoch)
         for media in data.media_extended:
             if media.type in ["video", "gif"]:
+                self._add_limit_warning(result, media.duration)
                 video = self.create_video(media.url, media.thumbnail_url, duration=media.duration, is_gif=media.type == "gif")
                 result.contents.append(video)
             elif media.type == "image":

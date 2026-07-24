@@ -45,6 +45,7 @@ class KuaiShouParser(BaseParser):
         result = self.result(title=photo.caption, author=author, contents=[], timestamp=photo.timestamp // 1000)
 
         if video_url := photo.video_url:
+            self._add_limit_warning(result, photo.duration_in_seconds)
             result.video = self.create_video(video_url, photo.cover_url, photo.duration_in_seconds)
         if img_urls := photo.img_urls:
             result.contents.extend(self.create_images(img_urls))

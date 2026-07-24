@@ -71,7 +71,9 @@ class XiaoHongShuParser(BaseParser):
             extra={"is_video": note_detail.is_video},
         )
         if note_detail.is_video:
-            result.video = self.create_video(*note_detail.video_cover_duration)
+            video_url, cover_url, duration = note_detail.video_cover_duration
+            self._add_limit_warning(result, duration)
+            result.video = self.create_video(video_url, cover_url, duration)
         elif image_urls := note_detail.image_urls:
             result.contents.extend(self.create_images(image_urls))
         return result
@@ -107,6 +109,7 @@ class XiaoHongShuParser(BaseParser):
                 cover_url = preload_data.image_urls[0]
             else:
                 cover_url = note_data.image_urls[0]
+            self._add_limit_warning(result, duration)
             result.video = self.create_video(video_url, cover_url, duration)
         elif img_urls := note_data.image_urls:
             result.contents.extend(self.create_images(img_urls))

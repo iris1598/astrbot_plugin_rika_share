@@ -17,12 +17,6 @@
     "hint": "从浏览器获取 xiaohongshu.com 的 cookie (可选)",
     "obvious_hint": true
   },
-  "PROXY": {
-    "description": "代理地址",
-    "type": "string",
-    "hint": "例如 http://127.0.0.1:7890 (可选)",
-    "obvious_hint": false
-  },
   "VIDEO_DURATION_MAXIMUM": {
     "description": "视频/音频最大时长(秒)",
     "type": "int",

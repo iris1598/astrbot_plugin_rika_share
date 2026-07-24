@@ -116,6 +116,30 @@ class BaseParser:
         return author
 
     def create_video(self, url_or_task: str | asyncio.Task[Path], cover_url: str | None = None, duration: float | None = None, is_gif: bool = False):
+        if duration is not None:
+            from .config import get_config
+            from .utils_parser import fmt_duration
+            pconfig = get_config()
+            if duration > pconfig.VIDEO_DURATION_MAXIMUM:
+                from astrbot.api import logger
+                logger.warning(
+                    f"视频时长 {fmt_duration(duration)} "
+                    f"超过限制 {fmt_duration(pconfig.VIDEO_DURATION_MAXIMUM)}, 跳过下载"
+                )
+                # 模仿 B站：创建一个 download_video 闭包，被 await 时抛出 IgnoreException
+                # 这样解析结果能正常返回（标题/作者/封面），但实际不下载视频
+                async def _skip_video_download():
+                    raise IgnoreException(
+                        f"视频时长({fmt_duration(duration)})超过限制({fmt_duration(pconfig.VIDEO_DURATION_MAXIMUM)})，跳过下载"
+                    )
+                path_task = _skip_video_download()
+                video_content = VideoContent(PathTask(path_task), duration=duration, is_gif=is_gif)
+                if cover_url:
+                    video_content.cover = PathTask(
+                        self.downloader.download_img(cover_url, ext_headers=self.headers)
+                    )
+                return video_content
+
         if isinstance(url_or_task, str):
             path_task = self.downloader.download_video(url_or_task, ext_headers=self.headers)
         else:
@@ -142,6 +166,21 @@ class BaseParser:
             video_content.gif_path = PathTask(convert_to_gif())
 
         return video_content
+
+    def _add_limit_warning(self, result: ParseResult, duration: float | None):
+        """检查视频时长，超限时添加 limit_warnings 到 result.extra（参考 B站实现）"""
+        if duration is not None:
+            from .config import get_config
+            from .utils_parser import fmt_duration
+            pconfig = get_config()
+            if duration > pconfig.VIDEO_DURATION_MAXIMUM:
+                from astrbot.api import logger
+                msg = (
+                    f"⚠️ 视频时长({fmt_duration(duration)})"
+                    f"超过限制({fmt_duration(pconfig.VIDEO_DURATION_MAXIMUM)})，不会下载视频"
+                )
+                logger.warning(msg)
+                result.extra.setdefault("limit_warnings", []).append(msg)
 
     def create_gif(self, url_or_task: str | asyncio.Task[Path], cover_url: str | None = None):
         return self.create_video(url_or_task, cover_url=cover_url, is_gif=True)
