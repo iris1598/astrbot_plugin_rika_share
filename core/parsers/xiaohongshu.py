@@ -38,6 +38,11 @@ class XiaoHongShuParser(BaseParser):
         url = f"https://{searched.group(0)}"
         return await self.parse_with_redirect(url, self.ios_headers)
 
+    @handle("xhslink.cn", r"xhslink\.cn/[A-Za-z0-9._?%&+=/#@-]+")
+    async def _parse_short_link_cn(self, searched: re.Match[str]):
+        url = f"https://{searched.group(0)}"
+        return await self.parse_with_redirect(url, self.ios_headers)
+
     @handle("xiaohongshu.com", r"(explore|discovery/item)/(?P<query>(?P<xhs_id>[0-9a-zA-Z]+)\?[A-Za-z0-9._%&+=/#@-]+)")
     async def _parse_common(self, searched: re.Match[str]):
         xhs_domain = "https://www.xiaohongshu.com"
