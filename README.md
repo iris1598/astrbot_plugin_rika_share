@@ -76,6 +76,7 @@ pip install -r requirements.txt
 | `CLOUDFLARE_EXTRA_HEADERS` | text(JSON) | — | 附加请求头，如 `{"Authorization":"Bearer xxx"}` |
 | `CLOUDFLARE_COOKIES` | text(JSON) | — | 附加 Cookie 数组，如 `[{"name":"session","value":"xxx","domain":"example.com","path":"/"}]` |
 | `CLOUDFLARE_CACHE_TTL` | int | 0 | 截图缓存秒数，0 表示不缓存 |
+| `CLOUDFLARE_BLACKLIST` | list | — | 截图黑名单：域名（`example.com` 含子域名）、通配符（`*.example.com`）、路径前缀（`https://example.com/login`）或不含点的关键词 |
 
 ## 获取 Cookie
 

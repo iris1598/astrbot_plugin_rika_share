@@ -11,11 +11,13 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import re
 import uuid
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import aiohttp
 from astrbot.api import logger
@@ -156,6 +158,70 @@ def _parse_json_value(raw: Any, default: Any) -> Any:
             logger.warning(f"Cloudflare 配置 JSON 解析失败，已忽略: {raw[:80]}")
             return default
     return default
+
+
+def normalize_blacklist(raw: Any) -> list[str]:
+    """规范化黑名单配置：支持 list 或逗号/换行分隔的字符串，统一转小写"""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        items = re.split(r"[,;\n]+", raw)
+    elif isinstance(raw, (list, tuple, set)):
+        items = raw
+    else:
+        return []
+    entries: list[str] = []
+    for item in items:
+        text = str(item).strip().lower()
+        if text:
+            entries.append(text)
+    return entries
+
+
+def is_url_blacklisted(url: str, raw_blacklist: Any) -> bool:
+    """判断 URL 是否命中截图黑名单
+
+    支持三种写法（条目间用逗号或换行分隔）：
+    - 域名：`example.com` 匹配该域名及其所有子域名
+    - 通配符：`*.example.com`、`https://example.com/*`（支持 * 和 ?）
+    - 完整 URL/路径前缀：`https://example.com/login` 匹配该前缀开头的地址
+    - 不含点的关键词：如 `porn`，URL 中任意位置包含即命中
+    """
+    entries = normalize_blacklist(raw_blacklist)
+    if not entries or not url:
+        return False
+
+    url_lower = url.strip().lower()
+    try:
+        host = (urlparse(url_lower).hostname or "").lower()
+    except Exception:
+        host = ""
+
+    for entry in entries:
+        if "*" in entry or "?" in entry:
+            # 通配符：优先匹配完整 URL，其次匹配域名
+            if fnmatch.fnmatch(url_lower, entry):
+                return True
+            if host and fnmatch.fnmatch(host, entry):
+                return True
+            # *.example.com 同时覆盖 example.com 本身及其子域名
+            if host and entry.startswith("*."):
+                bare = entry[2:]
+                if host == bare or host.endswith("." + bare):
+                    return True
+            continue
+        if entry.startswith(("http://", "https://")) or "/" in entry:
+            # 完整 URL / 路径前缀
+            if url_lower.startswith(entry):
+                return True
+            continue
+        if host == entry or (host and host.endswith("." + entry)):
+            # 精确域名或其子域名
+            return True
+        if "." not in entry and entry in url_lower:
+            # 不含点的条目按关键词匹配
+            return True
+    return False
 
 
 async def fetch_page_title(url: str, timeout: int = 10) -> Optional[str]:

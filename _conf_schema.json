@@ -232,6 +232,13 @@
     "hint": "0 表示不缓存、始终重新渲染；设置后相同页面在 TTL 内直接返回缓存结果（省额度）",
     "obvious_hint": false
   },
+  "CLOUDFLARE_BLACKLIST": {
+    "description": "截图黑名单",
+    "type": "list",
+    "default": [],
+    "hint": "命中后跳过该链接的 Cloudflare 截图。支持域名（example.com 含子域名）、通配符（*.example.com、https://example.com/*）和不含点的关键词",
+    "obvious_hint": false
+  },
   "DEBUG_LOG_ENABLED": {
     "description": "启用详细错误日志",
     "type": "bool",

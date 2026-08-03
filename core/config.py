@@ -186,6 +186,13 @@ class ParserConfig:
         return max(0, min(86400, int(self._cfg.get("CLOUDFLARE_CACHE_TTL", 0))))
 
     @property
+    def CLOUDFLARE_BLACKLIST(self) -> list[str]:
+        """Cloudflare 截图黑名单（域名/通配符/关键词，逗号或换行分隔）"""
+        from .cloudflare_screenshot import normalize_blacklist
+
+        return normalize_blacklist(self._cfg.get("CLOUDFLARE_BLACKLIST", []))
+
+    @property
     def DEBUG_LOG_ENABLED(self) -> bool:
         """是否启用详细错误日志"""
         return bool(self._cfg.get("DEBUG_LOG_ENABLED", True))

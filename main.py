@@ -29,7 +29,11 @@ from .core.config import init_config, get_config
 from .core.download import StreamDownloader
 from .core.data import ParseResult
 from .core.exception import ParseException, IgnoreException, DownloadException, SilentException
-from .core.cloudflare_screenshot import CloudflareScreenshotClient, fetch_page_title
+from .core.cloudflare_screenshot import (
+    CloudflareScreenshotClient,
+    fetch_page_title,
+    is_url_blacklisted,
+)
 from .core.parsers import (
     BilibiliParser, DouyinParser, KuaiShouParser, WeiBoParser,
     XiaoHongShuParser, TwitterParser, NGAParser, AcfunParser,
@@ -297,7 +301,7 @@ class ParserPlugin(Star):
         title = await title_task
         # 对齐其它解析器的 header 格式：平台名 | 标题
         fallback_title = title or url[:80]
-        header = f"网页解析 | {fallback_title}"
+        header = f"莉卡解析 | 网站 - {fallback_title}"
 
         if path is None:
             msg = header
@@ -360,6 +364,11 @@ class ParserPlugin(Star):
                 return  # 已有适配器，让平台专用 handler 处理
             except Exception:
                 continue
+
+        # 命中黑名单则跳过 Cloudflare 截图
+        if is_url_blacklisted(url, get_config().CLOUDFLARE_BLACKLIST):
+            logger.info(f"Cloudflare Fallback: URL 命中黑名单，跳过: {url[:80]}")
+            return
 
         logger.info(f"Cloudflare Fallback: 未匹配适配器，渲染网页截图: {url[:80]}")
         async for r in self._do_cloudflare_fallback(event, url):
