@@ -112,6 +112,19 @@ class ParserPlugin(Star):
         self.config_dir.mkdir(parents=True, exist_ok=True)
 
         pconfig = init_config(config, self.cache_dir, self.config_dir)
+
+        # 将旧版扁平配置迁移到分组配置，避免设置页整理后已有设置丢失
+        try:
+            from .core.config import migrate_grouped_config
+
+            if migrate_grouped_config(config):
+                save = getattr(config, "save_config", None)
+                if callable(save):
+                    save()
+                logger.info("已迁移旧版扁平配置到分组配置")
+        except Exception:
+            logger.warning("旧版配置迁移失败，将使用兼容回退读取", exc_info=True)
+
         self.downloader = StreamDownloader(self.cache_dir)
         self.disabled_platforms = pconfig.DISABLED_PLATFORMS
 

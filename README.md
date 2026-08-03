@@ -44,6 +44,8 @@ pip install -r requirements.txt
 
 ## 配置
 
+WebUI 设置页按「平台 / B站 / 缓存 / Cloudflare 基础 / Cloudflare 截图 / 调试」分组展示，以下为全部配置项：
+
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `BILI_CK` | string | — | B站 Cookie (SESSDATA)，获取 AI 总结和高清下载 |

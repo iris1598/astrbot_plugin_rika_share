@@ -30,6 +30,56 @@ WAIT_UNTIL_VALUES = ("load", "domcontentloaded", "networkidle0", "networkidle2")
 # screenshotOptions.type 可选值
 SCREENSHOT_TYPES = ("png", "jpeg")
 
+# 设置页分组：Cloudflare 配置项 -> 分组名（与 _conf_schema.json 保持一致）
+_CF_KEY_GROUPS: dict[str, str] = {
+    "CLOUDFLARE_FALLBACK_ENABLED": "Cloudflare 基础设置",
+    "CLOUDFLARE_ACCOUNT_ID": "Cloudflare 基础设置",
+    "CLOUDFLARE_API_TOKEN": "Cloudflare 基础设置",
+    "CLOUDFLARE_TIMEOUT": "Cloudflare 基础设置",
+    "CLOUDFLARE_CACHE_TTL": "Cloudflare 基础设置",
+    "CLOUDFLARE_BLACKLIST": "Cloudflare 基础设置",
+    "CLOUDFLARE_VIEWPORT_WIDTH": "Cloudflare 截图设置",
+    "CLOUDFLARE_VIEWPORT_HEIGHT": "Cloudflare 截图设置",
+    "CLOUDFLARE_WAIT_UNTIL": "Cloudflare 截图设置",
+    "CLOUDFLARE_GOTO_TIMEOUT": "Cloudflare 截图设置",
+    "CLOUDFLARE_FULL_PAGE": "Cloudflare 截图设置",
+    "CLOUDFLARE_DEVICE_SCALE_FACTOR": "Cloudflare 截图设置",
+    "CLOUDFLARE_SCREENSHOT_TYPE": "Cloudflare 截图设置",
+    "CLOUDFLARE_SCREENSHOT_QUALITY": "Cloudflare 截图设置",
+    "CLOUDFLARE_OMIT_BACKGROUND": "Cloudflare 截图设置",
+    "CLOUDFLARE_SELECTOR": "Cloudflare 截图设置",
+    "CLOUDFLARE_WAIT_FOR_SELECTOR": "Cloudflare 截图设置",
+    "CLOUDFLARE_WAIT_FOR_TIMEOUT": "Cloudflare 截图设置",
+    "CLOUDFLARE_USER_AGENT": "Cloudflare 截图设置",
+    "CLOUDFLARE_EXTRA_HEADERS": "Cloudflare 截图设置",
+    "CLOUDFLARE_COOKIES": "Cloudflare 截图设置",
+}
+
+# 各 Cloudflare 配置项默认值（与 _conf_schema.json 保持一致），用于扁平旧值回退判断
+_CF_KEY_DEFAULTS: dict[str, Any] = {
+    "CLOUDFLARE_FALLBACK_ENABLED": False,
+    "CLOUDFLARE_ACCOUNT_ID": "",
+    "CLOUDFLARE_API_TOKEN": "",
+    "CLOUDFLARE_TIMEOUT": 60,
+    "CLOUDFLARE_CACHE_TTL": 0,
+    "CLOUDFLARE_BLACKLIST": [],
+    "CLOUDFLARE_VIEWPORT_WIDTH": 1280,
+    "CLOUDFLARE_VIEWPORT_HEIGHT": 720,
+    "CLOUDFLARE_WAIT_UNTIL": "networkidle0",
+    "CLOUDFLARE_GOTO_TIMEOUT": 45000,
+    "CLOUDFLARE_FULL_PAGE": False,
+    "CLOUDFLARE_DEVICE_SCALE_FACTOR": 1,
+    "CLOUDFLARE_SCREENSHOT_TYPE": "png",
+    "CLOUDFLARE_SCREENSHOT_QUALITY": 0,
+    "CLOUDFLARE_OMIT_BACKGROUND": False,
+    "CLOUDFLARE_SELECTOR": "",
+    "CLOUDFLARE_WAIT_FOR_SELECTOR": "",
+    "CLOUDFLARE_WAIT_FOR_TIMEOUT": 0,
+    "CLOUDFLARE_USER_AGENT": "",
+    "CLOUDFLARE_EXTRA_HEADERS": "",
+    "CLOUDFLARE_COOKIES": "",
+}
+
 # Cloudflare API 的 key 映射（snake_case → camelCase）
 # 参考 astrbot_plugin_cloudflare_browser_run 的 CF_KEY_MAP
 CF_KEY_MAP: dict[str, str] = {
@@ -119,6 +169,22 @@ def _cfg(config: dict, key: str, default=None):
     if val is None:
         return default
     return val
+
+
+def _cfg_any(config: dict, key: str, default=None):
+    """优先读取分组配置，其次回退扁平旧配置（兼容旧版本保存的设置）"""
+    group = _CF_KEY_GROUPS.get(key)
+    if group:
+        group_cfg = config.get(group)
+        if isinstance(group_cfg, dict) and key in group_cfg:
+            default_val = _CF_KEY_DEFAULTS.get(key, default)
+            flat_val = config.get(key, default_val)
+            nested_val = group_cfg[key]
+            # 分组仍是默认值而扁平旧值被改过时，优先旧值（兼容迁移前的状态）
+            if nested_val == default_val and flat_val != default_val:
+                return flat_val
+            return nested_val
+    return _cfg(config, key, default)
 
 
 def _to_int(value: Any, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -274,35 +340,37 @@ class CloudflareScreenshotClient:
     """
 
     def __init__(self, config: dict):
-        self.account_id = _cfg(config, "CLOUDFLARE_ACCOUNT_ID", "") or \
-                          _cfg(config, "CLOUDFLARE.ACCOUNT_ID", "")
-        self.api_token = _cfg(config, "CLOUDFLARE_API_TOKEN", "") or \
-                         _cfg(config, "CLOUDFLARE.API_TOKEN", "")
-        self.timeout = _to_int(_cfg(config, "CLOUDFLARE_TIMEOUT", 60), 60, 1)
+        self.account_id = _cfg_any(config, "CLOUDFLARE_ACCOUNT_ID", "") or \
+                          _cfg_any(config, "CLOUDFLARE.ACCOUNT_ID", "")
+        self.api_token = _cfg_any(config, "CLOUDFLARE_API_TOKEN", "") or \
+                         _cfg_any(config, "CLOUDFLARE.API_TOKEN", "")
+        self.timeout = _to_int(_cfg_any(config, "CLOUDFLARE_TIMEOUT", 60), 60, 1)
         self.viewport_width = _to_int(
-            _cfg(config, "CLOUDFLARE_VIEWPORT_WIDTH", 1280), 1280, 1
+            _cfg_any(config, "CLOUDFLARE_VIEWPORT_WIDTH", 1280), 1280, 1
         )
         self.viewport_height = _to_int(
-            _cfg(config, "CLOUDFLARE_VIEWPORT_HEIGHT", 720), 720, 1
+            _cfg_any(config, "CLOUDFLARE_VIEWPORT_HEIGHT", 720), 720, 1
         )
 
         # ---- 新增：页面加载与截图选项 ----
         self.wait_until = str(
-            _cfg(config, "CLOUDFLARE_WAIT_UNTIL", "networkidle0")
+            _cfg_any(config, "CLOUDFLARE_WAIT_UNTIL", "networkidle0")
         ).strip().lower()
         if self.wait_until not in WAIT_UNTIL_VALUES:
             self.wait_until = "networkidle0"
         self.goto_timeout_ms = _to_int(
-            _cfg(config, "CLOUDFLARE_GOTO_TIMEOUT", 45000), 45000, 0
+            _cfg_any(config, "CLOUDFLARE_GOTO_TIMEOUT", 45000), 45000, 0
         )
-        self.full_page = bool(_cfg(config, "CLOUDFLARE_FULL_PAGE", False))
+        self.full_page = bool(_cfg_any(config, "CLOUDFLARE_FULL_PAGE", False))
         self.device_scale_factor = _to_float(
-            _cfg(config, "CLOUDFLARE_DEVICE_SCALE_FACTOR", 1), 1.0
+            _cfg_any(config, "CLOUDFLARE_DEVICE_SCALE_FACTOR", 1), 1.0
         )
-        self.omit_background = bool(_cfg(config, "CLOUDFLARE_OMIT_BACKGROUND", False))
+        self.omit_background = bool(
+            _cfg_any(config, "CLOUDFLARE_OMIT_BACKGROUND", False)
+        )
 
         self.screenshot_type = str(
-            _cfg(config, "CLOUDFLARE_SCREENSHOT_TYPE", "png")
+            _cfg_any(config, "CLOUDFLARE_SCREENSHOT_TYPE", "png")
         ).strip().lower().lstrip(".")
         if self.screenshot_type == "jpg":
             self.screenshot_type = "jpeg"
@@ -310,25 +378,31 @@ class CloudflareScreenshotClient:
             self.screenshot_type = "png"
         # quality 仅对 jpeg 有效；0 表示不指定
         self.quality = _to_int(
-            _cfg(config, "CLOUDFLARE_SCREENSHOT_QUALITY", 0), 0, 0, 100
+            _cfg_any(config, "CLOUDFLARE_SCREENSHOT_QUALITY", 0), 0, 0, 100
         )
 
-        self.selector = str(_cfg(config, "CLOUDFLARE_SELECTOR", "") or "").strip()
+        self.selector = str(
+            _cfg_any(config, "CLOUDFLARE_SELECTOR", "") or ""
+        ).strip()
         self.wait_for_selector = str(
-            _cfg(config, "CLOUDFLARE_WAIT_FOR_SELECTOR", "") or ""
+            _cfg_any(config, "CLOUDFLARE_WAIT_FOR_SELECTOR", "") or ""
         ).strip()
         self.wait_for_timeout_ms = _to_int(
-            _cfg(config, "CLOUDFLARE_WAIT_FOR_TIMEOUT", 0), 0, 0
+            _cfg_any(config, "CLOUDFLARE_WAIT_FOR_TIMEOUT", 0), 0, 0
         )
 
-        self.user_agent = str(_cfg(config, "CLOUDFLARE_USER_AGENT", "") or "").strip()
+        self.user_agent = str(
+            _cfg_any(config, "CLOUDFLARE_USER_AGENT", "") or ""
+        ).strip()
         extra_headers = _parse_json_value(
-            _cfg(config, "CLOUDFLARE_EXTRA_HEADERS", ""), {}
+            _cfg_any(config, "CLOUDFLARE_EXTRA_HEADERS", ""), {}
         )
         self.extra_headers = extra_headers if isinstance(extra_headers, dict) else {}
-        cookies = _parse_json_value(_cfg(config, "CLOUDFLARE_COOKIES", ""), [])
+        cookies = _parse_json_value(_cfg_any(config, "CLOUDFLARE_COOKIES", ""), [])
         self.cookies = cookies if isinstance(cookies, list) else []
-        self.cache_ttl = _to_int(_cfg(config, "CLOUDFLARE_CACHE_TTL", 0), 0, 0, 86400)
+        self.cache_ttl = _to_int(
+            _cfg_any(config, "CLOUDFLARE_CACHE_TTL", 0), 0, 0, 86400
+        )
 
         # 最近一次错误信息，供调用方展示
         self.last_error: Optional[str] = None
