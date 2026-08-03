@@ -15,7 +15,6 @@ CONFIG_GROUP_KEYS: dict[str, tuple[str, ...]] = {
     "平台设置": (
         "DISABLED_PLATFORMS",
         "VIDEO_DURATION_MAXIMUM",
-        "YTB_CK",
         "XHS_CK",
     ),
     "B站设置": (
@@ -65,7 +64,6 @@ _KEY_GROUP_MAP: dict[str, str] = {
 _LEGACY_DEFAULTS: dict[str, Any] = {
     "DISABLED_PLATFORMS": "",
     "VIDEO_DURATION_MAXIMUM": 480,
-    "YTB_CK": "",
     "XHS_CK": "",
     "BILI_CK": "",
     "BILI_QUALITY": "1080P",
@@ -148,10 +146,6 @@ class ParserConfig:
     @property
     def BILI_CK(self) -> str | None:
         return self._cfg_get("BILI_CK", None)
-
-    @property
-    def YTB_CK(self) -> str | None:
-        return self._cfg_get("YTB_CK", None)
 
     @property
     def XHS_CK(self) -> str | None:

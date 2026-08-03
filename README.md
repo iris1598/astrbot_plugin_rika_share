@@ -15,8 +15,6 @@ AstrBot 链接分享自动解析插件。移植自 [nonebot-plugin-parser](https
 | AcFun | 视频 | 视频 |
 | NGA | 帖子 | — |
 
-> YouTube/TikTok 需要额外安装 `yt-dlp`。
-
 ## 输出格式
 
 所有解析结果统一输出：
@@ -50,9 +48,8 @@ WebUI 设置页按「平台 / B站 / 缓存 / Cloudflare 基础 / Cloudflare 截
 |--------|------|--------|------|
 | `BILI_CK` | string | — | B站 Cookie (SESSDATA)，获取 AI 总结和高清下载 |
 | `XHS_CK` | string | — | 小红书 Cookie，获取图片/视频下载 |
-| `YTB_CK` | string | — | YouTube Cookie |
 | `VIDEO_DURATION_MAXIMUM` | int | 480 | 视频最大时长（秒），超时不会下载 |
-| `DISABLED_PLATFORMS` | string | — | 禁用的平台（逗号分隔，如 `tiktok,youtube`） |
+| `DISABLED_PLATFORMS` | string | — | 禁用的平台（逗号分隔，如 `acfun,nga`） |
 
 ## Cloudflare 网页截图
 

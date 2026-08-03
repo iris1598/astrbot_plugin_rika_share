@@ -2,7 +2,6 @@
 莉卡解析 - 链接分享解析插件
 
 支持 B站 | 抖音 | 快手 | 微博 | 小红书 | Twitter | AcFun | NGA
-选项: YouTube | TikTok (需安装 yt-dlp)
 
 移植自 nonebot-plugin-parser (https://github.com/fllesser/nonebot-plugin-parser)
 内置B站扫码登录、Cookie监控、自动应用Cookie功能

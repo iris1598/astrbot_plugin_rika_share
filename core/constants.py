@@ -37,11 +37,9 @@ class PlatformEnum(str, Enum):
     DOUYIN = "douyin"
     KUAISHOU = "kuaishou"
     NGA = "nga"
-    TIKTOK = "tiktok"
     TWITTER = "twitter"
     WEIBO = "weibo"
     XIAOHONGSHU = "xiaohongshu"
-    YOUTUBE = "youtube"
 
     def __str__(self) -> str:
         return self.value
