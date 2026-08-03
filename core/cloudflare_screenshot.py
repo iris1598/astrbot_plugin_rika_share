@@ -53,6 +53,7 @@ _CF_KEY_GROUPS: dict[str, str] = {
     "CLOUDFLARE_USER_AGENT": "Cloudflare 截图设置",
     "CLOUDFLARE_EXTRA_HEADERS": "Cloudflare 截图设置",
     "CLOUDFLARE_COOKIES": "Cloudflare 截图设置",
+    "DEBUG_LOG_ENABLED": "调试设置",
 }
 
 # 各 Cloudflare 配置项默认值（与 _conf_schema.json 保持一致），用于扁平旧值回退判断
@@ -403,6 +404,8 @@ class CloudflareScreenshotClient:
         self.cache_ttl = _to_int(
             _cfg_any(config, "CLOUDFLARE_CACHE_TTL", 0), 0, 0, 86400
         )
+        # 是否输出详细错误日志（由“启用详细错误日志”开关控制）
+        self.debug_log_enabled = bool(_cfg_any(config, "DEBUG_LOG_ENABLED", True))
 
         # 最近一次错误信息，供调用方展示
         self.last_error: Optional[str] = None
@@ -537,7 +540,8 @@ class CloudflareScreenshotClient:
             return None
 
         body = _to_cf_keys(body_raw)
-        logger.debug(f"Cloudflare 截图请求 body: {body}")
+        if self.debug_log_enabled:
+            logger.debug(f"Cloudflare 截图请求 body: {body}")
 
         endpoint = SCREENSHOT_ENDPOINT.format(account_id=self.account_id)
         headers = {
@@ -585,17 +589,21 @@ class CloudflareScreenshotClient:
 
         except asyncio.TimeoutError:
             self.last_error = f"请求超时（{self.timeout}s）"
-            logger.error(f"Cloudflare 截图超时 ({self.timeout}s): {url}")
+            if self.debug_log_enabled:
+                logger.error(f"Cloudflare 截图超时 ({self.timeout}s): {url}")
             return None
         except aiohttp.ClientError as e:
             self.last_error = f"网络错误: {e}"
-            logger.error(f"Cloudflare 截图网络错误: {e}")
+            if self.debug_log_enabled:
+                logger.error(f"Cloudflare 截图网络错误: {e}")
             return None
         except CloudflareScreenshotError as e:
             self.last_error = self._redact(str(e))
-            logger.error(f"Cloudflare 截图失败: {self.last_error}")
+            if self.debug_log_enabled:
+                logger.error(f"Cloudflare 截图失败: {self.last_error}")
             return None
         except Exception as e:
             self.last_error = f"未知错误: {e}"
-            logger.exception(f"Cloudflare 截图未知错误: {e}")
+            if self.debug_log_enabled:
+                logger.exception(f"Cloudflare 截图未知错误: {e}")
             return None

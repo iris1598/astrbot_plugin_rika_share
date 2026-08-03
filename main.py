@@ -316,15 +316,15 @@ class ParserPlugin(Star):
         header = f"莉卡解析 | 网站 - {fallback_title}"
 
         if path is None:
-            msg = header
-            if title:
-                msg += f"\n{url}"
-            err = getattr(self._cloudflare_client, "last_error", None)
-            if err:
-                msg += f"\n⚠️ 截图失败：{err}"
-            else:
-                msg += "\n⚠️ 网页截图失败，请稍后重试"
-            yield event.plain_result(msg)
+            # 静默失败：出错不回复；是否记录日志由“启用详细错误日志”开关控制
+            if get_config().DEBUG_LOG_ENABLED:
+                err = getattr(self._cloudflare_client, "last_error", None)
+                if err:
+                    logger.warning(
+                        f"Cloudflare 截图失败，已静默跳过: {url[:80]} | {err}"
+                    )
+                else:
+                    logger.warning(f"Cloudflare 截图失败，已静默跳过: {url[:80]}")
             return
 
         # 发送截图
