@@ -303,6 +303,11 @@ class ParserPlugin(Star):
             msg = header
             if title:
                 msg += f"\n{url}"
+            err = getattr(self._cloudflare_client, "last_error", None)
+            if err:
+                msg += f"\n⚠️ 截图失败：{err}"
+            else:
+                msg += "\n⚠️ 网页截图失败，请稍后重试"
             yield event.plain_result(msg)
             return
 

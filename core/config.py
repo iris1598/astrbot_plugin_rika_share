@@ -93,7 +93,7 @@ class ParserConfig:
     @property
     def CLOUDFLARE_TIMEOUT(self) -> int:
         """截图 API 超时时间（秒）"""
-        return int(self._cfg.get("CLOUDFLARE_TIMEOUT", 30))
+        return int(self._cfg.get("CLOUDFLARE_TIMEOUT", 60))
 
     @property
     def CLOUDFLARE_VIEWPORT_WIDTH(self) -> int:
@@ -104,6 +104,86 @@ class ParserConfig:
     def CLOUDFLARE_VIEWPORT_HEIGHT(self) -> int:
         """截图视窗高度"""
         return int(self._cfg.get("CLOUDFLARE_VIEWPORT_HEIGHT", 720))
+
+    @property
+    def CLOUDFLARE_WAIT_UNTIL(self) -> str:
+        """页面加载等待策略"""
+        val = str(self._cfg.get("CLOUDFLARE_WAIT_UNTIL", "networkidle0")).strip().lower()
+        if val not in {"load", "domcontentloaded", "networkidle0", "networkidle2"}:
+            return "networkidle0"
+        return val
+
+    @property
+    def CLOUDFLARE_GOTO_TIMEOUT(self) -> int:
+        """页面加载超时（毫秒）"""
+        return max(0, int(self._cfg.get("CLOUDFLARE_GOTO_TIMEOUT", 45000)))
+
+    @property
+    def CLOUDFLARE_FULL_PAGE(self) -> bool:
+        """是否整页截图"""
+        return bool(self._cfg.get("CLOUDFLARE_FULL_PAGE", False))
+
+    @property
+    def CLOUDFLARE_DEVICE_SCALE_FACTOR(self) -> float:
+        """截图清晰度（deviceScaleFactor）"""
+        try:
+            val = float(self._cfg.get("CLOUDFLARE_DEVICE_SCALE_FACTOR", 1))
+        except (TypeError, ValueError):
+            val = 1.0
+        return val if val > 0 else 1.0
+
+    @property
+    def CLOUDFLARE_OMIT_BACKGROUND(self) -> bool:
+        """是否隐藏默认白色背景（仅 png 有效）"""
+        return bool(self._cfg.get("CLOUDFLARE_OMIT_BACKGROUND", False))
+
+    @property
+    def CLOUDFLARE_SCREENSHOT_TYPE(self) -> str:
+        """截图格式（png/jpeg）"""
+        val = str(self._cfg.get("CLOUDFLARE_SCREENSHOT_TYPE", "png")).strip().lower().lstrip(".")
+        if val == "jpg":
+            val = "jpeg"
+        return val if val in {"png", "jpeg"} else "png"
+
+    @property
+    def CLOUDFLARE_SCREENSHOT_QUALITY(self) -> int:
+        """截图质量（仅 jpeg 有效，0 表示不指定）"""
+        return max(0, min(100, int(self._cfg.get("CLOUDFLARE_SCREENSHOT_QUALITY", 0))))
+
+    @property
+    def CLOUDFLARE_SELECTOR(self) -> str:
+        """指定元素截图 CSS 选择器"""
+        return str(self._cfg.get("CLOUDFLARE_SELECTOR", "") or "").strip()
+
+    @property
+    def CLOUDFLARE_WAIT_FOR_SELECTOR(self) -> str:
+        """等待元素出现的 CSS 选择器"""
+        return str(self._cfg.get("CLOUDFLARE_WAIT_FOR_SELECTOR", "") or "").strip()
+
+    @property
+    def CLOUDFLARE_WAIT_FOR_TIMEOUT(self) -> int:
+        """等待元素超时（毫秒），0 表示不指定"""
+        return max(0, int(self._cfg.get("CLOUDFLARE_WAIT_FOR_TIMEOUT", 0)))
+
+    @property
+    def CLOUDFLARE_USER_AGENT(self) -> str:
+        """自定义 User-Agent"""
+        return str(self._cfg.get("CLOUDFLARE_USER_AGENT", "") or "").strip()
+
+    @property
+    def CLOUDFLARE_EXTRA_HEADERS(self) -> str:
+        """附加请求头（JSON 字符串）"""
+        return str(self._cfg.get("CLOUDFLARE_EXTRA_HEADERS", "") or "")
+
+    @property
+    def CLOUDFLARE_COOKIES(self) -> str:
+        """附加 Cookie（JSON 字符串）"""
+        return str(self._cfg.get("CLOUDFLARE_COOKIES", "") or "")
+
+    @property
+    def CLOUDFLARE_CACHE_TTL(self) -> int:
+        """截图缓存时间（秒），0 表示不缓存"""
+        return max(0, min(86400, int(self._cfg.get("CLOUDFLARE_CACHE_TTL", 0))))
 
     @property
     def DEBUG_LOG_ENABLED(self) -> bool:

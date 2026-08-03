@@ -113,6 +113,125 @@
     "hint": "渲染页面使用的浏览器视窗高度",
     "obvious_hint": false
   },
+  "CLOUDFLARE_WAIT_UNTIL": {
+    "description": "页面加载等待策略",
+    "type": "string",
+    "default": "networkidle0",
+    "options": ["load", "domcontentloaded", "networkidle0", "networkidle2"],
+    "hint": "JS 重页面建议 networkidle0/networkidle2（等待网络空闲后再截图）；速度优先可选 load/domcontentloaded",
+    "obvious_hint": false
+  },
+  "CLOUDFLARE_GOTO_TIMEOUT": {
+    "description": "页面加载超时(毫秒)",
+    "type": "int",
+    "default": 45000,
+    "hint": "Cloudflare 页面导航超时，官方推荐 45000ms",
+    "obvious_hint": false,
+    "slider": {
+      "min": 5000,
+      "max": 120000,
+      "step": 5000
+    }
+  },
+  "CLOUDFLARE_FULL_PAGE": {
+    "description": "整页截图",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后截取完整页面（含滚动区域），关闭则只截当前视窗",
+    "obvious_hint": true
+  },
+  "CLOUDFLARE_DEVICE_SCALE_FACTOR": {
+    "description": "截图清晰度(deviceScaleFactor)",
+    "type": "float",
+    "default": 1,
+    "hint": "增大可避免大视窗截图模糊，建议 1-3，如 2",
+    "obvious_hint": false,
+    "slider": {
+      "min": 1,
+      "max": 3,
+      "step": 0.5
+    }
+  },
+  "CLOUDFLARE_SCREENSHOT_TYPE": {
+    "description": "截图格式",
+    "type": "string",
+    "default": "png",
+    "options": ["png", "jpeg"],
+    "hint": "png 支持透明背景；jpeg 体积更小，可配合质量参数",
+    "obvious_hint": false
+  },
+  "CLOUDFLARE_SCREENSHOT_QUALITY": {
+    "description": "截图质量(仅 jpeg 有效)",
+    "type": "int",
+    "default": 0,
+    "hint": "0-100，0 表示不指定（使用 Cloudflare 默认）。png 格式下该参数会导致 API 报错，会被自动忽略",
+    "obvious_hint": false,
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 5
+    }
+  },
+  "CLOUDFLARE_OMIT_BACKGROUND": {
+    "description": "透明背景",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后隐藏默认白色背景，适合 png 透明图（仅 png 生效）",
+    "obvious_hint": false
+  },
+  "CLOUDFLARE_SELECTOR": {
+    "description": "指定元素截图(可选)",
+    "type": "string",
+    "default": "",
+    "hint": "填写 CSS 选择器（如 #content），只截取该元素区域，留空截取整个页面",
+    "obvious_hint": false
+  },
+  "CLOUDFLARE_WAIT_FOR_SELECTOR": {
+    "description": "等待元素出现后再截图(可选)",
+    "type": "string",
+    "default": "",
+    "hint": "JS 动态页面可填写内容加载完成的 CSS 选择器，浏览器会等该元素出现再截图",
+    "obvious_hint": false
+  },
+  "CLOUDFLARE_WAIT_FOR_TIMEOUT": {
+    "description": "等待元素超时(毫秒)",
+    "type": "int",
+    "default": 0,
+    "hint": "配合“等待元素出现”使用，0 表示使用 Cloudflare 默认",
+    "obvious_hint": false
+  },
+  "CLOUDFLARE_USER_AGENT": {
+    "description": "自定义 User-Agent",
+    "type": "string",
+    "default": "",
+    "hint": "留空使用 Cloudflare 默认 UA；部分站点按 UA 返回不同内容",
+    "obvious_hint": false
+  },
+  "CLOUDFLARE_EXTRA_HEADERS": {
+    "description": "附加请求头(JSON)",
+    "type": "text",
+    "default": "",
+    "editor_mode": true,
+    "editor_language": "json",
+    "hint": "加载页面时附加的 HTTP 头，JSON 格式，如 {\"Authorization\":\"Bearer xxx\"}",
+    "obvious_hint": false
+  },
+  "CLOUDFLARE_COOKIES": {
+    "description": "附加 Cookie(JSON)",
+    "type": "text",
+    "default": "",
+    "editor_mode": true,
+    "editor_language": "json",
+    "hint": "需要登录的页面可配置 Cookie 数组，如 [{\"name\":\"session\",\"value\":\"xxx\",\"domain\":\"example.com\",\"path\":\"/\"}]",
+    "obvious_hint": false
+  },
+  "CLOUDFLARE_CACHE_TTL": {
+    "description": "截图缓存时间(秒)",
+    "type": "int",
+    "default": 0,
+    "hint": "0 表示不缓存、始终重新渲染；设置后相同页面在 TTL 内直接返回缓存结果（省额度）",
+    "obvious_hint": false
+  },
   "DEBUG_LOG_ENABLED": {
     "description": "启用详细错误日志",
     "type": "bool",

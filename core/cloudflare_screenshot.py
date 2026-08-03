@@ -2,10 +2,16 @@
 
 使用 Cloudflare Browser Rendering API 的 screenshot 端点，
 将网页渲染为图片并保存到本地。
-参考 astrbot_plugin_cloudflare_browser_run 的 API 调用模式。
+
+实现参考：
+- astrbot_plugin_cloudflare_browser_run 的 API 调用模式（key 转换、错误处理、脱敏）
+- Cloudflare 官方 /screenshot 文档（screenshotOptions / viewport / gotoOptions 等参数）
 """
 
+from __future__ import annotations
+
 import asyncio
+import json
 import re
 import uuid
 from pathlib import Path
@@ -15,17 +21,54 @@ import aiohttp
 from astrbot.api import logger
 
 API_BASE = "https://api.cloudflare.com/client/v4"
+SCREENSHOT_ENDPOINT = f"{API_BASE}/accounts/{{account_id}}/browser-rendering/screenshot"
+
+# gotoOptions.waitUntil 可选值（官方文档）
+WAIT_UNTIL_VALUES = ("load", "domcontentloaded", "networkidle0", "networkidle2")
+# screenshotOptions.type 可选值
+SCREENSHOT_TYPES = ("png", "jpeg")
 
 # Cloudflare API 的 key 映射（snake_case → camelCase）
 # 参考 astrbot_plugin_cloudflare_browser_run 的 CF_KEY_MAP
 CF_KEY_MAP: dict[str, str] = {
-    "goto_options": "gotoOptions",
-    "wait_until": "waitUntil",
     "action_timeout": "actionTimeout",
+    "add_script_tag": "addScriptTag",
+    "add_style_tag": "addStyleTag",
+    "allow_request_pattern": "allowRequestPattern",
+    "allow_resource_types": "allowResourceTypes",
+    "best_attempt": "bestAttempt",
+    "capture_beyond_viewport": "captureBeyondViewport",
+    "device_scale_factor": "deviceScaleFactor",
+    "emulate_media_type": "emulateMediaType",
+    "full_page": "fullPage",
+    "goto_options": "gotoOptions",
+    "has_touch": "hasTouch",
+    "http_only": "httpOnly",
+    "is_landscape": "isLandscape",
+    "is_mobile": "isMobile",
+    "omit_background": "omitBackground",
+    "partition_key": "partitionKey",
+    "reject_request_pattern": "rejectRequestPattern",
+    "reject_resource_types": "rejectResourceTypes",
+    "same_party": "sameParty",
+    "same_site": "sameSite",
+    "screenshot_options": "screenshotOptions",
+    "set_extra_http_headers": "setExtraHTTPHeaders",
+    "set_javascript_enabled": "setJavaScriptEnabled",
+    "source_port": "sourcePort",
+    "source_scheme": "sourceScheme",
+    "user_agent": "userAgent",
+    "wait_for_selector": "waitForSelector",
+    "wait_for_timeout": "waitForTimeout",
+    "wait_until": "waitUntil",
 }
 
-# 保留蛇形命名，不转换的 key
+# 保持蛇形命名、不做转换的 key
 KEEP_SNAKE_KEYS: set[str] = set()
+
+# PNG / JPEG 文件头（用于校验返回内容确实是图片）
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_JPEG_MAGIC = b"\xff\xd8\xff"
 
 # 提取 <title> 的正则
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
@@ -63,7 +106,7 @@ def _to_cf_keys(value: Any) -> Any:
 
 
 def _cfg(config: dict, key: str, default=None):
-    """从配置字典中按 key 取值"""
+    """从配置字典中按 key 取值（支持点号嵌套）"""
     keys = key.split(".")
     val = config
     for k in keys:
@@ -74,6 +117,45 @@ def _cfg(config: dict, key: str, default=None):
     if val is None:
         return default
     return val
+
+
+def _to_int(value: Any, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
+    """安全转 int，并做范围限制"""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    if minimum is not None:
+        number = max(minimum, number)
+    if maximum is not None:
+        number = min(maximum, number)
+    return number
+
+
+def _to_float(value: Any, default: float) -> float:
+    """安全转 float"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    if number <= 0:
+        number = default
+    return number
+
+
+def _parse_json_value(raw: Any, default: Any) -> Any:
+    """解析配置中的 JSON 字符串（字典/列表），失败时返回默认值"""
+    if raw is None or raw == "":
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning(f"Cloudflare 配置 JSON 解析失败，已忽略: {raw[:80]}")
+            return default
+    return default
 
 
 async def fetch_page_title(url: str, timeout: int = 10) -> Optional[str]:
@@ -114,113 +196,266 @@ async def fetch_page_title(url: str, timeout: int = 10) -> Optional[str]:
 
 
 class CloudflareScreenshotClient:
-    """Cloudflare Browser Rendering 截图客户端"""
+    """Cloudflare Browser Rendering 截图客户端
+
+    支持官方 /screenshot 文档中的常用参数：
+    - viewport + deviceScaleFactor（提升大视窗截图清晰度）
+    - gotoOptions.waitUntil / timeout（JS 重页面等待渲染完成）
+    - screenshotOptions（fullPage / omitBackground / type / quality）
+    - selector（指定元素截图）、waitForSelector（等待元素出现）
+    - userAgent、setExtraHTTPHeaders、cookies（登录/鉴权页面）
+    - cacheTTL 查询参数（可复用 Cloudflare 缓存节省额度）
+    """
 
     def __init__(self, config: dict):
         self.account_id = _cfg(config, "CLOUDFLARE_ACCOUNT_ID", "") or \
                           _cfg(config, "CLOUDFLARE.ACCOUNT_ID", "")
         self.api_token = _cfg(config, "CLOUDFLARE_API_TOKEN", "") or \
                          _cfg(config, "CLOUDFLARE.API_TOKEN", "")
-        self.timeout = int(_cfg(config, "CLOUDFLARE_TIMEOUT", 60))
-        self.viewport_width = int(_cfg(config, "CLOUDFLARE_VIEWPORT_WIDTH", 1280))
-        self.viewport_height = int(_cfg(config, "CLOUDFLARE_VIEWPORT_HEIGHT", 720))
+        self.timeout = _to_int(_cfg(config, "CLOUDFLARE_TIMEOUT", 60), 60, 1)
+        self.viewport_width = _to_int(
+            _cfg(config, "CLOUDFLARE_VIEWPORT_WIDTH", 1280), 1280, 1
+        )
+        self.viewport_height = _to_int(
+            _cfg(config, "CLOUDFLARE_VIEWPORT_HEIGHT", 720), 720, 1
+        )
+
+        # ---- 新增：页面加载与截图选项 ----
+        self.wait_until = str(
+            _cfg(config, "CLOUDFLARE_WAIT_UNTIL", "networkidle0")
+        ).strip().lower()
+        if self.wait_until not in WAIT_UNTIL_VALUES:
+            self.wait_until = "networkidle0"
+        self.goto_timeout_ms = _to_int(
+            _cfg(config, "CLOUDFLARE_GOTO_TIMEOUT", 45000), 45000, 0
+        )
+        self.full_page = bool(_cfg(config, "CLOUDFLARE_FULL_PAGE", False))
+        self.device_scale_factor = _to_float(
+            _cfg(config, "CLOUDFLARE_DEVICE_SCALE_FACTOR", 1), 1.0
+        )
+        self.omit_background = bool(_cfg(config, "CLOUDFLARE_OMIT_BACKGROUND", False))
+
+        self.screenshot_type = str(
+            _cfg(config, "CLOUDFLARE_SCREENSHOT_TYPE", "png")
+        ).strip().lower().lstrip(".")
+        if self.screenshot_type == "jpg":
+            self.screenshot_type = "jpeg"
+        if self.screenshot_type not in SCREENSHOT_TYPES:
+            self.screenshot_type = "png"
+        # quality 仅对 jpeg 有效；0 表示不指定
+        self.quality = _to_int(
+            _cfg(config, "CLOUDFLARE_SCREENSHOT_QUALITY", 0), 0, 0, 100
+        )
+
+        self.selector = str(_cfg(config, "CLOUDFLARE_SELECTOR", "") or "").strip()
+        self.wait_for_selector = str(
+            _cfg(config, "CLOUDFLARE_WAIT_FOR_SELECTOR", "") or ""
+        ).strip()
+        self.wait_for_timeout_ms = _to_int(
+            _cfg(config, "CLOUDFLARE_WAIT_FOR_TIMEOUT", 0), 0, 0
+        )
+
+        self.user_agent = str(_cfg(config, "CLOUDFLARE_USER_AGENT", "") or "").strip()
+        extra_headers = _parse_json_value(
+            _cfg(config, "CLOUDFLARE_EXTRA_HEADERS", ""), {}
+        )
+        self.extra_headers = extra_headers if isinstance(extra_headers, dict) else {}
+        cookies = _parse_json_value(_cfg(config, "CLOUDFLARE_COOKIES", ""), [])
+        self.cookies = cookies if isinstance(cookies, list) else []
+        self.cache_ttl = _to_int(_cfg(config, "CLOUDFLARE_CACHE_TTL", 0), 0, 0, 86400)
+
+        # 最近一次错误信息，供调用方展示
+        self.last_error: Optional[str] = None
 
     @property
     def is_configured(self) -> bool:
         """检查 API 凭据是否已配置"""
         return bool(self.account_id) and bool(self.api_token)
 
-    async def screenshot(self, url: str, save_dir: Path) -> Optional[Path]:
-        """对指定 URL 截图并保存到本地
+    def _redact(self, text: str) -> str:
+        """对错误信息中的 API Token 等敏感内容做脱敏"""
+        if self.api_token and self.api_token in text:
+            text = text.replace(self.api_token, "***REDACTED***")
+        text = re.sub(
+            r"Bearer\s+[A-Za-z0-9._~+/=-]+",
+            "Bearer ***REDACTED***",
+            text,
+            flags=re.IGNORECASE,
+        )
+        return text
 
-        添加 gotoOptions.waitUntil = "networkidle0" 确保页面加载完再截图。
+    def _format_error(self, status: int, raw_text: str) -> str:
+        """格式化 Cloudflare API 错误响应"""
+        raw_text = raw_text[:500]
+        try:
+            data = json.loads(raw_text) if raw_text else {}
+        except json.JSONDecodeError:
+            data = {}
+        if isinstance(data, dict):
+            errors = data.get("errors")
+            if errors:
+                message = json.dumps(errors, ensure_ascii=False)
+            else:
+                message = raw_text or str(data)[:300]
+        else:
+            message = raw_text
+        return f"Cloudflare API 错误 (HTTP {status}): {message}"
+
+    def _build_body(
+        self,
+        url: str = "",
+        html: str = "",
+        overrides: Optional[dict] = None,
+    ) -> dict[str, Any]:
+        """按配置构建请求体（snake_case，随后由 _to_cf_keys 转换）"""
+        body: dict[str, Any] = {}
+        if url:
+            body["url"] = url
+        if html:
+            body["html"] = html
+
+        viewport: dict[str, Any] = {
+            "width": self.viewport_width,
+            "height": self.viewport_height,
+        }
+        if self.device_scale_factor != 1.0:
+            viewport["device_scale_factor"] = self.device_scale_factor
+        body["viewport"] = viewport
+
+        goto_options: dict[str, Any] = {"wait_until": self.wait_until}
+        if self.goto_timeout_ms > 0:
+            goto_options["timeout"] = self.goto_timeout_ms
+        body["goto_options"] = goto_options
+
+        screenshot_options: dict[str, Any] = {"type": self.screenshot_type}
+        if self.full_page:
+            screenshot_options["full_page"] = True
+        if self.omit_background:
+            screenshot_options["omit_background"] = True
+        # 官方文档：quality 与 png 不兼容，仅 jpeg 时携带
+        if self.screenshot_type == "jpeg" and self.quality > 0:
+            screenshot_options["quality"] = self.quality
+        body["screenshot_options"] = screenshot_options
+
+        if self.selector:
+            body["selector"] = self.selector
+        if self.user_agent:
+            body["user_agent"] = self.user_agent
+        if self.extra_headers:
+            body["set_extra_http_headers"] = self.extra_headers
+        if self.cookies:
+            body["cookies"] = self.cookies
+        if self.wait_for_selector:
+            wait_options: dict[str, Any] = {"selector": self.wait_for_selector}
+            if self.wait_for_timeout_ms > 0:
+                wait_options["timeout"] = self.wait_for_timeout_ms
+            body["wait_for_selector"] = wait_options
+
+        # 单次调用覆盖：嵌套 dict 浅合并，其余直接覆盖
+        for key, value in (overrides or {}).items():
+            if isinstance(value, dict) and isinstance(body.get(key), dict):
+                body[key] = {**body[key], **value}
+            else:
+                body[key] = value
+        return body
+
+    def _is_image_data(self, data: bytes) -> bool:
+        """校验返回字节流是否为请求格式的图片（PNG/JPEG 文件头）"""
+        if self.screenshot_type == "jpeg":
+            return data.startswith(_JPEG_MAGIC)
+        return data.startswith(_PNG_MAGIC)
+
+    async def screenshot(
+        self,
+        url: str,
+        save_dir: Path,
+        *,
+        html: str = "",
+        **overrides,
+    ) -> Optional[Path]:
+        """对指定 URL（或 HTML）截图并保存到本地
 
         Args:
-            url: 目标网页 URL
+            url: 目标网页 URL（与 html 二选一）
             save_dir: 截图文件保存目录
+            html: 原始 HTML 内容（提供时优先于 url）
+            **overrides: 单次调用参数覆盖（如 full_page=True、selector="#main"）
 
         Returns:
-            截图文件的 Path，失败返回 None
+            截图文件的 Path；失败返回 None，可通过 self.last_error 获取原因
         """
+        self.last_error = None
         if not self.is_configured:
+            self.last_error = "未配置 Cloudflare Account ID / API Token"
             logger.warning("Cloudflare 截图未配置，跳过")
             return None
 
-        endpoint = f"{API_BASE}/accounts/{self.account_id}/browser-rendering/screenshot"
-
-        headers = {
-            "Authorization": f"Bearer {self.api_token}",
-            "Content-Type": "application/json",
-        }
-
-        # 参考原插件 _page_body：goto_options + wait_until 是浏览器级参数，
-        # 所有 browser-rendering 端点都应支持
-        body_raw: dict[str, Any] = {
-            "url": url,
-            "viewport": {
-                "width": self.viewport_width,
-                "height": self.viewport_height,
-            },
-            "goto_options": {
-                "wait_until": "load",
-            },
-        }
+        body_raw = self._build_body(url, html, overrides)
+        if "url" not in body_raw and "html" not in body_raw:
+            self.last_error = "必须提供 url 或 html"
+            logger.warning("Cloudflare 截图：必须提供 url 或 html")
+            return None
 
         body = _to_cf_keys(body_raw)
         logger.debug(f"Cloudflare 截图请求 body: {body}")
 
-        timeout_obj = aiohttp.ClientTimeout(total=self.timeout)
+        endpoint = SCREENSHOT_ENDPOINT.format(account_id=self.account_id)
+        headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            "Content-Type": "application/json",
+        }
+        params = {"cacheTTL": str(self.cache_ttl)} if self.cache_ttl > 0 else None
+        extension = ".jpg" if self.screenshot_type == "jpeg" else ".png"
+        save_path: Optional[Path] = None
 
         try:
             save_dir.mkdir(parents=True, exist_ok=True)
-            filename = f"cf_screenshot_{uuid.uuid4().hex[:12]}.png"
+            filename = f"cf_screenshot_{uuid.uuid4().hex[:12]}{extension}"
             save_path = save_dir / filename
+            timeout_obj = aiohttp.ClientTimeout(total=self.timeout)
 
             async with aiohttp.ClientSession(timeout=timeout_obj) as session:
-                async with session.post(endpoint, headers=headers, json=body) as resp:
-                    if resp.status >= 400:
-                        text = (await resp.text())[:500]
-                        raise CloudflareScreenshotError(
-                            f"Cloudflare API 错误 ({resp.status}): {text}"
-                        )
-
-                    # 检查是否返回了 JSON 错误（非二进制图片）
+                async with session.post(
+                    endpoint, headers=headers, params=params, json=body
+                ) as resp:
                     content_type = resp.headers.get("Content-Type", "")
-                    if "application/json" in content_type or "text/" in content_type:
-                        resp_text = await resp.text()
-                        try:
-                            data = __import__("json").loads(resp_text)
-                        except Exception:
-                            raise CloudflareScreenshotError(
-                                f"Cloudflare API 返回非图片数据: {resp_text[:300]}"
-                            )
-                        if isinstance(data, dict) and data.get("success") is False:
-                            raise CloudflareScreenshotError(
-                                f"Cloudflare API 返回错误: {data.get('errors', data)}"
-                            )
+                    if resp.status >= 400:
+                        text = await resp.text()
                         raise CloudflareScreenshotError(
-                            f"Cloudflare API 返回非图片内容: {resp_text[:200]}"
+                            self._format_error(resp.status, text)
                         )
+                    # 200 但返回 JSON/文本说明是错误响应而非图片
+                    if "application/json" in content_type or "text/" in content_type:
+                        text = await resp.text()
+                        raise CloudflareScreenshotError(
+                            self._format_error(resp.status, text)
+                        )
+                    data = await resp.read()
 
-                    with open(save_path, "wb") as f:
-                        f.write(await resp.read())
+            if not data:
+                raise CloudflareScreenshotError("Cloudflare API 返回了空内容")
+            if not self._is_image_data(data):
+                raise CloudflareScreenshotError(
+                    "Cloudflare API 返回的内容不是有效的图片数据"
+                )
 
-            if save_path.stat().st_size == 0:
-                save_path.unlink(missing_ok=True)
-                raise CloudflareScreenshotError("截图文件为空")
-
+            save_path.write_bytes(data)
             logger.info(f"Cloudflare 网页截图已保存: {save_path}")
             return save_path
 
         except asyncio.TimeoutError:
+            self.last_error = f"请求超时（{self.timeout}s）"
             logger.error(f"Cloudflare 截图超时 ({self.timeout}s): {url}")
             return None
         except aiohttp.ClientError as e:
+            self.last_error = f"网络错误: {e}"
             logger.error(f"Cloudflare 截图网络错误: {e}")
             return None
         except CloudflareScreenshotError as e:
-            logger.error(str(e))
+            self.last_error = self._redact(str(e))
+            logger.error(f"Cloudflare 截图失败: {self.last_error}")
             return None
         except Exception as e:
+            self.last_error = f"未知错误: {e}"
             logger.exception(f"Cloudflare 截图未知错误: {e}")
             return None

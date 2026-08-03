@@ -52,6 +52,31 @@ pip install -r requirements.txt
 | `VIDEO_DURATION_MAXIMUM` | int | 480 | 视频最大时长（秒），超时不会下载 |
 | `DISABLED_PLATFORMS` | string | — | 禁用的平台（逗号分隔，如 `tiktok,youtube`） |
 
+## Cloudflare 网页截图
+
+链接不匹配任何已适配平台时，可自动用 Cloudflare Browser Rendering 渲染网页并截图发送。
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `CLOUDFLARE_FALLBACK_ENABLED` | bool | false | 启用网页截图兜底 |
+| `CLOUDFLARE_ACCOUNT_ID` | string | — | Cloudflare 账号 ID（需开通 Browser Rendering） |
+| `CLOUDFLARE_API_TOKEN` | string | — | API Token（需 Browser Rendering - Edit 权限） |
+| `CLOUDFLARE_TIMEOUT` | int | 60 | 截图 API 超时（秒） |
+| `CLOUDFLARE_VIEWPORT_WIDTH` / `HEIGHT` | int | 1280 / 720 | 渲染视窗尺寸 |
+| `CLOUDFLARE_WAIT_UNTIL` | string | `networkidle0` | 页面加载策略：`load` / `domcontentloaded` / `networkidle0` / `networkidle2` |
+| `CLOUDFLARE_GOTO_TIMEOUT` | int | 45000 | 页面导航超时（毫秒） |
+| `CLOUDFLARE_FULL_PAGE` | bool | false | 整页截图（含滚动区域） |
+| `CLOUDFLARE_DEVICE_SCALE_FACTOR` | float | 1 | 截图清晰度，增大可避免大视窗截图模糊（1-3） |
+| `CLOUDFLARE_SCREENSHOT_TYPE` | string | `png` | 截图格式：`png` / `jpeg` |
+| `CLOUDFLARE_SCREENSHOT_QUALITY` | int | 0 | JPEG 质量 0-100（png 下自动忽略） |
+| `CLOUDFLARE_OMIT_BACKGROUND` | bool | false | 透明背景（仅 png 有效） |
+| `CLOUDFLARE_SELECTOR` | string | — | CSS 选择器，只截取指定元素 |
+| `CLOUDFLARE_WAIT_FOR_SELECTOR` | string | — | 等待该元素出现后再截图（JS 动态页面） |
+| `CLOUDFLARE_USER_AGENT` | string | — | 自定义 User-Agent |
+| `CLOUDFLARE_EXTRA_HEADERS` | text(JSON) | — | 附加请求头，如 `{"Authorization":"Bearer xxx"}` |
+| `CLOUDFLARE_COOKIES` | text(JSON) | — | 附加 Cookie 数组，如 `[{"name":"session","value":"xxx","domain":"example.com","path":"/"}]` |
+| `CLOUDFLARE_CACHE_TTL` | int | 0 | 截图缓存秒数，0 表示不缓存 |
+
 ## 获取 Cookie
 
 ### B站 SESSDATA
