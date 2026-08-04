@@ -83,7 +83,7 @@ class _EventUrlWrapper:
 
 
 @register("链接解析器", "fllesser (ported to AstrBot)",
-          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA", "2.9.0")
+          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA", "2.10.0")
 class ParserPlugin(Star):
     # 合并转发（Comp.Nodes）是 OneBot v11 独有特性，其他平台均不支持
     @staticmethod
@@ -440,8 +440,21 @@ class ParserPlugin(Star):
             is_video = bool(result.video_contents)
 
             if render_path is not None:
-                # 渲染图直接发送，优先于平台合并转发判断
-                yield event.chain_result([Comp.Image.fromFileSystem(str(render_path))])
+                # 渲染图单独发送（主动发送，不经过事件回复管线，
+                # 避免被 AstrBot 的“回复时引用原消息”设置附加引用回复）
+                try:
+                    sent = await self.context.send_message(
+                        event.unified_msg_origin,
+                        MessageChain().file_image(str(render_path)),
+                    )
+                    if not sent:
+                        raise RuntimeError("未找到匹配的平台会话")
+                    logger.info(f"解析卡片已单独发送: {render_path.name}")
+                except Exception as e:
+                    logger.warning(f"解析卡片主动发送失败，回退为回复发送: {e}")
+                    yield event.chain_result(
+                        [Comp.Image.fromFileSystem(str(render_path))]
+                    )
 
                 if is_video:
                     # 视频：卡片已承载全部信息，不再重复发送文字摘要
