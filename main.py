@@ -363,11 +363,23 @@ class ParserPlugin(Star):
             ))
             yield event.chain_result([nodes])
         else:
-            parts = [
-                Comp.Plain(f"{header}\n"),
-                Comp.Image.fromFileSystem(str(path)),
-            ]
-            yield event.chain_result(parts)
+            # 非 OneBot 平台：主动发送，不经过事件回复管线，
+            # 避免 AstrBot 开启“回复时 @ 发送人”时，在图片 markdown 前插入 @ 导致格式异常
+            try:
+                sent = await self.context.send_message(
+                    event.unified_msg_origin,
+                    MessageChain().message(f"{header}\n").file_image(str(path)),
+                )
+                if not sent:
+                    raise RuntimeError("未找到匹配的平台会话")
+                logger.info(f"Cloudflare 网页截图已主动发送: {path.name}")
+            except Exception as e:
+                logger.warning(f"Cloudflare 截图主动发送失败，回退为回复发送: {e}")
+                parts = [
+                    Comp.Plain(f"{header}\n"),
+                    Comp.Image.fromFileSystem(str(path)),
+                ]
+                yield event.chain_result(parts)
 
     @filter.regex(GENERIC_URL_PATTERN)
     async def cloudflare_fallback_handler(
