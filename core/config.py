@@ -31,6 +31,7 @@ CONFIG_GROUP_KEYS: dict[str, tuple[str, ...]] = {
     "解析图片渲染": (
         "RENDER_ENABLED",
         "RENDER_THEME",
+        "RENDER_LAYOUT",
         "RENDER_WIDTH",
         "RENDER_FONT_PATH",
     ),
@@ -80,6 +81,7 @@ _LEGACY_DEFAULTS: dict[str, Any] = {
     "CACHE_CLEANUP_INTERVAL_MINUTES": 60,
     "RENDER_ENABLED": True,
     "RENDER_THEME": "dark",
+    "RENDER_LAYOUT": "standard",
     "RENDER_WIDTH": 800,
     "RENDER_FONT_PATH": "",
     "CLOUDFLARE_FALLBACK_ENABLED": False,
@@ -200,6 +202,12 @@ class ParserConfig:
         """卡片主题：dark / light"""
         val = str(self._cfg_get("RENDER_THEME", "dark")).strip().lower()
         return val if val in {"dark", "light"} else "dark"
+
+    @property
+    def RENDER_LAYOUT(self) -> str:
+        """卡片布局：standard / magazine / immersive / feed"""
+        val = str(self._cfg_get("RENDER_LAYOUT", "standard")).strip().lower()
+        return val if val in {"standard", "magazine", "immersive", "feed"} else "standard"
 
     @property
     def RENDER_WIDTH(self) -> int:

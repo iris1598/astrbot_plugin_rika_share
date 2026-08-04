@@ -1,13 +1,14 @@
-"""精美解析卡片渲染模块
+"""精美解析卡片渲染模块（现代卡片风格 v2）
 
-使用 Pillow 将解析结果渲染为一张精美的分享卡片图片，
-支持深色 / 浅色两套主题，包含：
+使用 Pillow 将解析结果渲染为一张现代风格的分享卡片图片，
+支持深色 / 浅色两套精修主题，包含：
 
-- 顶部横幅：视频封面或图集首图全宽展示，标题白色浮层 + 平台徽标悬浮
+- 顶部横幅：视频封面或图集首图全宽展示，柔和渐变 scrim + 标题浮层
+- 毛玻璃悬浮徽章组（平台圆点徽标 / 类型 / 时间）与毛玻璃播放按钮
 - 圆形作者头像、昵称与签名
-- 正文简介、数据统计徽章（时长 / 点赞 / 投币 / 收藏 / 播放等）
+- 正文简介、毛玻璃数据统计徽章（时长 / 点赞 / 投币 / 收藏 / 播放等）
 - 图集网格（超过 6 张显示 +N）、转发内容引用卡片
-- 底部链接与「莉卡解析」水印
+- 底部链接与「莉卡解析」徽标水印
 
 所有绘图操作均为 CPU 密集的同步任务，由调用方通过 asyncio.to_thread
 放到后台线程执行，避免阻塞 AstrBot 事件循环。
@@ -152,6 +153,88 @@ def format_timestamp(ts: int | None) -> str | None:
         return None
 
 
+# ============================ 视觉参数表 ============================
+
+
+class _L:
+    """布局 / 字号 / 圆角 / 透明度常量表（重设计后所有魔法数字集中于此）"""
+
+    # --- 画布 ---
+    PAD = 44                  # 卡片左右内边距
+    RADIUS = 30               # 卡片圆角
+    GRID_GAP = 12             # 图集网格间距
+    SHADOW_BLUR = 16          # 投影高斯半径
+    SHADOW_INSET = 10         # 投影内缩
+
+    # --- 顶部横幅 ---
+    HERO_RATIO = 9 / 16       # 横幅宽高比
+    HERO_BADGE_TOP = 24       # 悬浮徽章距顶
+    HERO_BADGE_H = 42         # 悬浮徽章高度
+    HERO_BADGE_GAP = 10       # 徽章间距
+    HERO_TITLE_BOTTOM = 30    # 标题距横幅底部
+    SCRIM_START = 0.38        # 底部 scrim 起始位置（高度比例）
+    SCRIM_POWER = 1.6         # 底部 scrim 缓动指数
+    SCRIM_ALPHA = 205         # 底部 scrim 最大透明度
+    TOP_SCRIM_ALPHA = 90      # 顶部 scrim 最大透明度（徽章可读性）
+    TOP_SCRIM_END = 0.30      # 顶部 scrim 结束位置
+    PLAY_R = 46               # 播放按钮半径
+
+    # --- 纯文本头部 ---
+    HEAD_BAR_W = 64           # accent 短横条宽度
+    HEAD_BAR_H = 6            # accent 短横条高度
+    HEAD_BAR_TOP = 24         # accent 短横条距顶
+    HEAD_PILL_H = 42          # 平台徽章高度
+
+    # --- 作者行 ---
+    AVATAR = 72               # 头像直径
+    AVATAR_RING_W = 2         # 头像描边环宽
+
+    # --- 统计徽章 ---
+    STAT_H = 40               # 统计药丸高度
+    STAT_PAD_X = 18           # 统计药丸水平内边距
+    STAT_GAP = 10             # 药丸间距
+    STAT_ROW_GAP = 12         # 药丸行距
+    STAT_LABEL_VALUE_GAP = 6  # 标签与数值间距
+
+    # --- 图集 ---
+    GRID_RADIUS = 18          # 图集圆角
+    GRID_SINGLE_MAX = 460     # 单图最大边长
+
+    # --- 引用 ---
+    QUOTE_RADIUS = 18
+    QUOTE_BAR_W = 6
+
+    # --- 页脚 ---
+    FOOTER_H = 108
+    WM_DOT = 10               # 水印圆点直径
+    WM_DOT_GAP = 8            # 水印圆点与文字间距
+
+    # --- 毛玻璃 ---
+    GLASS_BLUR = 10           # 毛玻璃背景模糊半径
+    HERO_GLASS_TINT = (12, 15, 24)      # 横幅上毛玻璃底色
+    HERO_GLASS_TINT_ALPHA = 105
+    HERO_GLASS_BORDER_ALPHA = 64
+
+    # --- 字号 ---
+    F_PLATFORM = 22
+    F_CHIP = 20
+    F_TIME = 19
+    F_TITLE = 36
+    F_TITLE_LINE_H = 52
+    F_DESC = 25
+    F_DESC_LINE_H = 40
+    F_STAT_LABEL = 20
+    F_STAT_VALUE = 21
+    F_NAME = 26
+    F_SIGN = 19
+    F_ONLINE = 21
+    F_QUOTE = 24
+    F_QUOTE_LINE_H = 36
+    F_FOOT = 20
+    F_PLUS = 36
+    F_INITIAL = 26
+
+
 # ============================ 主题与平台配色 ============================
 
 PLATFORM_COLORS = {
@@ -179,6 +262,13 @@ def _with_alpha(rgb: tuple[int, int, int], alpha: int) -> tuple[int, int, int, i
     return (rgb[0], rgb[1], rgb[2], alpha)
 
 
+def _mix(
+    a: tuple[int, int, int], b: tuple[int, int, int], ratio: float
+) -> tuple[int, int, int]:
+    """按 ratio 将颜色 a 向 b 混合。"""
+    return tuple(round(a[i] + (b[i] - a[i]) * ratio) for i in range(3))  # type: ignore[return-value]
+
+
 class _Theme:
     """一套卡片配色方案"""
 
@@ -196,6 +286,12 @@ class _Theme:
         divider: str,
         shadow_alpha: int,
         stat_pill_bg: str,
+        glow_alpha: int,
+        frost_alpha: int,
+        frost_border_alpha: int,
+        border_alpha: int,
+        placeholder_top: tuple[int, int, int],
+        placeholder_bottom: tuple[int, int, int],
     ):
         self.gradient_top = _hex_to_rgb(gradient_top)
         self.gradient_bottom = _hex_to_rgb(gradient_bottom)
@@ -208,34 +304,54 @@ class _Theme:
         self.divider = _hex_to_rgb(divider)
         self.shadow_alpha = shadow_alpha
         self.stat_pill_bg = _hex_to_rgb(stat_pill_bg)
+        self.glow_alpha = glow_alpha
+        self.frost_alpha = frost_alpha
+        self.frost_border_alpha = frost_border_alpha
+        self.border_alpha = border_alpha
+        self.placeholder_top = placeholder_top
+        self.placeholder_bottom = placeholder_bottom
 
 
 _THEMES = {
+    # 深色：深海军蓝层次渐变 + 低饱和品牌色渗透光晕
     "dark": _Theme(
-        gradient_top="#2A3142",
-        gradient_bottom="#171B27",
+        gradient_top="#242B3F",
+        gradient_bottom="#12161F",
         border="#FFFFFF",
-        text_primary="#F3F5FA",
-        text_secondary="#A9B2C4",
-        text_tertiary="#7B8497",
+        text_primary="#F5F7FC",
+        text_secondary="#AEB6C8",
+        text_tertiary="#7B8598",
         pill_bg="#FFFFFF",
         quote_bg="#FFFFFF",
         divider="#FFFFFF",
-        shadow_alpha=120,
+        shadow_alpha=130,
         stat_pill_bg="#FFFFFF",
+        glow_alpha=30,
+        frost_alpha=14,
+        frost_border_alpha=26,
+        border_alpha=24,
+        placeholder_top=(44, 51, 71),
+        placeholder_bottom=(20, 24, 35),
     ),
+    # 浅色：干净近白底 + 极轻品牌色光晕
     "light": _Theme(
         gradient_top="#FFFFFF",
-        gradient_bottom="#EEF2F8",
+        gradient_bottom="#F1F4F9",
         border="#1B2233",
-        text_primary="#1B2233",
-        text_secondary="#5B6478",
-        text_tertiary="#8B93A6",
+        text_primary="#1A2130",
+        text_secondary="#55607A",
+        text_tertiary="#8C95A9",
         pill_bg="#1B2233",
         quote_bg="#1B2233",
         divider="#1B2233",
-        shadow_alpha=70,
+        shadow_alpha=55,
         stat_pill_bg="#1B2233",
+        glow_alpha=16,
+        frost_alpha=10,
+        frost_border_alpha=20,
+        border_alpha=14,
+        placeholder_top=(228, 233, 242),
+        placeholder_bottom=(243, 246, 251),
     ),
 }
 
@@ -320,6 +436,11 @@ def _discover_fonts(custom_path: str | None = None) -> tuple[str | None, str | N
 # ============================ 渲染器 ============================
 
 
+# 可选卡片布局：standard 标准横幅 / magazine 双栏杂志 /
+# immersive 沉浸全屏 / feed 社交动态流
+LAYOUT_NAMES = ("standard", "magazine", "immersive", "feed")
+
+
 class ShareCardRenderer:
     """将 ParseResult 渲染为精美卡片图片"""
 
@@ -331,11 +452,13 @@ class ShareCardRenderer:
         width: int = 800,
         theme: str = "dark",
         font_path: str | None = None,
+        layout: str = "standard",
     ):
         self.cache_dir = cache_dir
         self.enabled = enabled and Image is not None
         self.width = max(520, min(1080, int(width)))
         self.theme_name = theme if theme in _THEMES else "dark"
+        self.layout_name = layout if layout in LAYOUT_NAMES else "standard"
         self.font_path = font_path
         self._regular_font: str | None = None
         self._bold_font: str | None = None
@@ -487,6 +610,77 @@ class ShareCardRenderer:
             grad.putpixel((0, y), color)
         return grad.resize((w, h))
 
+    # ---------- 毛玻璃与光影 ----------
+
+    @staticmethod
+    def _glass(
+        canvas: Image.Image,
+        box: tuple[int, int, int, int],
+        radius: int,
+        tint_rgb: tuple[int, int, int],
+        tint_alpha: int,
+        border_rgb: tuple[int, int, int],
+        border_alpha: int,
+        blur: int = _L.GLASS_BLUR,
+    ) -> None:
+        """在画布指定区域绘制毛玻璃圆角块（真实背景模糊 +  tint + 细描边）。"""
+        x0, y0, x1, y1 = box
+        if x1 <= x0 or y1 <= y0:
+            return
+        region = canvas.crop(box).filter(ImageFilter.GaussianBlur(blur))
+        region.alpha_composite(
+            Image.new("RGBA", region.size, (*tint_rgb, tint_alpha))
+        )
+        mask = Image.new("L", region.size, 0)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            (0, 0, region.size[0] - 1, region.size[1] - 1), radius=radius, fill=255
+        )
+        canvas.paste(region, (x0, y0), mask)
+        if border_alpha > 0:
+            # 描边先画到透明层再混合，避免直接 Draw 替换像素产生半透明空洞
+            border_layer = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
+            ImageDraw.Draw(border_layer).rounded_rectangle(
+                (0, 0, x1 - x0 - 1, y1 - y0 - 1), radius=radius,
+                outline=(*border_rgb, border_alpha), width=1,
+            )
+            canvas.alpha_composite(border_layer, (x0, y0))
+
+    @staticmethod
+    def _radial_glow(
+        w: int, h: int, rgb: tuple[int, int, int], alpha: int
+    ) -> Image.Image:
+        """生成一团柔和的径向光晕（品牌色渗透渐变用）。"""
+        base = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(base).ellipse(
+            (-w // 3, -h // 2, w // 2, h // 2), fill=(*rgb, alpha)
+        )
+        return base.filter(ImageFilter.GaussianBlur(max(w, h) // 5))
+
+    @staticmethod
+    def _scrim(
+        w: int,
+        h: int,
+        *,
+        start: float,
+        max_alpha: int,
+        power: float = 1.6,
+        invert: bool = False,
+    ) -> Image.Image:
+        """生成垂直渐变黑色遮罩。invert=True 时从顶部开始衰减。"""
+        mask = Image.new("L", (1, max(h, 1)))
+        for yy in range(max(h, 1)):
+            t = yy / max(h - 1, 1)
+            if invert:
+                ratio = max(0.0, 1.0 - t / max(start, 1e-6))
+            else:
+                ratio = max(0.0, (t - start) / max(1.0 - start, 1e-6))
+            alpha = int(max_alpha * (ratio ** power))
+            mask.putpixel((0, yy), min(255, alpha))
+        mask = mask.resize((w, h))
+        layer = Image.new("RGBA", (w, h), (0, 0, 0, 255))
+        layer.putalpha(mask)
+        return layer
+
     # ---------- 主流程 ----------
 
     async def render(
@@ -516,7 +710,7 @@ class ShareCardRenderer:
             or f"{result.platform.name}|{result.title}|{result.timestamp}|{result.url}"
         )
         digest = hashlib.md5(
-            f"{self.theme_name}|{self.width}|{payload}".encode("utf-8")
+            f"{self.theme_name}|{self.width}|{self.layout_name}|{payload}".encode("utf-8")
         ).hexdigest()[:16]
         return self.cache_dir / f"card_{digest}.png"
 
@@ -590,7 +784,7 @@ class ShareCardRenderer:
         if n <= 0:
             return 0, 0, 0, 0
         if n == 1:
-            cols, rows, cell_h = 1, 1, min(inner_w, 420)
+            cols, rows, cell_h = 1, 1, min(inner_w, _L.GRID_SINGLE_MAX)
         elif n == 2:
             cols, rows, cell_h = 2, 1, (inner_w - gap) // 2
         elif n == 3:
@@ -602,6 +796,15 @@ class ShareCardRenderer:
         grid_h = rows * cell_h + (rows - 1) * gap
         return grid_h, cols, rows, cell_h
 
+    def _stat_pill_width(self, label: str, value: str) -> int:
+        """统计药丸宽度：水平内边距 + 标签 + 间距 + 数值。"""
+        w = _L.STAT_PAD_X * 2
+        w += self._text_width(label, self._font(_L.F_STAT_LABEL))
+        if value:
+            w += _L.STAT_LABEL_VALUE_GAP
+            w += self._text_width(value, self._font(_L.F_STAT_VALUE, bold=True))
+        return w
+
     def _build_stat_rows(
         self, stats: list[tuple[str, str]], inner_w: int
     ) -> list[list[tuple[str, str]]]:
@@ -609,21 +812,24 @@ class ShareCardRenderer:
         rows: list[list[tuple[str, str]]] = []
         if not stats:
             return rows
-        font = self._font(22, bold=True)
         pills: list[tuple[str, str]] = []
         row_w = 0
         for label, value in stats:
-            pill_text = f"{label} {value}".strip()
-            w = self._text_width(pill_text, font) + 32
-            if pills and row_w + w + 10 > inner_w:
+            w = self._stat_pill_width(label, value)
+            if pills and row_w + w + _L.STAT_GAP > inner_w:
                 rows.append(pills)
                 pills = []
                 row_w = 0
             pills.append((label, value))
-            row_w += w + 10
+            row_w += w + _L.STAT_GAP
         if pills:
             rows.append(pills)
         return rows
+
+    def _platform_pill_width(self, text: str) -> int:
+        """平台徽标（accent 圆点 + 平台名）宽度。"""
+        font = self._font(_L.F_PLATFORM, bold=True)
+        return 18 + 12 + 8 + self._text_width(text, font) + 18
 
     # ---------- 同步绘制 ----------
 
@@ -633,13 +839,29 @@ class ShareCardRenderer:
         images: dict[str, Any],
         out_path: Path,
     ) -> Path:
+        """按 self.layout_name 分发到具体布局实现。"""
+        if self.layout_name == "magazine":
+            return self._render_magazine(result, images, out_path)
+        if self.layout_name == "immersive":
+            return self._render_immersive(result, images, out_path)
+        if self.layout_name == "feed":
+            return self._render_feed(result, images, out_path)
+        return self._render_standard(result, images, out_path)
+
+    def _render_standard(
+        self,
+        result: ParseResult,
+        images: dict[str, Any],
+        out_path: Path,
+    ) -> Path:
+        """标准布局：顶部全宽横幅 + 纵向信息流。"""
         theme = _THEMES[self.theme_name]
         accent = PLATFORM_COLORS.get(result.platform.name, PLATFORM_COLORS["default"])
         accent_rgb = _hex_to_rgb(accent)
 
-        pad = 44
+        pad = _L.PAD
         inner_w = self.width - pad * 2
-        gap = 14
+        gap = _L.GRID_GAP
 
         # ================= 数据准备 =================
         is_video_hero = images.get("hero") is not None
@@ -648,35 +870,32 @@ class ShareCardRenderer:
         if hero is None and grid:
             # 没有视频封面时，用图集首图作为顶部横幅
             hero = grid.pop(0)
-        hero_h = round(self.width * 9 / 16) if hero else 0
+        hero_h = round(self.width * _L.HERO_RATIO) if hero else 0
 
         grid_h, cols, rows, cell_h = self._grid_metrics(len(grid), inner_w, gap)
 
         # 头部文字
-        platform_font = self._font(23, bold=True)
         platform_text = result.platform.display_name
-        pill_h = 40
-        platform_pill_w = self._text_width(platform_text, platform_font) + 40
+        platform_pill_w = self._platform_pill_width(platform_text)
 
-        type_font = self._font(21, bold=True)
         content_type = result.content_type or "动态"
-        type_pill_w = self._text_width(content_type, type_font) + 36
+        chip_font = self._font(_L.F_CHIP, bold=True)
+        type_pill_w = self._text_width(content_type, chip_font) + 36
 
         ts = format_timestamp(result.timestamp)
-        ts_font = self._font(20)
+        ts_font = self._font(_L.F_TIME)
 
         # 标题
-        title_font = self._font(36, bold=True)
+        title_font = self._font(_L.F_TITLE, bold=True)
         title = strip_emoji(result.title)
         title_lines: list[str] = []
         if title:
             title_lines = self._fit_lines(
                 title, title_font, inner_w, 2 if hero else 3
             )
-        title_line_h = 50
 
         # 简介
-        desc_font = self._font(26)
+        desc_font = self._font(_L.F_DESC)
         text = strip_emoji(result.text)
         desc_lines: list[str] = []
         if text:
@@ -684,7 +903,7 @@ class ShareCardRenderer:
 
         # 作者
         author = result.author
-        avatar_size = 64
+        avatar_size = _L.AVATAR
         name = strip_emoji(author.name) or "未知作者" if author else ""
         author_desc = strip_emoji(author.description or "")[:40] if author else ""
 
@@ -698,26 +917,27 @@ class ShareCardRenderer:
         quote_h = self._measure_quote(result.repost, inner_w) if result.repost else 0
 
         # ================= 高度计算 =================
-        y = hero_h if hero else pad + pill_h + 16
         if hero:
-            y += 18
+            y = hero_h + 20
+        else:
+            y = _L.HEAD_BAR_TOP + _L.HEAD_BAR_H + 18 + _L.HEAD_PILL_H + 18
         if author:
-            y += avatar_size + 18
+            y += avatar_size + 20
         else:
             y += 12
         if not hero and title_lines:
-            y += len(title_lines) * title_line_h + 12
+            y += len(title_lines) * _L.F_TITLE_LINE_H + 14
         if desc_lines:
-            y += len(desc_lines) * 38 + 14
+            y += len(desc_lines) * _L.F_DESC_LINE_H + 16
         if stat_rows:
-            y += len(stat_rows) * 42 + 20
+            y += len(stat_rows) * (_L.STAT_H + _L.STAT_ROW_GAP) - _L.STAT_ROW_GAP + 18
         if online_text:
-            y += 40
+            y += 38
         if grid:
             y += grid_h + 20
         if quote_h:
             y += quote_h + 20
-        y += 54 + pad - 6
+        y += _L.FOOTER_H
         card_h = y
         total_h = card_h + 14
 
@@ -727,28 +947,37 @@ class ShareCardRenderer:
         # 阴影
         shadow = Image.new("RGBA", (self.width, total_h), (0, 0, 0, 0))
         ImageDraw.Draw(shadow).rounded_rectangle(
-            (10, 10, self.width - 10, total_h - 2), radius=30,
+            (_L.SHADOW_INSET, _L.SHADOW_INSET, self.width - _L.SHADOW_INSET, total_h - 2),
+            radius=_L.RADIUS + 2,
             fill=(0, 0, 0, theme.shadow_alpha),
         )
-        shadow = shadow.filter(ImageFilter.GaussianBlur(14))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(_L.SHADOW_BLUR))
         canvas.alpha_composite(shadow)
 
-        # 卡片主体（渐变 + 圆角）
-        grad = self._gradient((self.width, card_h), theme.gradient_top, theme.gradient_bottom)
+        # 卡片主体（垂直渐变 + 品牌色渗透光晕 + 圆角）
+        grad = self._gradient(
+            (self.width, card_h), theme.gradient_top, theme.gradient_bottom
+        )
+        glow = self._radial_glow(self.width, round(self.width * 0.9), accent_rgb, theme.glow_alpha)
+        grad_rgba = grad.convert("RGBA")
+        # 光晕与卡片同宽并从 (0,0) 覆盖，避免图层左缘产生内部接缝
+        grad_rgba.alpha_composite(glow, (0, 0))
         mask = Image.new("L", (self.width, card_h), 0)
         ImageDraw.Draw(mask).rounded_rectangle(
-            (0, 0, self.width - 1, card_h - 1), radius=28, fill=255
+            (0, 0, self.width - 1, card_h - 1), radius=_L.RADIUS, fill=255
         )
-        card = grad.convert("RGBA")
+        card = grad_rgba
         card.putalpha(mask)
         canvas.alpha_composite(card, (0, 0))
 
         draw = ImageDraw.Draw(canvas)
-        border_alpha = 26 if self.theme_name == "dark" else 18
-        draw.rounded_rectangle(
-            (0, 0, self.width - 1, card_h - 1), radius=28,
-            outline=_with_alpha(theme.border, border_alpha), width=1,
+        # 卡片描边同样先画到透明层再混合，保证输出像素不透明
+        border_layer = Image.new("RGBA", (self.width, card_h), (0, 0, 0, 0))
+        ImageDraw.Draw(border_layer).rounded_rectangle(
+            (0, 0, self.width - 1, card_h - 1), radius=_L.RADIUS,
+            outline=_with_alpha(theme.border, theme.border_alpha), width=1,
         )
+        canvas.alpha_composite(border_layer, (0, 0))
 
         y = 0
         if hero:
@@ -756,7 +985,7 @@ class ShareCardRenderer:
             hero_img = None
             try:
                 hero_img = self._cover_fit(self._open_image(hero), self.width, hero_h)
-                hero_img = self._rounded_image_top(hero_img, 28)
+                hero_img = self._rounded_image_top(hero_img, _L.RADIUS)
             except Exception:
                 hero_img = None
                 logger.warning("横幅图片渲染失败，使用占位背景", exc_info=True)
@@ -764,127 +993,142 @@ class ShareCardRenderer:
                 canvas.alpha_composite(hero_img, (0, 0))
             else:
                 ph = self._gradient(
-                    (self.width, hero_h), (42, 48, 64), (20, 24, 34)
+                    (self.width, hero_h),
+                    theme.placeholder_top, theme.placeholder_bottom,
                 ).convert("RGBA")
                 tint = Image.new(
-                    "RGBA", (self.width, hero_h),
-                    (accent_rgb[0], accent_rgb[1], accent_rgb[2], 45),
+                    "RGBA", (self.width, hero_h), (*accent_rgb, 40)
                 )
                 ph.alpha_composite(tint)
-                ph = self._rounded_image_top(ph, 28)
+                ph = self._rounded_image_top(ph, _L.RADIUS)
                 canvas.alpha_composite(ph, (0, 0))
 
-            # 底部渐变遮罩（保证标题可读）
-            overlay = Image.new("RGBA", (self.width, hero_h), (0, 0, 0, 0))
-            od = ImageDraw.Draw(overlay)
-            for yy in range(hero_h):
-                alpha = int(22 + 168 * (yy / max(hero_h - 1, 1)))
-                od.line([(0, yy), (self.width, yy)], fill=(0, 0, 0, alpha))
-            canvas.alpha_composite(overlay, (0, 0))
+            # 柔和渐变 scrim：顶部保证徽章可读，底部保证标题可读
+            canvas.alpha_composite(
+                self._scrim(
+                    self.width, hero_h,
+                    start=_L.TOP_SCRIM_END, max_alpha=_L.TOP_SCRIM_ALPHA,
+                    power=1.4, invert=True,
+                ),
+                (0, 0),
+            )
+            canvas.alpha_composite(
+                self._scrim(
+                    self.width, hero_h,
+                    start=_L.SCRIM_START, max_alpha=_L.SCRIM_ALPHA,
+                    power=_L.SCRIM_POWER,
+                ),
+                (0, 0),
+            )
 
-            # 悬浮徽标：平台 + 类型 + 时间
-            badge_y = 26
-            draw.rounded_rectangle(
-                (28, badge_y, 28 + platform_pill_w, badge_y + pill_h),
-                radius=pill_h // 2, fill=accent,
+            # 悬浮徽章组：平台徽标 + 类型 chip（毛玻璃）
+            badge_y = _L.HERO_BADGE_TOP
+            badge_h = _L.HERO_BADGE_H
+            self._draw_hero_badge(
+                canvas, pad, badge_y, badge_h, platform_pill_w,
+                text=platform_text, accent_rgb=accent_rgb, dot=True,
+                font_size=_L.F_PLATFORM,
             )
-            self._draw_text(
-                draw,
-                (28 + 20, badge_y + (pill_h - self._line_height(platform_font)) // 2),
-                platform_text, 23, "#FFFFFF", bold=True,
-            )
-            chip_h = 34
-            chip_y = badge_y + (pill_h - chip_h) // 2
-            chip_x = 28 + platform_pill_w + 10
-            draw.rounded_rectangle(
-                (chip_x, chip_y, chip_x + type_pill_w, chip_y + chip_h),
-                radius=chip_h // 2, fill=(0, 0, 0, 115),
-            )
-            self._draw_text(
-                draw,
-                (chip_x + 18, chip_y + (chip_h - self._line_height(type_font)) // 2),
-                content_type, 21, "#FFFFFF", bold=True,
+            chip_x = pad + platform_pill_w + _L.HERO_BADGE_GAP
+            self._draw_hero_badge(
+                canvas, chip_x, badge_y, badge_h, type_pill_w,
+                text=content_type, accent_rgb=accent_rgb, dot=False,
+                font_size=_L.F_CHIP,
             )
             if ts:
-                ts_w = self._text_width(ts, ts_font)
-                ts_x = self.width - 28 - ts_w - 26
-                draw.rounded_rectangle(
-                    (ts_x, chip_y, ts_x + ts_w + 26, chip_y + chip_h),
-                    radius=chip_h // 2, fill=(0, 0, 0, 115),
-                )
-                self._draw_text(
-                    draw,
-                    (ts_x + 13, chip_y + (chip_h - self._line_height(ts_font)) // 2),
-                    ts, 20, "#FFFFFF",
+                ts_w = self._text_width(ts, ts_font) + 32
+                ts_x = self.width - pad - ts_w
+                self._draw_hero_badge(
+                    canvas, ts_x, badge_y, badge_h, ts_w,
+                    text=ts, accent_rgb=accent_rgb, dot=False,
+                    font_size=_L.F_TIME, bold=False,
                 )
 
-            # 视频播放按钮
+            # 视频播放按钮（毛玻璃圆环）
             if is_video_hero:
-                play_r = 40
+                play_r = _L.PLAY_R
                 cx, cy = self.width // 2, hero_h // 2
-                play = Image.new("RGBA", (play_r * 2, play_r * 2), (0, 0, 0, 0))
-                ImageDraw.Draw(play).ellipse(
-                    (0, 0, play_r * 2 - 1, play_r * 2 - 1),
-                    fill=(0, 0, 0, 140),
-                    outline=(255, 255, 255, 210), width=3,
+                box = (cx - play_r, cy - play_r, cx + play_r, cy + play_r)
+                self._glass(
+                    canvas, box, play_r,
+                    tint_rgb=(255, 255, 255), tint_alpha=34,
+                    border_rgb=(255, 255, 255), border_alpha=110,
+                    blur=8,
                 )
-                pd = ImageDraw.Draw(play)
+                pd = ImageDraw.Draw(canvas)
                 pd.polygon(
                     [
-                        (play_r - 11, play_r - 16),
-                        (play_r - 11, play_r + 16),
-                        (play_r + 18, play_r),
+                        (cx - 12, cy - 18),
+                        (cx - 12, cy + 18),
+                        (cx + 20, cy),
                     ],
-                    fill=(255, 255, 255, 235),
+                    fill=(255, 255, 255, 245),
                 )
-                canvas.alpha_composite(play, (cx - play_r, cy - play_r))
 
-            # 标题白色浮层（黑色描边增强可读性）
+            # 标题白色浮层（柔和投影 + 轻描边）
             if title_lines:
-                ty = hero_h - len(title_lines) * title_line_h - 28
+                ty = hero_h - len(title_lines) * _L.F_TITLE_LINE_H - _L.HERO_TITLE_BOTTOM
+                shadow_layer = Image.new("RGBA", (self.width, hero_h), (0, 0, 0, 0))
+                sd = ImageDraw.Draw(shadow_layer)
+                sy = ty
                 for line in title_lines:
-                    draw.text(
-                        (pad, ty), line, font=title_font,
-                        fill=(255, 255, 255, 255), stroke_width=3,
-                        stroke_fill=(0, 0, 0, 190),
+                    sd.text(
+                        (pad, sy + 2), line, font=title_font,
+                        fill=(0, 0, 0, 140),
                     )
-                    ty += title_line_h
-            y = hero_h + 18
+                    sy += _L.F_TITLE_LINE_H
+                canvas.alpha_composite(
+                    shadow_layer.filter(ImageFilter.GaussianBlur(4)), (0, 0)
+                )
+                # 标题与描边画到独立层后整体混合，避免半透明描边像素直接替换
+                text_layer = Image.new("RGBA", (self.width, hero_h), (0, 0, 0, 0))
+                td = ImageDraw.Draw(text_layer)
+                for line in title_lines:
+                    td.text(
+                        (pad, ty), line, font=title_font,
+                        fill=(255, 255, 255, 255), stroke_width=1,
+                        stroke_fill=(0, 0, 0, 80),
+                    )
+                    ty += _L.F_TITLE_LINE_H
+                canvas.alpha_composite(text_layer, (0, 0))
+                draw = ImageDraw.Draw(canvas)
+            y = hero_h + 20
         else:
             # ============ 纯文本卡片头部 ============
-            draw.rounded_rectangle(
-                (28, 22, self.width - 28, 28), radius=3,
-                fill=_with_alpha(accent_rgb, 210),
+            # accent 短横条（品牌色渐变淡出）
+            bar = Image.new("RGBA", (_L.HEAD_BAR_W, _L.HEAD_BAR_H), (0, 0, 0, 0))
+            for xx in range(_L.HEAD_BAR_W):
+                a = int(230 * (1 - xx / max(_L.HEAD_BAR_W - 1, 1)) ** 1.3)
+                ImageDraw.Draw(bar).line(
+                    [(xx, 0), (xx, _L.HEAD_BAR_H)], fill=(*accent_rgb, a)
+                )
+            bar = self._rounded_image(bar, _L.HEAD_BAR_H // 2)
+            canvas.alpha_composite(bar, (pad, _L.HEAD_BAR_TOP))
+
+            y = _L.HEAD_BAR_TOP + _L.HEAD_BAR_H + 18
+            # 平台徽标（毛玻璃 + accent 圆点）
+            self._draw_flat_badge(
+                canvas, theme, pad, y, _L.HEAD_PILL_H, platform_pill_w,
+                text=platform_text, accent_rgb=accent_rgb, dot=True,
+                font_size=_L.F_PLATFORM, bold=True, text_rgb=theme.text_primary,
             )
-            y = pad
-            draw.rounded_rectangle(
-                (pad, y, pad + platform_pill_w, y + pill_h),
-                radius=pill_h // 2, fill=accent,
-            )
+            # 类型与时间弱化为辅助文字
+            type_x = pad + platform_pill_w + 16
+            type_lh = self._line_height(chip_font)
             self._draw_text(
                 draw,
-                (pad + 20, y + (pill_h - self._line_height(platform_font)) // 2),
-                platform_text, 23, "#FFFFFF", bold=True,
-            )
-            type_pill_x = pad + platform_pill_w + 10
-            draw.rounded_rectangle(
-                (type_pill_x, y, type_pill_x + type_pill_w, y + pill_h),
-                radius=pill_h // 2,
-                fill=_with_alpha(theme.pill_bg, 16 if self.theme_name == "dark" else 14),
-            )
-            self._draw_text(
-                draw,
-                (type_pill_x + 18, y + (pill_h - self._line_height(type_font)) // 2),
-                content_type, 21, theme.text_secondary, bold=True,
+                (type_x, y + (_L.HEAD_PILL_H - type_lh) // 2),
+                content_type, _L.F_CHIP, theme.text_tertiary, bold=True,
             )
             if ts:
                 ts_w = self._text_width(ts, ts_font)
+                ts_lh = self._line_height(ts_font)
                 self._draw_text(
                     draw,
-                    (self.width - pad - ts_w, y + (pill_h - self._line_height(ts_font)) // 2),
-                    ts, 20, theme.text_tertiary,
+                    (self.width - pad - ts_w, y + (_L.HEAD_PILL_H - ts_lh) // 2),
+                    ts, _L.F_TIME, theme.text_tertiary,
                 )
-            y += pill_h + 16
+            y += _L.HEAD_PILL_H + 18
 
         # ============ 作者行 ============
         if author:
@@ -902,35 +1146,39 @@ class ShareCardRenderer:
                 ring = Image.new("RGBA", (avatar_size, avatar_size), (0, 0, 0, 0))
                 ImageDraw.Draw(ring).ellipse(
                     (1, 1, avatar_size - 2, avatar_size - 2),
-                    outline=_with_alpha(accent_rgb, 130), width=3,
+                    outline=_with_alpha(accent_rgb, 170), width=_L.AVATAR_RING_W,
                 )
                 canvas.alpha_composite(ring, (pad, y))
             else:
-                # 无头像时绘制首字母占位圆
-                placeholder = Image.new("RGBA", (avatar_size, avatar_size), (0, 0, 0, 0))
-                ImageDraw.Draw(placeholder).ellipse(
-                    (0, 0, avatar_size - 1, avatar_size - 1),
-                    fill=_with_alpha(accent_rgb, 150),
+                # 无头像时绘制 accent 渐变首字母占位圆
+                placeholder = self._gradient(
+                    (avatar_size, avatar_size),
+                    accent_rgb, _mix(accent_rgb, (0, 0, 0), 0.35),
+                ).convert("RGBA")
+                pmask = Image.new("L", (avatar_size, avatar_size), 0)
+                ImageDraw.Draw(pmask).ellipse(
+                    (0, 0, avatar_size - 1, avatar_size - 1), fill=255
                 )
+                placeholder.putalpha(pmask)
                 canvas.alpha_composite(placeholder, (pad, y))
                 first = name[:1].upper()
-                f_font = self._font(26, bold=True)
+                f_font = self._font(_L.F_INITIAL, bold=True)
                 fw = self._text_width(first, f_font)
                 self._draw_text(
                     draw,
                     (pad + (avatar_size - fw) // 2, y + (avatar_size - self._line_height(f_font)) // 2),
-                    first, 26, "#FFFFFF", bold=True,
+                    first, _L.F_INITIAL, "#FFFFFF", bold=True,
                 )
             name_x = pad + avatar_size + 20
             self._draw_text(
-                draw, (name_x, y + 4), name, 26, theme.text_primary, bold=True
+                draw, (name_x, y + 6), name, _L.F_NAME, theme.text_primary, bold=True
             )
             if author_desc:
                 self._draw_text(
-                    draw, (name_x, y + avatar_size - 22),
-                    author_desc, 20, theme.text_tertiary,
+                    draw, (name_x, y + avatar_size - 26),
+                    author_desc, _L.F_SIGN, theme.text_tertiary,
                 )
-            y += avatar_size + 18
+            y += avatar_size + 20
         else:
             y += 12
 
@@ -938,48 +1186,71 @@ class ShareCardRenderer:
         if not hero and title_lines:
             for line in title_lines:
                 self._draw_text(
-                    draw, (pad, y), line, 36, theme.text_primary, bold=True
+                    draw, (pad, y), line, _L.F_TITLE, theme.text_primary, bold=True
                 )
-                y += title_line_h
-            y += 12
+                y += _L.F_TITLE_LINE_H
+            y += 14
 
         # ============ 简介 ============
         if desc_lines:
             for line in desc_lines:
-                self._draw_text(draw, (pad, y), line, 26, theme.text_secondary)
-                y += 38
-            y += 14
+                self._draw_text(draw, (pad, y), line, _L.F_DESC, theme.text_secondary)
+                y += _L.F_DESC_LINE_H
+            y += 16
 
-        # ============ 统计徽章 ============
+        # ============ 统计徽章（毛玻璃药丸：标签弱化 + 数值强调） ============
         if stat_rows:
-            stat_font = self._font(22, bold=True)
+            label_font = self._font(_L.F_STAT_LABEL)
+            value_font = self._font(_L.F_STAT_VALUE, bold=True)
             for row in stat_rows:
                 x = pad
                 for label, value in row:
-                    pill_text = f"{label} {value}".strip()
-                    w = self._text_width(pill_text, stat_font) + 32
-                    draw.rounded_rectangle(
-                        (x, y, x + w, y + 38), radius=19,
-                        fill=_with_alpha(
-                            theme.stat_pill_bg,
-                            12 if self.theme_name == "dark" else 16,
-                        ),
+                    w = self._stat_pill_width(label, value)
+                    self._glass(
+                        canvas, (x, y, x + w, y + _L.STAT_H), _L.STAT_H // 2,
+                        tint_rgb=theme.stat_pill_bg, tint_alpha=theme.frost_alpha,
+                        border_rgb=theme.stat_pill_bg,
+                        border_alpha=theme.frost_border_alpha,
+                        blur=6,
                     )
-                    self._draw_text(
-                        draw,
-                        (x + 16, y + (38 - self._line_height(stat_font)) // 2),
-                        pill_text, 22, theme.text_secondary, bold=True,
-                    )
-                    x += w + 10
-                y += 42
-            y += 20
+                    label_w = self._text_width(label, label_font)
+                    tx = x + _L.STAT_PAD_X
+                    if value:
+                        self._draw_text(
+                            draw,
+                            (tx, y + (_L.STAT_H - self._line_height(label_font)) // 2),
+                            label, _L.F_STAT_LABEL, theme.text_tertiary,
+                        )
+                        self._draw_text(
+                            draw,
+                            (tx + label_w + _L.STAT_LABEL_VALUE_GAP,
+                             y + (_L.STAT_H - self._line_height(value_font)) // 2),
+                            value, _L.F_STAT_VALUE, theme.text_primary, bold=True,
+                        )
+                    else:
+                        self._draw_text(
+                            draw,
+                            (tx, y + (_L.STAT_H - self._line_height(label_font)) // 2),
+                            label, _L.F_STAT_LABEL, theme.text_secondary,
+                        )
+                    x += w + _L.STAT_GAP
+                y += _L.STAT_H + _L.STAT_ROW_GAP
+            y += 18 - _L.STAT_ROW_GAP
 
-        # ============ 在线人数 ============
+        # ============ 在线人数（accent 圆点 + 文字） ============
         if online_text:
-            online_font = self._font(22)
-            if self._text_width(online_text, online_font) <= inner_w:
-                self._draw_text(draw, (pad, y), online_text, 22, accent)
-            y += 40
+            online_font = self._font(_L.F_ONLINE)
+            if self._text_width(online_text, online_font) <= inner_w - 18:
+                dot_r = 4
+                dot_cy = y + self._line_height(online_font) // 2
+                draw.ellipse(
+                    (pad, dot_cy - dot_r, pad + dot_r * 2, dot_cy + dot_r),
+                    fill=accent,
+                )
+                self._draw_text(
+                    draw, (pad + 18, y), online_text, _L.F_ONLINE, accent
+                )
+            y += 38
 
         # ============ 图集网格 ============
         if grid:
@@ -992,88 +1263,194 @@ class ShareCardRenderer:
                     yy = y + r * (cell_h + gap)
                     try:
                         img = self._cover_fit(self._open_image(path), cell_h, cell_h)
-                        img = self._rounded_image(img, 16)
+                        img = self._rounded_image(img, _L.GRID_RADIUS)
                         canvas.alpha_composite(img, (x, yy))
                     except Exception:
-                        draw.rounded_rectangle(
-                            (x, yy, x + cell_h, yy + cell_h), radius=16,
-                            fill=_with_alpha(theme.pill_bg, 10),
+                        ph_layer = Image.new(
+                            "RGBA", (cell_h, cell_h), (0, 0, 0, 0)
                         )
+                        ImageDraw.Draw(ph_layer).rounded_rectangle(
+                            (0, 0, cell_h - 1, cell_h - 1), radius=_L.GRID_RADIUS,
+                            fill=_with_alpha(theme.pill_bg, 14),
+                        )
+                        canvas.alpha_composite(ph_layer, (x, yy))
                     if idx == show - 1 and over > 0:
-                        overlay = Image.new("RGBA", (cell_h, cell_h), (0, 0, 0, 0))
-                        ImageDraw.Draw(overlay).rounded_rectangle(
-                            (0, 0, cell_h - 1, cell_h - 1), radius=16,
-                            fill=(0, 0, 0, 115),
+                        canvas.alpha_composite(
+                            self._scrim(
+                                cell_h, cell_h, start=0.0, max_alpha=150, power=1.2
+                            ),
+                            (x, yy),
                         )
-                        canvas.alpha_composite(overlay, (x, yy))
-                        plus_font = self._font(38, bold=True)
+                        plus_font = self._font(_L.F_PLUS, bold=True)
                         plus_text = f"+{over}"
                         pw = self._text_width(plus_text, plus_font)
                         self._draw_text(
                             draw,
                             (x + (cell_h - pw) // 2, yy + (cell_h - self._line_height(plus_font)) // 2),
-                            plus_text, 38, "#FFFFFF", bold=True,
+                            plus_text, _L.F_PLUS, "#FFFFFF", bold=True,
                         )
                 y += grid_h + 20
             except Exception:
                 logger.warning("图集渲染失败，已跳过", exc_info=True)
                 y -= grid_h + 20
 
-        # ============ 转发引用 ============
+        # ============ 转发引用（毛玻璃容器 + accent 竖条） ============
         if result.repost and quote_h:
             qy = y
-            draw.rounded_rectangle(
-                (pad, qy, pad + inner_w, qy + quote_h), radius=16,
-                fill=_with_alpha(theme.quote_bg, 8 if self.theme_name == "dark" else 10),
+            self._glass(
+                canvas, (pad, qy, pad + inner_w, qy + quote_h), _L.QUOTE_RADIUS,
+                tint_rgb=theme.quote_bg, tint_alpha=theme.frost_alpha,
+                border_rgb=theme.quote_bg, border_alpha=theme.frost_border_alpha,
+                blur=6,
             )
-            draw.rounded_rectangle(
-                (pad + 18, qy + 16, pad + 24, qy + quote_h - 16), radius=4,
-                fill=_with_alpha(accent_rgb, 220),
+            bar_layer = Image.new(
+                "RGBA", (_L.QUOTE_BAR_W + 2, quote_h - 32), (0, 0, 0, 0)
             )
+            ImageDraw.Draw(bar_layer).rounded_rectangle(
+                (0, 0, _L.QUOTE_BAR_W + 1, quote_h - 33),
+                radius=_L.QUOTE_BAR_W // 2,
+                fill=_with_alpha(accent_rgb, 230),
+            )
+            canvas.alpha_composite(bar_layer, (pad + 18, qy + 16))
             self._draw_quote_text(
-                draw, result.repost, pad + 18 + 40, qy + 14, inner_w - 80, theme
+                draw, result.repost, pad + 18 + _L.QUOTE_BAR_W + 16, qy + 16,
+                inner_w - 18 * 2 - _L.QUOTE_BAR_W - 16, theme,
             )
             y += quote_h + 20
 
-        # ============ 页脚 ============
-        draw.line(
-            (pad, y + 8, pad + inner_w, y + 8),
+        # ============ 页脚（链接 + 「莉卡解析」徽标水印） ============
+        divider_layer = Image.new("RGBA", (inner_w, 1), (0, 0, 0, 0))
+        ImageDraw.Draw(divider_layer).line(
+            (0, 0, inner_w - 1, 0),
             fill=_with_alpha(theme.divider, 14 if self.theme_name == "dark" else 12),
             width=1,
         )
-        watermark = "★ 莉卡解析"
-        wm_font = self._font(22, bold=True)
-        wm_w = self._text_width(watermark, wm_font)
+        canvas.alpha_composite(divider_layer, (pad, y + 12))
+        foot_y = y + 28
+
+        wm_text = "莉卡解析"
+        wm_font = self._font(_L.F_FOOT, bold=True)
+        wm_text_w = self._text_width(wm_text, wm_font)
+        wm_lh = self._line_height(wm_font)
+        dot_d = _L.WM_DOT
+        wm_group_w = dot_d + _L.WM_DOT_GAP + wm_text_w
+        wm_x = self.width - pad - wm_group_w
+        # 水印：accent 小圆点 + 文字
+        dot_cy = foot_y + wm_lh // 2
+        draw.ellipse(
+            (wm_x, dot_cy - dot_d // 2, wm_x + dot_d, dot_cy + dot_d // 2),
+            fill=(*accent_rgb, 255),
+        )
+        self._draw_text(
+            draw, (wm_x + dot_d + _L.WM_DOT_GAP, foot_y),
+            wm_text, _L.F_FOOT, accent, bold=True,
+        )
+
         url_text = short_url(result.url)
         if url_text:
-            url_font = self._font(22)
-            avail_w = inner_w - wm_w - 24
+            url_font = self._font(_L.F_FOOT)
+            avail_w = wm_x - pad - 20
             while url_text and self._text_width(url_text, url_font) > avail_w:
                 url_text = url_text[:-1]
             if url_text:
                 self._draw_text(
-                    draw, (pad, y + 22), url_text, 22, theme.text_tertiary
+                    draw, (pad, foot_y), url_text, _L.F_FOOT, theme.text_tertiary
                 )
-        self._draw_text(
-            draw,
-            (self.width - pad - wm_w, y + 22),
-            watermark, 22, accent, bold=True,
-        )
 
         # ---------- 保存 ----------
         out_path.parent.mkdir(parents=True, exist_ok=True)
         canvas.save(out_path, "PNG", optimize=True)
         return out_path
 
+    # ---------- 徽章组件 ----------
+
+    def _draw_hero_badge(
+        self,
+        canvas: Image.Image,
+        x: int,
+        y: int,
+        h: int,
+        w: int,
+        *,
+        text: str,
+        accent_rgb: tuple[int, int, int],
+        dot: bool,
+        font_size: int,
+        bold: bool = True,
+    ) -> None:
+        """横幅上的毛玻璃徽章（可选 accent 圆点），文字恒为白色。"""
+        self._glass(
+            canvas, (x, y, x + w, y + h), h // 2,
+            tint_rgb=_L.HERO_GLASS_TINT, tint_alpha=_L.HERO_GLASS_TINT_ALPHA,
+            border_rgb=(255, 255, 255), border_alpha=_L.HERO_GLASS_BORDER_ALPHA,
+        )
+        draw = ImageDraw.Draw(canvas)
+        font = self._font(font_size, bold)
+        tx = x + 18
+        if dot:
+            dot_r = 6
+            dot_cy = y + h // 2
+            draw.ellipse(
+                (tx, dot_cy - dot_r, tx + dot_r * 2, dot_cy + dot_r),
+                fill=(*accent_rgb, 255),
+            )
+            tx += dot_r * 2 + 8
+        self._draw_text(
+            draw, (tx, y + (h - self._line_height(font)) // 2),
+            text, font_size, "#FFFFFF", bold=bold,
+        )
+
+    def _draw_flat_badge(
+        self,
+        canvas: Image.Image,
+        theme: _Theme,
+        x: int,
+        y: int,
+        h: int,
+        w: int,
+        *,
+        text: str,
+        accent_rgb: tuple[int, int, int],
+        dot: bool,
+        font_size: int,
+        bold: bool,
+        text_rgb: tuple[int, int, int],
+    ) -> None:
+        """卡片主体上的毛玻璃徽章（主题感知配色）。"""
+        self._glass(
+            canvas, (x, y, x + w, y + h), h // 2,
+            tint_rgb=theme.pill_bg, tint_alpha=theme.frost_alpha,
+            border_rgb=theme.pill_bg, border_alpha=theme.frost_border_alpha,
+            blur=6,
+        )
+        draw = ImageDraw.Draw(canvas)
+        font = self._font(font_size, bold)
+        tx = x + 18
+        if dot:
+            dot_r = 6
+            dot_cy = y + h // 2
+            draw.ellipse(
+                (tx, dot_cy - dot_r, tx + dot_r * 2, dot_cy + dot_r),
+                fill=(*accent_rgb, 255),
+            )
+            tx += dot_r * 2 + 8
+        self._draw_text(
+            draw, (tx, y + (h - self._line_height(font)) // 2),
+            text, font_size, text_rgb, bold=bold,
+        )
+
+    # ---------- 转发引用 ----------
+
     def _measure_quote(self, repost: ParseResult, inner_w: int) -> int:
-        q_font = self._font(25)
+        q_font = self._font(_L.F_QUOTE)
         author = strip_emoji(repost.author.name) if repost.author else "原帖"
         text = strip_emoji(repost.title or repost.text or "")
         body = f"@{author}"
         if text:
             body += f"：{text}"
-        lines = self._fit_lines(body, q_font, inner_w - 80, 4)
-        return max(76, len(lines) * 36 + 38)
+        max_w = inner_w - 18 * 2 - _L.QUOTE_BAR_W - 16
+        lines = self._fit_lines(body, q_font, max_w, 4)
+        return max(80, len(lines) * _L.F_QUOTE_LINE_H + 32)
 
     def _draw_quote_text(
         self,
@@ -1084,7 +1461,7 @@ class ShareCardRenderer:
         max_width: int,
         theme: _Theme,
     ) -> None:
-        q_font = self._font(25)
+        q_font = self._font(_L.F_QUOTE)
         author = strip_emoji(repost.author.name) if repost.author else "原帖"
         text = strip_emoji(repost.title or repost.text or "")
         body = f"@{author}"
@@ -1092,5 +1469,678 @@ class ShareCardRenderer:
             body += f"：{text}"
         lines = self._fit_lines(body, q_font, max_width, 4)
         for line in lines:
-            self._draw_text(draw, (x, y), line, 25, theme.text_secondary)
-            y += 36
+            self._draw_text(draw, (x, y), line, _L.F_QUOTE, theme.text_secondary)
+            y += _L.F_QUOTE_LINE_H
+
+    # ==================== 备选布局共享组件 ====================
+
+    def _prep(self, result: ParseResult, images: dict[str, Any]) -> dict[str, Any]:
+        """备选布局的公共数据准备。"""
+        hero = images.get("hero")
+        grid = list(images.get("grid") or [])
+        if hero is None and grid:
+            # 没有视频封面时，用图集首图作为视觉图
+            hero = grid.pop(0)
+        author = result.author
+        stats = parse_stats_line(result.extra.get("stats_line"))
+        if dur := result.extra.get("duration"):
+            stats.insert(0, ("时长", str(dur)))
+        return {
+            "is_video_hero": images.get("hero") is not None,
+            "hero": hero,
+            "grid": grid,
+            "platform_text": result.platform.display_name,
+            "content_type": result.content_type or "动态",
+            "ts": format_timestamp(result.timestamp),
+            "title": strip_emoji(result.title),
+            "text": strip_emoji(result.text),
+            "author": author,
+            "name": (strip_emoji(author.name) or "未知作者") if author else "",
+            "author_desc": strip_emoji(author.description or "")[:40] if author else "",
+            "stats": stats,
+            "online_text": strip_emoji(result.extra.get("online") or ""),
+        }
+
+    def _base_canvas(self, theme: _Theme, accent_rgb: tuple[int, int, int], card_h: int):
+        """阴影 + 渐变底 + 光晕 + 圆角 + 描边，返回 (canvas, draw)。"""
+        total_h = card_h + 14
+        canvas = Image.new("RGBA", (self.width, total_h), (0, 0, 0, 0))
+        shadow = Image.new("RGBA", (self.width, total_h), (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).rounded_rectangle(
+            (_L.SHADOW_INSET, _L.SHADOW_INSET, self.width - _L.SHADOW_INSET, total_h - 2),
+            radius=_L.RADIUS + 2, fill=(0, 0, 0, theme.shadow_alpha),
+        )
+        canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(_L.SHADOW_BLUR)))
+        grad = self._gradient((self.width, card_h), theme.gradient_top, theme.gradient_bottom)
+        grad_rgba = grad.convert("RGBA")
+        glow = self._radial_glow(self.width, round(self.width * 0.9), accent_rgb, theme.glow_alpha)
+        grad_rgba.alpha_composite(glow, (0, 0))
+        mask = Image.new("L", (self.width, card_h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            (0, 0, self.width - 1, card_h - 1), radius=_L.RADIUS, fill=255
+        )
+        grad_rgba.putalpha(mask)
+        canvas.alpha_composite(grad_rgba, (0, 0))
+        border_layer = Image.new("RGBA", (self.width, card_h), (0, 0, 0, 0))
+        ImageDraw.Draw(border_layer).rounded_rectangle(
+            (0, 0, self.width - 1, card_h - 1), radius=_L.RADIUS,
+            outline=_with_alpha(theme.border, theme.border_alpha), width=1,
+        )
+        canvas.alpha_composite(border_layer, (0, 0))
+        return canvas, ImageDraw.Draw(canvas)
+
+    def _header_badges(self, canvas, theme: _Theme, accent_rgb, d: dict) -> int:
+        """纯文本头部：accent 条 + 平台药丸 + 类型 + 时间，返回结束 y。"""
+        pad = _L.PAD
+        bar = Image.new("RGBA", (_L.HEAD_BAR_W, _L.HEAD_BAR_H), (0, 0, 0, 0))
+        for xx in range(_L.HEAD_BAR_W):
+            a = int(230 * (1 - xx / max(_L.HEAD_BAR_W - 1, 1)) ** 1.3)
+            ImageDraw.Draw(bar).line([(xx, 0), (xx, _L.HEAD_BAR_H)], fill=(*accent_rgb, a))
+        canvas.alpha_composite(self._rounded_image(bar, _L.HEAD_BAR_H // 2), (pad, _L.HEAD_BAR_TOP))
+        y = _L.HEAD_BAR_TOP + _L.HEAD_BAR_H + 18
+        pw = self._platform_pill_width(d["platform_text"])
+        self._draw_flat_badge(
+            canvas, theme, pad, y, _L.HEAD_PILL_H, pw,
+            text=d["platform_text"], accent_rgb=accent_rgb, dot=True,
+            font_size=_L.F_PLATFORM, bold=True, text_rgb=theme.text_primary,
+        )
+        chip_font = self._font(_L.F_CHIP, bold=True)
+        self._draw_text(
+            ImageDraw.Draw(canvas),
+            (pad + pw + 16, y + (_L.HEAD_PILL_H - self._line_height(chip_font)) // 2),
+            d["content_type"], _L.F_CHIP, theme.text_tertiary, bold=True,
+        )
+        if d["ts"]:
+            ts_font = self._font(_L.F_TIME)
+            ts_w = self._text_width(d["ts"], ts_font)
+            self._draw_text(
+                ImageDraw.Draw(canvas),
+                (self.width - pad - ts_w, y + (_L.HEAD_PILL_H - self._line_height(ts_font)) // 2),
+                d["ts"], _L.F_TIME, theme.text_tertiary,
+            )
+        return y + _L.HEAD_PILL_H + 18
+
+    def _avatar_block(self, canvas, draw, x: int, y: int, size: int,
+                      images: dict, d: dict, accent_rgb) -> None:
+        """绘制头像（含 accent 描边环或渐变首字母占位）。"""
+        avatar_path = images.get("avatar")
+        avatar = None
+        if avatar_path:
+            try:
+                avatar = self._circle_avatar(self._open_image(avatar_path), size)
+            except Exception:
+                avatar = None
+        if avatar is not None:
+            canvas.alpha_composite(avatar, (x, y))
+            ring = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            ImageDraw.Draw(ring).ellipse(
+                (1, 1, size - 2, size - 2),
+                outline=_with_alpha(accent_rgb, 170), width=_L.AVATAR_RING_W,
+            )
+            canvas.alpha_composite(ring, (x, y))
+        else:
+            placeholder = self._gradient(
+                (size, size), accent_rgb, _mix(accent_rgb, (0, 0, 0), 0.35)
+            ).convert("RGBA")
+            pmask = Image.new("L", (size, size), 0)
+            ImageDraw.Draw(pmask).ellipse((0, 0, size - 1, size - 1), fill=255)
+            placeholder.putalpha(pmask)
+            canvas.alpha_composite(placeholder, (x, y))
+            first = d["name"][:1].upper()
+            f_font = self._font(_L.F_INITIAL, bold=True)
+            fw = self._text_width(first, f_font)
+            self._draw_text(
+                ImageDraw.Draw(canvas),
+                (x + (size - fw) // 2, y + (size - self._line_height(f_font)) // 2),
+                first, _L.F_INITIAL, "#FFFFFF", bold=True,
+            )
+
+    def _stat_rows_height(self, d: dict, inner_w: int):
+        rows = self._build_stat_rows(d["stats"], inner_w)
+        if not rows:
+            return 0, []
+        return len(rows) * (_L.STAT_H + _L.STAT_ROW_GAP) - _L.STAT_ROW_GAP, rows
+
+    def _draw_stat_rows(self, canvas, theme: _Theme, rows, x0: int, y: int) -> int:
+        """主题感知的统计药丸行，返回结束 y。"""
+        label_font = self._font(_L.F_STAT_LABEL)
+        value_font = self._font(_L.F_STAT_VALUE, bold=True)
+        for row in rows:
+            x = x0
+            for label, value in row:
+                w = self._stat_pill_width(label, value)
+                self._glass(
+                    canvas, (x, y, x + w, y + _L.STAT_H), _L.STAT_H // 2,
+                    tint_rgb=theme.stat_pill_bg, tint_alpha=theme.frost_alpha,
+                    border_rgb=theme.stat_pill_bg, border_alpha=theme.frost_border_alpha,
+                    blur=6,
+                )
+                draw = ImageDraw.Draw(canvas)
+                label_w = self._text_width(label, label_font)
+                tx = x + _L.STAT_PAD_X
+                if value:
+                    self._draw_text(draw, (tx, y + (_L.STAT_H - self._line_height(label_font)) // 2),
+                                    label, _L.F_STAT_LABEL, theme.text_tertiary)
+                    self._draw_text(draw, (tx + label_w + _L.STAT_LABEL_VALUE_GAP,
+                                           y + (_L.STAT_H - self._line_height(value_font)) // 2),
+                                    value, _L.F_STAT_VALUE, theme.text_primary, bold=True)
+                else:
+                    self._draw_text(draw, (tx, y + (_L.STAT_H - self._line_height(label_font)) // 2),
+                                    label, _L.F_STAT_LABEL, theme.text_secondary)
+                x += w + _L.STAT_GAP
+            y += _L.STAT_H + _L.STAT_ROW_GAP
+        return y - _L.STAT_ROW_GAP
+
+    def _draw_online(self, draw, d: dict, y: int, accent: str) -> int:
+        """在线人数（accent 圆点 + 文字），返回结束 y。"""
+        online_font = self._font(_L.F_ONLINE)
+        dot_cy = y + self._line_height(online_font) // 2
+        draw.ellipse((_L.PAD, dot_cy - 4, _L.PAD + 8, dot_cy + 4), fill=accent)
+        self._draw_text(draw, (_L.PAD + 18, y), d["online_text"], _L.F_ONLINE, accent)
+        return y + 38
+
+    def _footer_block(self, canvas, draw, theme: _Theme, accent: str, accent_rgb,
+                      result: ParseResult, y: int, inner_w: int,
+                      on_image: bool = False) -> None:
+        """页脚：分隔线 + 左链接 + 右「圆点 莉卡解析」水印。"""
+        pad = _L.PAD
+        divider_layer = Image.new("RGBA", (inner_w, 1), (0, 0, 0, 0))
+        ImageDraw.Draw(divider_layer).line(
+            (0, 0, inner_w - 1, 0),
+            fill=((255, 255, 255, 60) if on_image
+                  else _with_alpha(theme.divider, 14 if self.theme_name == "dark" else 12)),
+            width=1,
+        )
+        canvas.alpha_composite(divider_layer, (pad, y + 12))
+        foot_y = y + 28
+        wm_font = self._font(_L.F_FOOT, bold=True)
+        wm_text_w = self._text_width("莉卡解析", wm_font)
+        wm_group_w = _L.WM_DOT + _L.WM_DOT_GAP + wm_text_w
+        wm_x = self.width - pad - wm_group_w
+        wm_lh = self._line_height(wm_font)
+        dot_cy = foot_y + wm_lh // 2
+        draw.ellipse(
+            (wm_x, dot_cy - _L.WM_DOT // 2, wm_x + _L.WM_DOT, dot_cy + _L.WM_DOT // 2),
+            fill=(*accent_rgb, 255),
+        )
+        self._draw_text(draw, (wm_x + _L.WM_DOT + _L.WM_DOT_GAP, foot_y),
+                        "莉卡解析", _L.F_FOOT, accent, bold=True)
+        url_text = short_url(result.url)
+        if url_text:
+            url_font = self._font(_L.F_FOOT)
+            avail_w = wm_x - pad - 20
+            while url_text and self._text_width(url_text, url_font) > avail_w:
+                url_text = url_text[:-1]
+            if url_text:
+                color = (255, 255, 255, 160) if on_image else theme.text_tertiary
+                self._draw_text(draw, (pad, foot_y), url_text, _L.F_FOOT, color)
+
+    def _draw_grid_block(self, canvas, draw, theme: _Theme, grid: list,
+                         y: int, inner_w: int, gap: int) -> int:
+        """图集网格，返回结束 y（自带异常兜底）。"""
+        pad = _L.PAD
+        grid_h, cols, rows, cell_h = self._grid_metrics(len(grid), inner_w, gap)
+        if not grid_h:
+            return y
+        try:
+            show = cols * rows
+            over = len(grid) - show if len(grid) > show else 0
+            for idx, path in enumerate(grid[:show]):
+                r, c = divmod(idx, cols)
+                x = pad + c * (cell_h + gap)
+                yy = y + r * (cell_h + gap)
+                try:
+                    img = self._cover_fit(self._open_image(path), cell_h, cell_h)
+                    img = self._rounded_image(img, _L.GRID_RADIUS)
+                    canvas.alpha_composite(img, (x, yy))
+                except Exception:
+                    ph = Image.new("RGBA", (cell_h, cell_h), (0, 0, 0, 0))
+                    ImageDraw.Draw(ph).rounded_rectangle(
+                        (0, 0, cell_h - 1, cell_h - 1), radius=_L.GRID_RADIUS,
+                        fill=_with_alpha(theme.pill_bg, 14),
+                    )
+                    canvas.alpha_composite(ph, (x, yy))
+                if idx == show - 1 and over > 0:
+                    canvas.alpha_composite(
+                        self._scrim(cell_h, cell_h, start=0.0, max_alpha=150, power=1.2),
+                        (x, yy),
+                    )
+                    plus_font = self._font(_L.F_PLUS, bold=True)
+                    pw = self._text_width(f"+{over}", plus_font)
+                    self._draw_text(
+                        ImageDraw.Draw(canvas),
+                        (x + (cell_h - pw) // 2, yy + (cell_h - self._line_height(plus_font)) // 2),
+                        f"+{over}", _L.F_PLUS, "#FFFFFF", bold=True,
+                    )
+            return y + grid_h + 20
+        except Exception:
+            logger.warning("图集渲染失败，已跳过", exc_info=True)
+            return y
+
+    def _draw_quote_block(self, canvas, draw, theme: _Theme, accent_rgb,
+                          result: ParseResult, y: int, inner_w: int) -> int:
+        """转发引用（毛玻璃容器 + accent 竖条），返回结束 y。"""
+        if not result.repost:
+            return y
+        pad = _L.PAD
+        quote_h = self._measure_quote(result.repost, inner_w)
+        self._glass(
+            canvas, (pad, y, pad + inner_w, y + quote_h), _L.QUOTE_RADIUS,
+            tint_rgb=theme.quote_bg, tint_alpha=theme.frost_alpha,
+            border_rgb=theme.quote_bg, border_alpha=theme.frost_border_alpha, blur=6,
+        )
+        bar = Image.new("RGBA", (_L.QUOTE_BAR_W, quote_h - 32), (0, 0, 0, 0))
+        ImageDraw.Draw(bar).rounded_rectangle(
+            (0, 0, _L.QUOTE_BAR_W - 1, quote_h - 33), radius=_L.QUOTE_BAR_W // 2,
+            fill=(*accent_rgb, 230),
+        )
+        canvas.alpha_composite(bar, (pad + 18, y + 16))
+        self._draw_quote_text(
+            ImageDraw.Draw(canvas), result.repost,
+            pad + 18 + _L.QUOTE_BAR_W + 16, y + 16,
+            inner_w - 18 * 2 - _L.QUOTE_BAR_W - 16, theme,
+        )
+        return y + quote_h + 20
+
+    # ==================== 布局：双栏杂志 ====================
+
+    def _render_magazine(self, result, images, out_path) -> Path:
+        """双栏杂志：封面缩为左侧方块，标题/作者在右侧栏。"""
+        theme = _THEMES[self.theme_name]
+        accent = PLATFORM_COLORS.get(result.platform.name, PLATFORM_COLORS["default"])
+        accent_rgb = _hex_to_rgb(accent)
+        pad = _L.PAD
+        inner_w = self.width - pad * 2
+        gap = _L.GRID_GAP
+        d = self._prep(result, images)
+
+        cover_w = round(inner_w * 0.42) if d["hero"] else 0
+        right_x = pad + cover_w + 26
+        right_w = inner_w - cover_w - 26 if d["hero"] else inner_w
+
+        title_font = self._font(33, bold=True)
+        title_lines = (
+            self._fit_lines(d["title"], title_font, right_w, 4 if d["hero"] else 3)
+            if d["title"] else []
+        )
+        desc_font = self._font(_L.F_DESC)
+        desc_lines = self._fit_lines(d["text"], desc_font, inner_w, 4) if d["text"] else []
+        stats_h, stat_rows = self._stat_rows_height(d, inner_w)
+        grid_h = self._grid_metrics(len(d["grid"]), inner_w, gap)[0]
+        quote_h = self._measure_quote(result.repost, inner_w) if result.repost else 0
+
+        # ---- 高度 ----
+        y = _L.HEAD_BAR_TOP + _L.HEAD_BAR_H + 18 + _L.HEAD_PILL_H + 20
+        if d["hero"]:
+            right_h = len(title_lines) * 46 + (18 + 56 if d["author"] else 0)
+            y += max(cover_w, right_h) + 22
+        else:
+            y += len(title_lines) * _L.F_TITLE_LINE_H + 14
+            if d["author"]:
+                y += _L.AVATAR + 20
+        if desc_lines:
+            y += len(desc_lines) * _L.F_DESC_LINE_H + 16
+        if stats_h:
+            y += stats_h + 18
+        if d["online_text"]:
+            y += 38
+        if grid_h:
+            y += grid_h + 20
+        if quote_h:
+            y += quote_h + 20
+        y += _L.FOOTER_H
+        card_h = y
+
+        canvas, draw = self._base_canvas(theme, accent_rgb, card_h)
+        y = self._header_badges(canvas, theme, accent_rgb, d) + 2
+
+        if d["hero"]:
+            # 左侧封面方块
+            try:
+                img = self._cover_fit(self._open_image(d["hero"]), cover_w, cover_w)
+                img = self._rounded_image(img, 20)
+                canvas.alpha_composite(img, (pad, y))
+            except Exception:
+                ph = self._gradient(
+                    (cover_w, cover_w), theme.placeholder_top, theme.placeholder_bottom
+                ).convert("RGBA")
+                ph.alpha_composite(Image.new("RGBA", (cover_w, cover_w), (*accent_rgb, 40)))
+                canvas.alpha_composite(self._rounded_image(ph, 20), (pad, y))
+            if d["is_video_hero"]:
+                r_ = 38
+                cx, cy = pad + cover_w // 2, y + cover_w // 2
+                self._glass(canvas, (cx - r_, cy - r_, cx + r_, cy + r_), r_,
+                            (255, 255, 255), 34, (255, 255, 255), 110, blur=8)
+                ImageDraw.Draw(canvas).polygon(
+                    [(cx - 10, cy - 15), (cx - 10, cy + 15), (cx + 17, cy)],
+                    fill=(255, 255, 255, 245),
+                )
+            # 右栏：标题 + 作者
+            ry = y + 4
+            draw = ImageDraw.Draw(canvas)
+            for line in title_lines:
+                self._draw_text(draw, (right_x, ry), line, 33, theme.text_primary, bold=True)
+                ry += 46
+            if d["author"]:
+                ry += 18
+                self._avatar_block(canvas, draw, right_x, ry, 56, images, d, accent_rgb)
+                draw = ImageDraw.Draw(canvas)
+                self._draw_text(draw, (right_x + 72, ry + 2), d["name"], 24, theme.text_primary, bold=True)
+                if d["author_desc"]:
+                    self._draw_text(draw, (right_x + 72, ry + 56 - 22), d["author_desc"], 18, theme.text_tertiary)
+            y += max(cover_w, len(title_lines) * 46 + (18 + 56 if d["author"] else 0)) + 22
+        else:
+            for line in title_lines:
+                self._draw_text(draw, (pad, y), line, _L.F_TITLE, theme.text_primary, bold=True)
+                y += _L.F_TITLE_LINE_H
+            y += 14
+            if d["author"]:
+                self._avatar_block(canvas, draw, pad, y, _L.AVATAR, images, d, accent_rgb)
+                draw = ImageDraw.Draw(canvas)
+                name_x = pad + _L.AVATAR + 20
+                self._draw_text(draw, (name_x, y + 6), d["name"], _L.F_NAME, theme.text_primary, bold=True)
+                if d["author_desc"]:
+                    self._draw_text(draw, (name_x, y + _L.AVATAR - 26), d["author_desc"], _L.F_SIGN, theme.text_tertiary)
+                y += _L.AVATAR + 20
+
+        if desc_lines:
+            for line in desc_lines:
+                self._draw_text(draw, (pad, y), line, _L.F_DESC, theme.text_secondary)
+                y += _L.F_DESC_LINE_H
+            y += 16
+        if stat_rows:
+            y = self._draw_stat_rows(canvas, theme, stat_rows, pad, y) + 18
+            draw = ImageDraw.Draw(canvas)
+        if d["online_text"]:
+            y = self._draw_online(draw, d, y, accent)
+        y = self._draw_grid_block(canvas, draw, theme, d["grid"], y, inner_w, gap)
+        y = self._draw_quote_block(canvas, ImageDraw.Draw(canvas), theme, accent_rgb, result, y, inner_w)
+        self._footer_block(canvas, ImageDraw.Draw(canvas), theme, accent, accent_rgb, result, y, inner_w)
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(out_path, "PNG", optimize=True)
+        return out_path
+
+    # ==================== 布局：沉浸全屏 ====================
+
+    def _render_immersive(self, result, images, out_path) -> Path:
+        """沉浸全屏：封面铺满整卡，内容浮于渐变 scrim 上（无图回退标准布局）。"""
+        if images.get("hero") is None and not images.get("grid"):
+            return self._render_standard(result, images, out_path)
+
+        theme = _THEMES[self.theme_name]
+        accent = PLATFORM_COLORS.get(result.platform.name, PLATFORM_COLORS["default"])
+        accent_rgb = _hex_to_rgb(accent)
+        pad = _L.PAD
+        inner_w = self.width - pad * 2
+        d = self._prep(result, images)
+
+        title_font = self._font(_L.F_TITLE, bold=True)
+        title_lines = self._fit_lines(d["title"], title_font, inner_w, 2) if d["title"] else []
+        stats_h, stat_rows = self._stat_rows_height(d, inner_w)
+
+        # 底部内容栈高度
+        stack = 30
+        if title_lines:
+            stack += len(title_lines) * _L.F_TITLE_LINE_H + 18
+        if d["author"]:
+            stack += 64 + 16
+        if stats_h:
+            stack += stats_h + 16
+        if d["online_text"]:
+            stack += 36
+        stack += 96  # 页脚
+        card_h = max(round(self.width * 1.02), _L.HERO_BADGE_TOP + _L.HERO_BADGE_H + stack + 48)
+
+        total_h = card_h + 14
+        canvas = Image.new("RGBA", (self.width, total_h), (0, 0, 0, 0))
+        shadow = Image.new("RGBA", (self.width, total_h), (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).rounded_rectangle(
+            (_L.SHADOW_INSET, _L.SHADOW_INSET, self.width - _L.SHADOW_INSET, total_h - 2),
+            radius=_L.RADIUS + 2, fill=(0, 0, 0, theme.shadow_alpha),
+        )
+        canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(_L.SHADOW_BLUR)))
+
+        # 封面铺满整卡
+        try:
+            img = self._cover_fit(self._open_image(d["hero"]), self.width, card_h)
+            img = self._rounded_image(img, _L.RADIUS)
+            canvas.alpha_composite(img, (0, 0))
+        except Exception:
+            ph = self._gradient(
+                (self.width, card_h), theme.placeholder_top, theme.placeholder_bottom
+            ).convert("RGBA")
+            ph.alpha_composite(Image.new("RGBA", (self.width, card_h), (*accent_rgb, 40)))
+            canvas.alpha_composite(self._rounded_image(ph, _L.RADIUS), (0, 0))
+
+        # scrim：顶部徽章 + 底部内容区
+        canvas.alpha_composite(
+            self._scrim(self.width, card_h, start=0.22, max_alpha=110, power=1.4, invert=True), (0, 0)
+        )
+        content_top = card_h - stack
+        scrim_start = max(0.0, (content_top - 70) / card_h)
+        canvas.alpha_composite(
+            self._scrim(self.width, card_h, start=scrim_start, max_alpha=225, power=1.5), (0, 0)
+        )
+        # 全卡极轻 accent 渗透
+        tint_mask = self._scrim(self.width, card_h, start=0.0, max_alpha=26, power=1.0)
+        tinted = Image.new("RGBA", (self.width, card_h), (*accent_rgb, 255))
+        tinted.putalpha(tint_mask.split()[3])
+        canvas.alpha_composite(tinted, (0, 0))
+
+        draw = ImageDraw.Draw(canvas)
+        # 顶部徽章
+        pw = self._platform_pill_width(d["platform_text"])
+        badge_y = _L.HERO_BADGE_TOP
+        self._draw_hero_badge(canvas, pad, badge_y, _L.HERO_BADGE_H, pw,
+                              text=d["platform_text"], accent_rgb=accent_rgb, dot=True,
+                              font_size=_L.F_PLATFORM)
+        chip_font = self._font(_L.F_CHIP, bold=True)
+        type_w = self._text_width(d["content_type"], chip_font) + 36
+        self._draw_hero_badge(canvas, pad + pw + _L.HERO_BADGE_GAP, badge_y, _L.HERO_BADGE_H, type_w,
+                              text=d["content_type"], accent_rgb=accent_rgb, dot=False,
+                              font_size=_L.F_CHIP)
+        if d["ts"]:
+            ts_font = self._font(_L.F_TIME)
+            ts_w = self._text_width(d["ts"], ts_font) + 32
+            self._draw_hero_badge(canvas, self.width - pad - ts_w, badge_y, _L.HERO_BADGE_H, ts_w,
+                                  text=d["ts"], accent_rgb=accent_rgb, dot=False,
+                                  font_size=_L.F_TIME, bold=False)
+
+        # 播放按钮
+        if d["is_video_hero"]:
+            r_ = _L.PLAY_R
+            cx = self.width // 2
+            cy = max(_L.HERO_BADGE_TOP + _L.HERO_BADGE_H + r_ + 20, content_top // 2 + 30)
+            self._glass(canvas, (cx - r_, cy - r_, cx + r_, cy + r_), r_,
+                        (255, 255, 255), 34, (255, 255, 255), 110, blur=8)
+            ImageDraw.Draw(canvas).polygon(
+                [(cx - 12, cy - 18), (cx - 12, cy + 18), (cx + 20, cy)],
+                fill=(255, 255, 255, 245),
+            )
+
+        # ---- 底部内容栈（白色系文字） ----
+        y = content_top + 10
+        draw = ImageDraw.Draw(canvas)
+        if title_lines:
+            tl = Image.new("RGBA", (self.width, card_h), (0, 0, 0, 0))
+            td = ImageDraw.Draw(tl)
+            sy = y
+            for line in title_lines:
+                td.text((pad, sy + 2), line, font=title_font, fill=(0, 0, 0, 130))
+                sy += _L.F_TITLE_LINE_H
+            canvas.alpha_composite(tl.filter(ImageFilter.GaussianBlur(4)), (0, 0))
+            draw = ImageDraw.Draw(canvas)
+            for line in title_lines:
+                draw.text((pad, y), line, font=title_font, fill=(255, 255, 255, 255),
+                          stroke_width=1, stroke_fill=(0, 0, 0, 70))
+                y += _L.F_TITLE_LINE_H
+            y += 18
+        if d["author"]:
+            self._avatar_block(canvas, draw, pad, y, 64, images, d, accent_rgb)
+            draw = ImageDraw.Draw(canvas)
+            name_x = pad + 64 + 18
+            self._draw_text(draw, (name_x, y + 6), d["name"], _L.F_NAME, (255, 255, 255), bold=True)
+            if d["author_desc"]:
+                self._draw_text(draw, (name_x, y + 64 - 24), d["author_desc"], _L.F_SIGN,
+                                (255, 255, 255, 175))
+            y += 64 + 16
+        if stat_rows:
+            label_font = self._font(_L.F_STAT_LABEL)
+            value_font = self._font(_L.F_STAT_VALUE, bold=True)
+            for row in stat_rows:
+                x = pad
+                for label, value in row:
+                    w = self._stat_pill_width(label, value)
+                    self._glass(canvas, (x, y, x + w, y + _L.STAT_H), _L.STAT_H // 2,
+                                (255, 255, 255), 26, (255, 255, 255), 70, blur=8)
+                    draw = ImageDraw.Draw(canvas)
+                    label_w = self._text_width(label, label_font)
+                    if value:
+                        self._draw_text(draw, (x + _L.STAT_PAD_X, y + (_L.STAT_H - self._line_height(label_font)) // 2),
+                                        label, _L.F_STAT_LABEL, (255, 255, 255, 185))
+                        self._draw_text(draw, (x + _L.STAT_PAD_X + label_w + _L.STAT_LABEL_VALUE_GAP,
+                                               y + (_L.STAT_H - self._line_height(value_font)) // 2),
+                                        value, _L.F_STAT_VALUE, (255, 255, 255), bold=True)
+                    x += w + _L.STAT_GAP
+                y += _L.STAT_H + _L.STAT_ROW_GAP
+            y += 16 - _L.STAT_ROW_GAP
+        if d["online_text"]:
+            y = self._draw_online(draw, d, y, accent) - 2
+        self._footer_block(canvas, draw, theme, accent, accent_rgb, result, y, inner_w,
+                           on_image=True)
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(out_path, "PNG", optimize=True)
+        return out_path
+
+    # ==================== 布局：社交动态流 ====================
+
+    def _render_feed(self, result, images, out_path) -> Path:
+        """社交动态：作者行最前，媒体为内嵌圆角块。"""
+        theme = _THEMES[self.theme_name]
+        accent = PLATFORM_COLORS.get(result.platform.name, PLATFORM_COLORS["default"])
+        accent_rgb = _hex_to_rgb(accent)
+        pad = _L.PAD
+        inner_w = self.width - pad * 2
+        gap = _L.GRID_GAP
+        d = self._prep(result, images)
+
+        title_font = self._font(34, bold=True)
+        title_lines = self._fit_lines(d["title"], title_font, inner_w, 3) if d["title"] else []
+        desc_font = self._font(_L.F_DESC)
+        desc_lines = self._fit_lines(d["text"], desc_font, inner_w, 5) if d["text"] else []
+        media_h = round(inner_w * 9 / 16) if d["hero"] else 0
+        stats_h, stat_rows = self._stat_rows_height(d, inner_w)
+        grid_h = self._grid_metrics(len(d["grid"]), inner_w, gap)[0]
+        quote_h = self._measure_quote(result.repost, inner_w) if result.repost else 0
+
+        # ---- 高度 ----
+        y = 38
+        if d["author"]:
+            y += 68 + 20
+        y += len(title_lines) * 48 + (12 if title_lines else 0)
+        if desc_lines:
+            y += len(desc_lines) * _L.F_DESC_LINE_H + 16
+        if media_h:
+            y += media_h + 20
+        if stats_h:
+            y += stats_h + 18
+        if d["online_text"]:
+            y += 38
+        if grid_h:
+            y += grid_h + 20
+        if quote_h:
+            y += quote_h + 20
+        y += _L.FOOTER_H
+        card_h = y
+
+        canvas, draw = self._base_canvas(theme, accent_rgb, card_h)
+
+        # 作者行最前（无顶部 accent 条/头部徽章）
+        y = 38
+        if d["author"]:
+            self._avatar_block(canvas, draw, pad, y, 68, images, d, accent_rgb)
+            draw = ImageDraw.Draw(canvas)
+            name_x = pad + 68 + 20
+            name_font = self._font(26, bold=True)
+            name_w = self._text_width(d["name"], name_font)
+            self._draw_text(draw, (name_x, y + 8), d["name"], 26, theme.text_primary, bold=True)
+            # 平台小药丸跟在昵称后
+            pill_font = self._font(17, bold=True)
+            pill_w = 12 + 8 + 6 + self._text_width(d["platform_text"], pill_font) + 12
+            pill_h = 30
+            pill_y = y + 8 + (self._line_height(name_font) - pill_h) // 2
+            self._glass(canvas, (name_x + name_w + 12, pill_y,
+                                 name_x + name_w + 12 + pill_w, pill_y + pill_h),
+                        pill_h // 2, theme.pill_bg, theme.frost_alpha,
+                        theme.pill_bg, theme.frost_border_alpha, blur=6)
+            draw = ImageDraw.Draw(canvas)
+            dot_cy = pill_y + pill_h // 2
+            draw.ellipse((name_x + name_w + 24, dot_cy - 4, name_x + name_w + 32, dot_cy + 4),
+                         fill=(*accent_rgb, 255))
+            self._draw_text(draw, (name_x + name_w + 24 + 14,
+                                   pill_y + (pill_h - self._line_height(pill_font)) // 2),
+                            d["platform_text"], 17, theme.text_secondary, bold=True)
+            if d["author_desc"]:
+                self._draw_text(draw, (name_x, y + 68 - 26), d["author_desc"], _L.F_SIGN,
+                                theme.text_tertiary)
+            if d["ts"]:
+                ts_font = self._font(_L.F_TIME)
+                ts_w = self._text_width(d["ts"], ts_font)
+                self._draw_text(draw, (self.width - pad - ts_w, y + 12), d["ts"], _L.F_TIME,
+                                theme.text_tertiary)
+            y += 68 + 20
+
+        for line in title_lines:
+            self._draw_text(draw, (pad, y), line, 34, theme.text_primary, bold=True)
+            y += 48
+        if title_lines:
+            y += 12
+        for line in desc_lines:
+            self._draw_text(draw, (pad, y), line, _L.F_DESC, theme.text_secondary)
+            y += _L.F_DESC_LINE_H
+        if desc_lines:
+            y += 16
+
+        # 媒体内嵌圆角块（类型 chip 浮在媒体角上）
+        if d["hero"]:
+            try:
+                img = self._cover_fit(self._open_image(d["hero"]), inner_w, media_h)
+                img = self._rounded_image(img, 20)
+                canvas.alpha_composite(img, (pad, y))
+            except Exception:
+                ph = self._gradient(
+                    (inner_w, media_h), theme.placeholder_top, theme.placeholder_bottom
+                ).convert("RGBA")
+                ph.alpha_composite(Image.new("RGBA", (inner_w, media_h), (*accent_rgb, 40)))
+                canvas.alpha_composite(self._rounded_image(ph, 20), (pad, y))
+            chip_font = self._font(18, bold=True)
+            chip_w = self._text_width(d["content_type"], chip_font) + 28
+            self._draw_hero_badge(canvas, pad + 14, y + 14, 34, chip_w,
+                                  text=d["content_type"], accent_rgb=accent_rgb, dot=False,
+                                  font_size=18)
+            if d["is_video_hero"]:
+                r_ = _L.PLAY_R
+                cx, cy = self.width // 2, y + media_h // 2
+                self._glass(canvas, (cx - r_, cy - r_, cx + r_, cy + r_), r_,
+                            (255, 255, 255), 34, (255, 255, 255), 110, blur=8)
+                ImageDraw.Draw(canvas).polygon(
+                    [(cx - 12, cy - 18), (cx - 12, cy + 18), (cx + 20, cy)],
+                    fill=(255, 255, 255, 245),
+                )
+            y += media_h + 20
+            draw = ImageDraw.Draw(canvas)
+
+        if stat_rows:
+            y = self._draw_stat_rows(canvas, theme, stat_rows, pad, y) + 18
+            draw = ImageDraw.Draw(canvas)
+        if d["online_text"]:
+            y = self._draw_online(draw, d, y, accent)
+        y = self._draw_grid_block(canvas, draw, theme, d["grid"], y, inner_w, gap)
+        y = self._draw_quote_block(canvas, ImageDraw.Draw(canvas), theme, accent_rgb, result, y, inner_w)
+        self._footer_block(canvas, ImageDraw.Draw(canvas), theme, accent, accent_rgb, result, y, inner_w)
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(out_path, "PNG", optimize=True)
+        return out_path

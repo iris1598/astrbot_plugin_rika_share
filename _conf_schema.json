@@ -107,6 +107,19 @@
         "hint": "深色 / 浅色两套主题",
         "obvious_hint": true
       },
+      "RENDER_LAYOUT": {
+        "description": "卡片布局",
+        "type": "string",
+        "default": "standard",
+        "options": [
+          "standard",
+          "magazine",
+          "immersive",
+          "feed"
+        ],
+        "hint": "standard 标准横幅(全宽封面) / magazine 双栏杂志(封面左置) / immersive 沉浸全屏(封面铺满,无图内容自动回退标准) / feed 社交动态(作者优先,媒体内嵌)",
+        "obvious_hint": true
+      },
       "RENDER_WIDTH": {
         "description": "卡片宽度(px)",
         "type": "int",
@@ -422,6 +435,20 @@
       "light"
     ],
     "hint": "深色 / 浅色",
+    "obvious_hint": true,
+    "invisible": true
+  },
+  "RENDER_LAYOUT": {
+    "description": "卡片布局",
+    "type": "string",
+    "default": "standard",
+    "options": [
+      "standard",
+      "magazine",
+      "immersive",
+      "feed"
+    ],
+    "hint": "standard 标准横幅 / magazine 双栏杂志 / immersive 沉浸全屏 / feed 社交动态",
     "obvious_hint": true,
     "invisible": true
   },
