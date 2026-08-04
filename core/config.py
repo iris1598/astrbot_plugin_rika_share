@@ -28,6 +28,12 @@ CONFIG_GROUP_KEYS: dict[str, tuple[str, ...]] = {
         "CACHE_TTL_HOURS",
         "CACHE_CLEANUP_INTERVAL_MINUTES",
     ),
+    "解析图片渲染": (
+        "RENDER_ENABLED",
+        "RENDER_THEME",
+        "RENDER_WIDTH",
+        "RENDER_FONT_PATH",
+    ),
     "Cloudflare 基础设置": (
         "CLOUDFLARE_FALLBACK_ENABLED",
         "CLOUDFLARE_ACCOUNT_ID",
@@ -72,6 +78,10 @@ _LEGACY_DEFAULTS: dict[str, Any] = {
     "BILI_NOTIFY_USER_ID": "",
     "CACHE_TTL_HOURS": 24,
     "CACHE_CLEANUP_INTERVAL_MINUTES": 60,
+    "RENDER_ENABLED": True,
+    "RENDER_THEME": "dark",
+    "RENDER_WIDTH": 800,
+    "RENDER_FONT_PATH": "",
     "CLOUDFLARE_FALLBACK_ENABLED": False,
     "CLOUDFLARE_ACCOUNT_ID": "",
     "CLOUDFLARE_API_TOKEN": "",
@@ -160,10 +170,6 @@ class ParserConfig:
         return bool(self._cfg_get("APPEND_URL", False))
 
     @property
-    def RENDER_TYPE(self) -> str:
-        return self._cfg_get("RENDER_TYPE", "common")
-
-    @property
     def DISABLED_PLATFORMS(self) -> list[str]:
         raw = self._cfg_get("DISABLED_PLATFORMS", "")
         if not raw:
@@ -181,6 +187,29 @@ class ParserConfig:
     @property
     def CACHE_CLEANUP_INTERVAL_MINUTES(self) -> int:
         return int(self._cfg_get("CACHE_CLEANUP_INTERVAL_MINUTES", 60))
+
+    # ==================== 解析图片渲染 ====================
+
+    @property
+    def RENDER_ENABLED(self) -> bool:
+        """是否启用解析结果精美卡片渲染"""
+        return bool(self._cfg_get("RENDER_ENABLED", True))
+
+    @property
+    def RENDER_THEME(self) -> str:
+        """卡片主题：dark / light"""
+        val = str(self._cfg_get("RENDER_THEME", "dark")).strip().lower()
+        return val if val in {"dark", "light"} else "dark"
+
+    @property
+    def RENDER_WIDTH(self) -> int:
+        """卡片宽度（像素）"""
+        return max(520, min(1080, int(self._cfg_get("RENDER_WIDTH", 800))))
+
+    @property
+    def RENDER_FONT_PATH(self) -> str:
+        """自定义渲染字体文件路径（留空自动探测系统字体）"""
+        return str(self._cfg_get("RENDER_FONT_PATH", "") or "").strip()
 
     @property
     def BILI_QUALITY(self) -> str:

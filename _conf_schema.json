@@ -85,6 +85,49 @@
       }
     }
   },
+  "解析图片渲染": {
+    "type": "object",
+    "description": "将解析结果渲染为精美卡片图片发送（Pillow 实现，无需浏览器）",
+    "items": {
+      "RENDER_ENABLED": {
+        "description": "启用解析图片渲染",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，解析结果会渲染成一张精美的分享卡片图片；渲染失败时自动回退为文本输出",
+        "obvious_hint": true
+      },
+      "RENDER_THEME": {
+        "description": "卡片主题",
+        "type": "string",
+        "default": "dark",
+        "options": [
+          "dark",
+          "light"
+        ],
+        "hint": "深色 / 浅色两套主题",
+        "obvious_hint": true
+      },
+      "RENDER_WIDTH": {
+        "description": "卡片宽度(px)",
+        "type": "int",
+        "default": 800,
+        "hint": "卡片图片宽度，范围 520-1080",
+        "obvious_hint": false,
+        "slider": {
+          "min": 520,
+          "max": 1080,
+          "step": 20
+        }
+      },
+      "RENDER_FONT_PATH": {
+        "description": "自定义渲染字体(可选)",
+        "type": "string",
+        "default": "",
+        "hint": "填写 .ttf/.ttc/.otf 字体文件路径或所在目录；留空自动探测系统中文字体",
+        "obvious_hint": false
+      }
+    }
+  },
   "Cloudflare 基础设置": {
     "type": "object",
     "description": "Cloudflare 网页截图兜底的开关、凭据与缓存",
@@ -359,6 +402,42 @@
     "type": "int",
     "default": 60,
     "hint": "每隔多少分钟检查一次过期缓存",
+    "obvious_hint": false,
+    "invisible": true
+  },
+  "RENDER_ENABLED": {
+    "description": "启用解析图片渲染",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，解析结果会渲染成一张精美的分享卡片图片",
+    "obvious_hint": true,
+    "invisible": true
+  },
+  "RENDER_THEME": {
+    "description": "卡片主题",
+    "type": "string",
+    "default": "dark",
+    "options": [
+      "dark",
+      "light"
+    ],
+    "hint": "深色 / 浅色",
+    "obvious_hint": true,
+    "invisible": true
+  },
+  "RENDER_WIDTH": {
+    "description": "卡片宽度(px)",
+    "type": "int",
+    "default": 800,
+    "hint": "卡片图片宽度，范围 520-1080",
+    "obvious_hint": false,
+    "invisible": true
+  },
+  "RENDER_FONT_PATH": {
+    "description": "自定义渲染字体(可选)",
+    "type": "string",
+    "default": "",
+    "hint": "字体文件路径或目录；留空自动探测",
     "obvious_hint": false,
     "invisible": true
   },

@@ -33,6 +33,7 @@ from .core.cloudflare_screenshot import (
     fetch_page_title,
     is_url_blacklisted,
 )
+from .core.render import ShareCardRenderer
 from .core.parsers import (
     BilibiliParser, DouyinParser, KuaiShouParser, WeiBoParser,
     XiaoHongShuParser, TwitterParser, NGAParser, AcfunParser,
@@ -82,7 +83,7 @@ class _EventUrlWrapper:
 
 
 @register("链接解析器", "fllesser (ported to AstrBot)",
-          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA", "2.6.5")
+          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA", "2.9.0")
 class ParserPlugin(Star):
     # 合并转发（Comp.Nodes）是 OneBot v11 独有特性，其他平台均不支持
     @staticmethod
@@ -130,7 +131,24 @@ class ParserPlugin(Star):
         self.parsers: dict[str, Any] = {}
         self._init_parsers()
         self._result_cache: dict[str, ParseResult] = {}
+        self._render_cache: dict[str, Path] = {}
         self._cache_cleanup_task: asyncio.Task | None = None
+
+        # ========== 解析图片渲染 ==========
+        self._renderer = ShareCardRenderer(
+            self.cache_dir,
+            enabled=pconfig.RENDER_ENABLED,
+            width=pconfig.RENDER_WIDTH,
+            theme=pconfig.RENDER_THEME,
+            font_path=pconfig.RENDER_FONT_PATH or None,
+        )
+        if self._renderer.enabled:
+            logger.info(
+                f"解析图片渲染已启用 (主题: {pconfig.RENDER_THEME}, "
+                f"宽度: {pconfig.RENDER_WIDTH}px)"
+            )
+        else:
+            logger.info("解析图片渲染已关闭，使用文本输出")
 
         # ========== B站 Cookie 监控状态 ==========
         self._bili_cookie: str = ""
@@ -196,8 +214,9 @@ class ParserPlugin(Star):
                 try:
                     while True:
                         await cleanup_cache_dir(self.cache_dir, ttl_hours=ttl)
-                        # 文件清理后同步清空内存缓存
+                        # 文件清理后同步清空内存缓存（解析结果 + 渲染图片）
                         self._result_cache.clear()
+                        self._render_cache.clear()
                         await asyncio.sleep(interval)
                 except asyncio.CancelledError:
                     logger.info("缓存清理任务已停止")
@@ -406,24 +425,61 @@ class ParserPlugin(Star):
             # 根据平台构建：标题头 + 合并转发内容列表
             header, nodes_content = await self._build_platform_output(event, result, result.platform.name)
 
-            # 所有平台统一在末尾追加时长超限提示（参考 B站 limit_warnings 机制）
-            if warnings := result.extra.get("limit_warnings"):
-                for w in warnings:
-                    nodes_content.append([Comp.Plain(w)])
+            # 渲染精美解析卡片（失败时 render_path 为 None，自动回退文本输出）
+            render_path: Path | None = None
+            if self._renderer is not None and self._renderer.enabled:
+                render_path = await self._renderer.render(
+                    result,
+                    cache_key=cache_key,
+                    existing=self._render_cache.get(cache_key),
+                )
+                if render_path is not None:
+                    self._render_cache[cache_key] = render_path
 
-            if self._is_onebot(event):
-                # OneBot v11: 使用合并转发（Comp.Nodes）
-                sender_name = event.get_sender_name()
-                sender_id = event.get_sender_id()
-                nodes = Comp.Nodes([])
-                nodes.nodes.append(Comp.Node(uin=sender_id, name=sender_name, content=[Comp.Plain(header)]))
-                for item in nodes_content:
-                    nodes.nodes.append(Comp.Node(uin=sender_id, name=sender_name, content=item))
-                yield event.chain_result([nodes])
+            warnings = result.extra.get("limit_warnings") or []
+            is_video = bool(result.video_contents)
+
+            if render_path is not None:
+                # 渲染图直接发送，优先于平台合并转发判断
+                yield event.chain_result([Comp.Image.fromFileSystem(str(render_path))])
+
+                if is_video:
+                    # 视频：卡片已承载全部信息，不再重复发送文字摘要
+                    header_text = ""
+                    text_items = [[Comp.Plain(w)] for w in warnings]
+                else:
+                    # 图文 / 动态：保留文字部分与图集图片，按平台规则发送
+                    header_text = header
+                    text_items = list(nodes_content)
+                    for w in warnings:
+                        text_items.append([Comp.Plain(w)])
             else:
-                # 其他平台（QQ Official / Telegram 等）：拆分为独立消息（不支持 Comp.Nodes）
-                async for r in self._send_plain_output(event, header, nodes_content):
-                    yield r
+                # 未启用 / 渲染失败：保持原有文本输出逻辑
+                header_text = header
+                text_items = list(nodes_content)
+                for w in warnings:
+                    text_items.append([Comp.Plain(w)])
+
+            if text_items:
+                # 按平台规则发送剩余内容：OneBot 使用合并转发，其他平台直接发送
+                if self._is_onebot(event):
+                    sender_name = event.get_sender_name()
+                    sender_id = event.get_sender_id()
+                    nodes = Comp.Nodes([])
+                    if header_text:
+                        nodes.nodes.append(Comp.Node(
+                            uin=sender_id, name=sender_name,
+                            content=[Comp.Plain(header_text)],
+                        ))
+                    for item in text_items:
+                        nodes.nodes.append(Comp.Node(
+                            uin=sender_id, name=sender_name, content=item,
+                        ))
+                    yield event.chain_result([nodes])
+                else:
+                    # 其他平台（QQ Official / Telegram 等）：拆分为独立消息
+                    async for r in self._send_plain_output(event, header_text, text_items):
+                        yield r
 
             # 单独发送媒体文件（Video / Audio）
             # 注意：图片已在 Nodes（OneBot）或 _send_plain_output（其他平台）中处理
