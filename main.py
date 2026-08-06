@@ -142,11 +142,13 @@ class ParserPlugin(Star):
             theme=pconfig.RENDER_THEME,
             font_path=pconfig.RENDER_FONT_PATH or None,
             layout=pconfig.RENDER_LAYOUT,
+            cover_full_size=pconfig.RENDER_COVER_FULL_SIZE,
         )
         if self._renderer.enabled:
             logger.info(
                 f"解析图片渲染已启用 (主题: {pconfig.RENDER_THEME}, "
                 f"布局: {pconfig.RENDER_LAYOUT}, "
+                f"封面全尺寸: {pconfig.RENDER_COVER_FULL_SIZE}, "
                 f"宽度: {pconfig.RENDER_WIDTH}px)"
             )
         else:

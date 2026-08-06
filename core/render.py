@@ -453,6 +453,7 @@ class ShareCardRenderer:
         theme: str = "dark",
         font_path: str | None = None,
         layout: str = "standard",
+        cover_full_size: bool = False,
     ):
         self.cache_dir = cache_dir
         self.enabled = enabled and Image is not None
@@ -460,6 +461,7 @@ class ShareCardRenderer:
         self.theme_name = theme if theme in _THEMES else "dark"
         self.layout_name = layout if layout in LAYOUT_NAMES else "standard"
         self.font_path = font_path
+        self.cover_full_size = cover_full_size
         self._regular_font: str | None = None
         self._bold_font: str | None = None
         self._font_cache: dict[tuple[int, bool], Any] = {}
@@ -711,7 +713,7 @@ class ShareCardRenderer:
             or f"{result.platform.name}|{result.title}|{result.timestamp}|{result.url}"
         )
         digest = hashlib.md5(
-            f"{self.theme_name}|{self.width}|{self.layout_name}|{payload}|{warnings_str}".encode("utf-8")
+            f"{self.theme_name}|{self.width}|{self.layout_name}|{self.cover_full_size}|{payload}|{warnings_str}".encode("utf-8")
         ).hexdigest()[:16]
         return self.cache_dir / f"card_{digest}.png"
 
@@ -872,6 +874,8 @@ class ShareCardRenderer:
             # 没有视频封面时，用图集首图作为顶部横幅
             hero = grid.pop(0)
         hero_h = round(self.width * _L.HERO_RATIO) if hero else 0
+        if hero and self.cover_full_size:
+            hero_h = self._hero_aspect_height(hero, self.width, hero_h)
 
         grid_h, cols, rows, cell_h = self._grid_metrics(len(grid), inner_w, gap)
 
@@ -1730,6 +1734,19 @@ class ShareCardRenderer:
 
         return y + 8
 
+    def _hero_aspect_height(self, hero_path: Path | None, box_w: int, default_h: int) -> int:
+        """若开启了封面全尺寸模式 (cover_full_size)，按原图宽高比计算高度，否则使用 default_h。"""
+        if not hero_path or not self.cover_full_size:
+            return default_h
+        try:
+            with Image.open(hero_path) as im:
+                w, h = im.size
+                if w > 0 and h > 0:
+                    return max(100, round(box_w * h / w))
+        except Exception:
+            pass
+        return default_h
+
     def _footer_block(self, canvas, draw, theme: _Theme, accent: str, accent_rgb,
                       result: ParseResult, y: int, inner_w: int,
                       on_image: bool = False) -> None:
@@ -1846,6 +1863,7 @@ class ShareCardRenderer:
         d = self._prep(result, images)
 
         cover_w = round(inner_w * 0.42) if d["hero"] else 0
+        cover_h = self._hero_aspect_height(d["hero"], cover_w, cover_w) if d["hero"] else 0
         right_x = pad + cover_w + 26
         right_w = inner_w - cover_w - 26 if d["hero"] else inner_w
 
@@ -1865,7 +1883,7 @@ class ShareCardRenderer:
         y = _L.HEAD_BAR_TOP + _L.HEAD_BAR_H + 18 + _L.HEAD_PILL_H + 20
         if d["hero"]:
             right_h = len(title_lines) * 46 + (18 + 56 if d["author"] else 0)
-            y += max(cover_w, right_h) + 22
+            y += max(cover_h, right_h) + 22
         else:
             y += len(title_lines) * _L.F_TITLE_LINE_H + 14
             if d["author"]:
@@ -1891,18 +1909,18 @@ class ShareCardRenderer:
         if d["hero"]:
             # 左侧封面方块
             try:
-                img = self._cover_fit(self._open_image(d["hero"]), cover_w, cover_w)
+                img = self._cover_fit(self._open_image(d["hero"]), cover_w, cover_h)
                 img = self._rounded_image(img, 20)
                 canvas.alpha_composite(img, (pad, y))
             except Exception:
                 ph = self._gradient(
-                    (cover_w, cover_w), theme.placeholder_top, theme.placeholder_bottom
+                    (cover_w, cover_h), theme.placeholder_top, theme.placeholder_bottom
                 ).convert("RGBA")
-                ph.alpha_composite(Image.new("RGBA", (cover_w, cover_w), (*accent_rgb, 40)))
+                ph.alpha_composite(Image.new("RGBA", (cover_w, cover_h), (*accent_rgb, 40)))
                 canvas.alpha_composite(self._rounded_image(ph, 20), (pad, y))
             if d["is_video_hero"]:
                 r_ = 38
-                cx, cy = pad + cover_w // 2, y + cover_w // 2
+                cx, cy = pad + cover_w // 2, y + cover_h // 2
                 self._glass(canvas, (cx - r_, cy - r_, cx + r_, cy + r_), r_,
                             (255, 255, 255), 34, (255, 255, 255), 110, blur=8)
                 ImageDraw.Draw(canvas).polygon(
@@ -1922,7 +1940,7 @@ class ShareCardRenderer:
                 self._draw_text(draw, (right_x + 72, ry + 2), d["name"], 24, theme.text_primary, bold=True)
                 if d["author_desc"]:
                     self._draw_text(draw, (right_x + 72, ry + 56 - 22), d["author_desc"], 18, theme.text_tertiary)
-            y += max(cover_w, len(title_lines) * 46 + (18 + 56 if d["author"] else 0)) + 22
+            y += max(cover_h, len(title_lines) * 46 + (18 + 56 if d["author"] else 0)) + 22
         else:
             for line in title_lines:
                 self._draw_text(draw, (pad, y), line, _L.F_TITLE, theme.text_primary, bold=True)
@@ -1990,7 +2008,8 @@ class ShareCardRenderer:
         if warnings_h:
             stack += warnings_h + 16
         stack += 96  # 页脚
-        card_h = max(round(self.width * 1.02), _L.HERO_BADGE_TOP + _L.HERO_BADGE_H + stack + 48)
+        full_hero_h = self._hero_aspect_height(d["hero"], self.width, round(self.width * 1.02))
+        card_h = max(full_hero_h, _L.HERO_BADGE_TOP + _L.HERO_BADGE_H + stack + 48)
 
         total_h = card_h + 14
         canvas = Image.new("RGBA", (self.width, total_h), (0, 0, 0, 0))
@@ -2134,6 +2153,8 @@ class ShareCardRenderer:
         desc_font = self._font(_L.F_DESC)
         desc_lines = self._fit_lines(d["text"], desc_font, inner_w, 5) if d["text"] else []
         media_h = round(inner_w * 9 / 16) if d["hero"] else 0
+        if d["hero"] and self.cover_full_size:
+            media_h = self._hero_aspect_height(d["hero"], inner_w, media_h)
         stats_h, stat_rows = self._stat_rows_height(d, inner_w)
         warnings_h = self._warning_block_height(d["warnings"], inner_w)
         grid_h = self._grid_metrics(len(d["grid"]), inner_w, gap)[0]

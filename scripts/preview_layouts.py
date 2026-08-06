@@ -127,12 +127,13 @@ async def main() -> None:
     total = 0
     for layout in LAYOUT_NAMES:
         for theme in ("dark", "light"):
-            renderer = ShareCardRenderer(OUT_DIR, width=800, theme=theme, layout=layout)
-            for slug, res in samples:
-                out = await renderer.render(res, cache_key=f"lay2-{layout}-{theme}-{slug}")
-                assert out and out.exists(), (layout, theme, slug)
-                total += 1
-                print(f"[{layout}/{theme}] {slug}: {out.name}")
+            for full_size in (False, True):
+                renderer = ShareCardRenderer(OUT_DIR, width=800, theme=theme, layout=layout, cover_full_size=full_size)
+                for slug, res in samples:
+                    out = await renderer.render(res, cache_key=f"lay3-{layout}-{theme}-full{full_size}-{slug}")
+                    assert out and out.exists(), (layout, theme, full_size, slug)
+                    total += 1
+                    print(f"[{layout}/{theme}/full={full_size}] {slug}: {out.name}")
     print(f"\n共渲染 {total} 张，全部成功")
 
 

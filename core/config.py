@@ -34,6 +34,7 @@ CONFIG_GROUP_KEYS: dict[str, tuple[str, ...]] = {
         "RENDER_LAYOUT",
         "RENDER_WIDTH",
         "RENDER_FONT_PATH",
+        "RENDER_COVER_FULL_SIZE",
     ),
     "Cloudflare 基础设置": (
         "CLOUDFLARE_FALLBACK_ENABLED",
@@ -84,6 +85,7 @@ _LEGACY_DEFAULTS: dict[str, Any] = {
     "RENDER_LAYOUT": "standard",
     "RENDER_WIDTH": 800,
     "RENDER_FONT_PATH": "",
+    "RENDER_COVER_FULL_SIZE": False,
     "CLOUDFLARE_FALLBACK_ENABLED": False,
     "CLOUDFLARE_ACCOUNT_ID": "",
     "CLOUDFLARE_API_TOKEN": "",
@@ -218,6 +220,11 @@ class ParserConfig:
     def RENDER_FONT_PATH(self) -> str:
         """自定义渲染字体文件路径（留空自动探测系统字体）"""
         return str(self._cfg_get("RENDER_FONT_PATH", "") or "").strip()
+
+    @property
+    def RENDER_COVER_FULL_SIZE(self) -> bool:
+        """是否启用封面全尺寸模式（不裁剪封面）"""
+        return bool(self._cfg_get("RENDER_COVER_FULL_SIZE", False))
 
     @property
     def BILI_QUALITY(self) -> str:

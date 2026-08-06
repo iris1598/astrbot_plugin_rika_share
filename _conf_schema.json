@@ -138,6 +138,13 @@
         "default": "",
         "hint": "填写 .ttf/.ttc/.otf 字体文件路径或所在目录；留空自动探测系统中文字体",
         "obvious_hint": false
+      },
+      "RENDER_COVER_FULL_SIZE": {
+        "description": "封面全尺寸模式",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后不再裁剪封面图片，而是按封面原始宽高比完整展示",
+        "obvious_hint": true
       }
     }
   },
@@ -466,6 +473,14 @@
     "default": "",
     "hint": "字体文件路径或目录；留空自动探测",
     "obvious_hint": false,
+    "invisible": true
+  },
+  "RENDER_COVER_FULL_SIZE": {
+    "description": "封面全尺寸模式",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后不再裁剪封面图片，而是按封面原始宽高比完整展示",
+    "obvious_hint": true,
     "invisible": true
   },
   "CLOUDFLARE_FALLBACK_ENABLED": {
