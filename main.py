@@ -471,15 +471,13 @@ class ParserPlugin(Star):
                     )
 
                 if is_video:
-                    # 视频：卡片已承载全部信息，不再重复发送文字摘要
+                    # 视频：卡片已承载全部信息（含时长超限警告），不再重复发送文字摘要或警告
                     header_text = ""
-                    text_items = [[Comp.Plain(w)] for w in warnings]
+                    text_items = []
                 else:
-                    # 图文 / 动态：保留文字部分与图集图片，按平台规则发送
+                    # 图文 / 动态：保留文字部分与图集图片，按平台规则发送（警告已合并在卡片图中）
                     header_text = header
                     text_items = list(nodes_content)
-                    for w in warnings:
-                        text_items.append([Comp.Plain(w)])
             else:
                 # 未启用 / 渲染失败：保持原有文本输出逻辑
                 header_text = header

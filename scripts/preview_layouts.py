@@ -104,6 +104,21 @@ def build_samples() -> list[tuple[str, ParseResult]]:
             graphics=[ImageContent(task(ASSET_DIR / "hero1.png"))],
             extra={"content_type": "图文"},
         )),
+        ("video-limit-warning", ParseResult(
+            platform=Platform("bilibili", "哔哩哔哩"),
+            author=Author("长视频纪录片", avatar=task(ASSET_DIR / "avatar.png"), description="纪录片官方频道"),
+            title="【4K】4小时深度纪录片：探索深海未解之谜",
+            text="本集将带你深入马里亚纳海沟，记录人类从未触及的神秘世界...",
+            timestamp=now - 3600,
+            url="https://www.bilibili.com/video/BV1overduration",
+            contents=[VideoContent(task(ASSET_DIR / "hero0.png"), cover=task(ASSET_DIR / "hero0.png"), duration=14400)],
+            extra={
+                "stats_line": "👍 50.2万 🪙 30.1万 ⭐ 40.5万 💬 1.8万 👀 350.2万",
+                "duration": "04:00:00",
+                "content_type": "视频",
+                "limit_warnings": ["⚠️ 视频时长(04:00:00)超过限制(00:30:00)，不会下载视频"],
+            },
+        )),
     ]
 
 

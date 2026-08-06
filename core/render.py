@@ -705,12 +705,13 @@ class ShareCardRenderer:
             return None
 
     def _output_path(self, cache_key: str | None, result: ParseResult) -> Path:
+        warnings_str = "|".join(result.extra.get("limit_warnings") or [])
         payload = (
             cache_key
             or f"{result.platform.name}|{result.title}|{result.timestamp}|{result.url}"
         )
         digest = hashlib.md5(
-            f"{self.theme_name}|{self.width}|{self.layout_name}|{payload}".encode("utf-8")
+            f"{self.theme_name}|{self.width}|{self.layout_name}|{payload}|{warnings_str}".encode("utf-8")
         ).hexdigest()[:16]
         return self.cache_dir / f"card_{digest}.png"
 
@@ -912,6 +913,8 @@ class ShareCardRenderer:
         if dur := result.extra.get("duration"):
             stats.insert(0, ("时长", str(dur)))
         online_text = strip_emoji(result.extra.get("online") or "")
+        limit_warnings = result.extra.get("limit_warnings") or []
+        warnings_h = self._warning_block_height(limit_warnings, inner_w)
         stat_rows = self._build_stat_rows(stats, inner_w)
 
         quote_h = self._measure_quote(result.repost, inner_w) if result.repost else 0
@@ -933,6 +936,8 @@ class ShareCardRenderer:
             y += len(stat_rows) * (_L.STAT_H + _L.STAT_ROW_GAP) - _L.STAT_ROW_GAP + 18
         if online_text:
             y += 38
+        if warnings_h:
+            y += warnings_h + 20
         if grid:
             y += grid_h + 20
         if quote_h:
@@ -1252,6 +1257,11 @@ class ShareCardRenderer:
                 )
             y += 38
 
+        # ============ 警告提示块 ============
+        if limit_warnings:
+            y = self._draw_warning_block(canvas, draw, theme, limit_warnings, y, inner_w)
+            draw = ImageDraw.Draw(canvas)
+
         # ============ 图集网格 ============
         if grid:
             try:
@@ -1499,6 +1509,7 @@ class ShareCardRenderer:
             "author_desc": strip_emoji(author.description or "")[:40] if author else "",
             "stats": stats,
             "online_text": strip_emoji(result.extra.get("online") or ""),
+            "warnings": result.extra.get("limit_warnings") or [],
         }
 
     def _base_canvas(self, theme: _Theme, accent_rgb: tuple[int, int, int], card_h: int):
@@ -1639,6 +1650,86 @@ class ShareCardRenderer:
         self._draw_text(draw, (_L.PAD + 18, y), d["online_text"], _L.F_ONLINE, accent)
         return y + 38
 
+    def _warning_block_height(self, warnings: list[str], inner_w: int) -> int:
+        """计算警告提示块的总高度。"""
+        if not warnings:
+            return 0
+        font = self._font(20)
+        line_h = self._line_height(font) + 4
+        avail_w = inner_w - 46
+        total_h = 0
+        for raw_msg in warnings:
+            msg = strip_emoji(raw_msg)
+            lines = self._wrap(msg, font, avail_w)
+            box_h = max(len(lines), 1) * line_h + 24
+            total_h += box_h + 12
+        return total_h - 12 if total_h > 0 else 0
+
+    def _draw_warning_block(
+        self, canvas: Image.Image, draw: ImageDraw.ImageDraw, theme: _Theme,
+        warnings: list[str], y: int, inner_w: int, on_image: bool = False
+    ) -> int:
+        """渲染精致的时长超出限制警告提示块，返回结束 y。"""
+        if not warnings:
+            return y
+        pad = _L.PAD
+        font = self._font(20)
+        line_h = self._line_height(font) + 4
+        avail_w = inner_w - 46
+
+        # 主题色彩适配：精致不张扬的琥珀警告色调
+        if on_image:
+            bg_rgb = (20, 24, 36)
+            bg_alpha = 160
+            border_rgb = (245, 158, 11)
+            border_alpha = 75
+            bar_rgb = (245, 158, 11, 230)
+            text_color = (253, 230, 138)  # #FDE68A 柔金黄
+        elif self.theme_name == "dark":
+            bg_rgb = (245, 158, 11)
+            bg_alpha = 22
+            border_rgb = (245, 158, 11)
+            border_alpha = 50
+            bar_rgb = (245, 158, 11, 220)
+            text_color = (252, 211, 77)   # #FCD34D 亮琥珀
+        else:
+            bg_rgb = (254, 243, 199)
+            bg_alpha = 150
+            border_rgb = (217, 119, 6)
+            border_alpha = 60
+            bar_rgb = (217, 119, 6, 220)
+            text_color = (180, 83, 9)     # #B45309 深琥珀
+
+        for raw_msg in warnings:
+            msg = strip_emoji(raw_msg)
+            lines = self._wrap(msg, font, avail_w)
+            box_h = max(len(lines), 1) * line_h + 24
+
+            # 毛玻璃圆角卡片底
+            self._glass(
+                canvas, (pad, y, pad + inner_w, y + box_h), 14,
+                tint_rgb=bg_rgb, tint_alpha=bg_alpha,
+                border_rgb=border_rgb, border_alpha=border_alpha, blur=6,
+            )
+
+            # 左侧 Warning Accent 竖条
+            bar_layer = Image.new("RGBA", (4, max(box_h - 16, 8)), (0, 0, 0, 0))
+            ImageDraw.Draw(bar_layer).rounded_rectangle(
+                (0, 0, 3, max(box_h - 17, 7)), radius=2, fill=bar_rgb,
+            )
+            canvas.alpha_composite(bar_layer, (pad + 14, y + 8))
+
+            # 警告文本
+            draw = ImageDraw.Draw(canvas)
+            ty = y + 12
+            for line in lines:
+                self._draw_text(draw, (pad + 28, ty), line, 20, text_color)
+                ty += line_h
+
+            y += box_h + 12
+
+        return y + 8
+
     def _footer_block(self, canvas, draw, theme: _Theme, accent: str, accent_rgb,
                       result: ParseResult, y: int, inner_w: int,
                       on_image: bool = False) -> None:
@@ -1766,6 +1857,7 @@ class ShareCardRenderer:
         desc_font = self._font(_L.F_DESC)
         desc_lines = self._fit_lines(d["text"], desc_font, inner_w, 4) if d["text"] else []
         stats_h, stat_rows = self._stat_rows_height(d, inner_w)
+        warnings_h = self._warning_block_height(d["warnings"], inner_w)
         grid_h = self._grid_metrics(len(d["grid"]), inner_w, gap)[0]
         quote_h = self._measure_quote(result.repost, inner_w) if result.repost else 0
 
@@ -1784,6 +1876,8 @@ class ShareCardRenderer:
             y += stats_h + 18
         if d["online_text"]:
             y += 38
+        if warnings_h:
+            y += warnings_h + 20
         if grid_h:
             y += grid_h + 20
         if quote_h:
@@ -1853,6 +1947,9 @@ class ShareCardRenderer:
             draw = ImageDraw.Draw(canvas)
         if d["online_text"]:
             y = self._draw_online(draw, d, y, accent)
+        if d["warnings"]:
+            y = self._draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w)
+            draw = ImageDraw.Draw(canvas)
         y = self._draw_grid_block(canvas, draw, theme, d["grid"], y, inner_w, gap)
         y = self._draw_quote_block(canvas, ImageDraw.Draw(canvas), theme, accent_rgb, result, y, inner_w)
         self._footer_block(canvas, ImageDraw.Draw(canvas), theme, accent, accent_rgb, result, y, inner_w)
@@ -1878,6 +1975,7 @@ class ShareCardRenderer:
         title_font = self._font(_L.F_TITLE, bold=True)
         title_lines = self._fit_lines(d["title"], title_font, inner_w, 2) if d["title"] else []
         stats_h, stat_rows = self._stat_rows_height(d, inner_w)
+        warnings_h = self._warning_block_height(d["warnings"], inner_w)
 
         # 底部内容栈高度
         stack = 30
@@ -1889,6 +1987,8 @@ class ShareCardRenderer:
             stack += stats_h + 16
         if d["online_text"]:
             stack += 36
+        if warnings_h:
+            stack += warnings_h + 16
         stack += 96  # 页脚
         card_h = max(round(self.width * 1.02), _L.HERO_BADGE_TOP + _L.HERO_BADGE_H + stack + 48)
 
@@ -2007,6 +2107,9 @@ class ShareCardRenderer:
             y += 16 - _L.STAT_ROW_GAP
         if d["online_text"]:
             y = self._draw_online(draw, d, y, accent) - 2
+        if d["warnings"]:
+            y = self._draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w, on_image=True)
+            draw = ImageDraw.Draw(canvas)
         self._footer_block(canvas, draw, theme, accent, accent_rgb, result, y, inner_w,
                            on_image=True)
 
@@ -2032,6 +2135,7 @@ class ShareCardRenderer:
         desc_lines = self._fit_lines(d["text"], desc_font, inner_w, 5) if d["text"] else []
         media_h = round(inner_w * 9 / 16) if d["hero"] else 0
         stats_h, stat_rows = self._stat_rows_height(d, inner_w)
+        warnings_h = self._warning_block_height(d["warnings"], inner_w)
         grid_h = self._grid_metrics(len(d["grid"]), inner_w, gap)[0]
         quote_h = self._measure_quote(result.repost, inner_w) if result.repost else 0
 
@@ -2048,6 +2152,8 @@ class ShareCardRenderer:
             y += stats_h + 18
         if d["online_text"]:
             y += 38
+        if warnings_h:
+            y += warnings_h + 20
         if grid_h:
             y += grid_h + 20
         if quote_h:
@@ -2137,6 +2243,9 @@ class ShareCardRenderer:
             draw = ImageDraw.Draw(canvas)
         if d["online_text"]:
             y = self._draw_online(draw, d, y, accent)
+        if d["warnings"]:
+            y = self._draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w)
+            draw = ImageDraw.Draw(canvas)
         y = self._draw_grid_block(canvas, draw, theme, d["grid"], y, inner_w, gap)
         y = self._draw_quote_block(canvas, ImageDraw.Draw(canvas), theme, accent_rgb, result, y, inner_w)
         self._footer_block(canvas, ImageDraw.Draw(canvas), theme, accent, accent_rgb, result, y, inner_w)
