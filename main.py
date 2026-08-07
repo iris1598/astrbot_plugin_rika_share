@@ -27,7 +27,10 @@ from .core.utils import cleanup_cache_dir
 from .core.config import init_config, get_config
 from .core.download import StreamDownloader
 from .core.data import ParseResult
-from .core.exception import ParseException, IgnoreException, DownloadException, SilentException
+from .core.exception import (
+    ParseException, IgnoreException, DownloadException, SilentException,
+    is_timeout_exception,
+)
 from .core.cloudflare_screenshot import (
     CloudflareScreenshotClient,
     fetch_page_title,
@@ -373,15 +376,11 @@ class ParserPlugin(Star):
                     MessageChain().message(f"{header}\n").file_image(str(path)),
                 )
                 if not sent:
-                    raise RuntimeError("未找到匹配的平台会话")
-                logger.info(f"Cloudflare 网页截图已主动发送: {path.name}")
+                    logger.warning(f"Cloudflare 截图主动发送未找到匹配平台会话: {path.name}")
+                else:
+                    logger.info(f"Cloudflare 网页截图已主动发送: {path.name}")
             except Exception as e:
-                logger.warning(f"Cloudflare 截图主动发送失败，回退为回复发送: {e}")
-                parts = [
-                    Comp.Plain(f"{header}\n"),
-                    Comp.Image.fromFileSystem(str(path)),
-                ]
-                yield event.chain_result(parts)
+                logger.warning(f"Cloudflare 截图主动发送异常: {e}")
 
     @filter.regex(GENERIC_URL_PATTERN)
     async def cloudflare_fallback_handler(
@@ -464,13 +463,11 @@ class ParserPlugin(Star):
                         MessageChain().file_image(str(render_path)),
                     )
                     if not sent:
-                        raise RuntimeError("未找到匹配的平台会话")
-                    logger.info(f"解析卡片已单独发送: {render_path.name}")
+                        logger.warning(f"解析卡片主动发送未找到匹配平台会话: {render_path.name}")
+                    else:
+                        logger.info(f"解析卡片已单独发送: {render_path.name}")
                 except Exception as e:
-                    logger.warning(f"解析卡片主动发送失败，回退为回复发送: {e}")
-                    yield event.chain_result(
-                        [Comp.Image.fromFileSystem(str(render_path))]
-                    )
+                    logger.warning(f"解析卡片主动发送异常: {e}")
 
                 if is_video:
                     # 视频：卡片已承载全部信息（含时长超限警告），不再重复发送文字摘要或警告
