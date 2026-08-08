@@ -937,9 +937,9 @@ class ShareCardRenderer:
         if desc_lines:
             y += len(desc_lines) * _L.F_DESC_LINE_H + 16
         if stat_rows:
-            y += len(stat_rows) * (_L.STAT_H + _L.STAT_ROW_GAP) - _L.STAT_ROW_GAP + 16
+            y += len(stat_rows) * (_L.STAT_H + _L.STAT_ROW_GAP) - _L.STAT_ROW_GAP + 18
         if online_text:
-            y += 40
+            y += 38
         if warnings_h:
             y += warnings_h + 16
         if grid:
@@ -1244,7 +1244,7 @@ class ShareCardRenderer:
                         )
                     x += w + _L.STAT_GAP
                 y += _L.STAT_H + _L.STAT_ROW_GAP
-            y += 16 - _L.STAT_ROW_GAP
+            y += 18 - _L.STAT_ROW_GAP
 
         # ============ 在线人数（accent 圆点 + 文字） ============
         if online_text:
@@ -1259,7 +1259,7 @@ class ShareCardRenderer:
                 self._draw_text(
                     draw, (pad + 18, y), online_text, _L.F_ONLINE, accent
                 )
-            y += 40
+            y += 38
 
         # ============ 警告提示块 ============
         if limit_warnings:
@@ -1339,8 +1339,8 @@ class ShareCardRenderer:
             fill=_with_alpha(theme.divider, 14 if self.theme_name == "dark" else 12),
             width=1,
         )
-        canvas.alpha_composite(divider_layer, (pad, y))
-        foot_y = y + 16
+        canvas.alpha_composite(divider_layer, (pad, y + 12))
+        foot_y = y + 28
 
         wm_text = "莉卡解析"
         wm_font = self._font(_L.F_FOOT, bold=True)
@@ -1652,7 +1652,7 @@ class ShareCardRenderer:
         dot_cy = y + self._line_height(online_font) // 2
         draw.ellipse((_L.PAD, dot_cy - 4, _L.PAD + 8, dot_cy + 4), fill=accent)
         self._draw_text(draw, (_L.PAD + 18, y), d["online_text"], _L.F_ONLINE, accent)
-        return y + 40
+        return y + 38
 
     def _warning_block_height(self, warnings: list[str], inner_w: int) -> int:
         """计算警告提示块的总高度。"""
@@ -1666,8 +1666,8 @@ class ShareCardRenderer:
             msg = strip_emoji(raw_msg)
             lines = self._wrap(msg, font, avail_w)
             box_h = max(len(lines), 1) * line_h + 24
-            total_h += box_h + 10
-        return total_h - 10 if total_h > 0 else 0
+            total_h += box_h + 12
+        return total_h - 12 if total_h > 0 else 0
 
     def _draw_warning_block(
         self, canvas: Image.Image, draw: ImageDraw.ImageDraw, theme: _Theme,
@@ -1730,9 +1730,9 @@ class ShareCardRenderer:
                 self._draw_text(draw, (pad + 28, ty), line, 20, text_color)
                 ty += line_h
 
-            y += box_h + 10
+            y += box_h + 12
 
-        return y - 10
+        return y - 12
 
     def _hero_aspect_height(self, hero_path: Path | None, box_w: int, default_h: int) -> int:
         """若开启了封面全尺寸模式 (cover_full_size)，按原图宽高比计算高度，否则使用 default_h。"""
@@ -1759,8 +1759,8 @@ class ShareCardRenderer:
                   else _with_alpha(theme.divider, 14 if self.theme_name == "dark" else 12)),
             width=1,
         )
-        canvas.alpha_composite(divider_layer, (pad, y))
-        foot_y = y + 16
+        canvas.alpha_composite(divider_layer, (pad, y + 12))
+        foot_y = y + 28
         wm_font = self._font(_L.F_FOOT, bold=True)
         wm_text_w = self._text_width("莉卡解析", wm_font)
         wm_group_w = _L.WM_DOT + _L.WM_DOT_GAP + wm_text_w
@@ -1891,15 +1891,15 @@ class ShareCardRenderer:
         if desc_lines:
             y += len(desc_lines) * _L.F_DESC_LINE_H + 16
         if stats_h:
-            y += stats_h + 16
+            y += stats_h + 18
         if d["online_text"]:
-            y += 40
+            y += 38
         if warnings_h:
             y += warnings_h + 16
         if grid_h:
-            y += grid_h + 16
+            y += grid_h + 20
         if quote_h:
-            y += quote_h + 16
+            y += quote_h + 20
         y += _L.FOOTER_H
         card_h = y
 
@@ -1961,7 +1961,7 @@ class ShareCardRenderer:
                 y += _L.F_DESC_LINE_H
             y += 16
         if stat_rows:
-            y = self._draw_stat_rows(canvas, theme, stat_rows, pad, y) + 16
+            y = self._draw_stat_rows(canvas, theme, stat_rows, pad, y) + 18
             draw = ImageDraw.Draw(canvas)
         if d["online_text"]:
             y = self._draw_online(draw, d, y, accent)
@@ -2004,7 +2004,7 @@ class ShareCardRenderer:
         if stats_h:
             stack += stats_h + 16
         if d["online_text"]:
-            stack += 40
+            stack += 36
         if warnings_h:
             stack += warnings_h + 16
         stack += 96  # 页脚
@@ -2170,15 +2170,15 @@ class ShareCardRenderer:
         if media_h:
             y += media_h + 20
         if stats_h:
-            y += stats_h + 16
+            y += stats_h + 18
         if d["online_text"]:
-            y += 40
+            y += 38
         if warnings_h:
             y += warnings_h + 16
         if grid_h:
-            y += grid_h + 16
+            y += grid_h + 20
         if quote_h:
-            y += quote_h + 16
+            y += quote_h + 20
         y += _L.FOOTER_H
         card_h = y
 
@@ -2260,7 +2260,7 @@ class ShareCardRenderer:
             draw = ImageDraw.Draw(canvas)
 
         if stat_rows:
-            y = self._draw_stat_rows(canvas, theme, stat_rows, pad, y) + 16
+            y = self._draw_stat_rows(canvas, theme, stat_rows, pad, y) + 18
             draw = ImageDraw.Draw(canvas)
         if d["online_text"]:
             y = self._draw_online(draw, d, y, accent)
