@@ -41,7 +41,7 @@ async def cleanup_cache_dir(cache_dir: Path, ttl_hours: int) -> int:
     cutoff = time.time() - ttl_hours * 3600
     cleaned = 0
 
-    for f in cache_dir.iterdir():
+    for f in cache_dir.rglob("*"):
         if not f.is_file():
             continue
         try:
@@ -53,6 +53,26 @@ async def cleanup_cache_dir(cache_dir: Path, ttl_hours: int) -> int:
 
     if cleaned > 0:
         logger.info(f"缓存清理完成: 已清理 {cleaned} 个过期文件 ({cache_dir})")
+    return cleaned
+
+
+async def clear_cache_dir(cache_dir: Path) -> int:
+    """清空缓存目录中的所有文件，并保留目录结构。"""
+    if not cache_dir.exists():
+        return 0
+
+    cleaned = 0
+    for f in cache_dir.rglob("*"):
+        if not f.is_file():
+            continue
+        try:
+            await safe_unlink(f)
+            if not f.exists():
+                cleaned += 1
+        except Exception:
+            continue
+
+    logger.info(f"缓存已手动清理: 已清理 {cleaned} 个文件 ({cache_dir})")
     return cleaned
 
 
