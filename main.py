@@ -27,7 +27,10 @@ from .core.utils import cleanup_cache_dir
 from .core.config import init_config, get_config
 from .core.download import StreamDownloader
 from .core.data import ParseResult
-from .core.exception import ParseException, IgnoreException, DownloadException, SilentException
+from .core.exception import (
+    ParseException, IgnoreException, DownloadException, SilentException,
+    is_timeout_exception,
+)
 from .core.cloudflare_screenshot import (
     CloudflareScreenshotClient,
     fetch_page_title,
@@ -37,7 +40,6 @@ from .core.render import ShareCardRenderer
 from .core.parsers import (
     BilibiliParser, DouyinParser, KuaiShouParser, WeiBoParser,
     XiaoHongShuParser, TwitterParser, NGAParser, AcfunParser,
-    XiaoheiheParser, ZhihuParser,
 )
 
 # ========== B站扫码登录 API ==========
@@ -69,8 +71,6 @@ XHS_PATTERN = re.compile(r"(xhslink\.com|xhslink\.cn|xiaohongshu\.com)")
 TWITTER_PATTERN = re.compile(r"x\.com")
 NGA_PATTERN = re.compile(r"nga\.178\.com|ngabbs\.com|bbs\.nga\.cn")
 ACFUN_PATTERN = re.compile(r"acfun\.cn")
-XIAOHEIHE_PATTERN = re.compile(r"(xiaoheihe\.cn|heybox\.xiaoheihe\.cn)")
-ZHIHU_PATTERN = re.compile(r"(zhihu\.com|zhuanlan\.zhihu\.com)")
 
 # 通用 URL 匹配（用于 Cloudflare 截图 Fallback）
 GENERIC_URL_PATTERN = re.compile(r"https?://[^\s'\"<>]+")
@@ -86,7 +86,7 @@ class _EventUrlWrapper:
 
 
 @register("链接解析器", "fllesser (ported to AstrBot)",
-          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA|小黑盒|知乎", "2.10.0")
+          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA", "2.10.0")
 class ParserPlugin(Star):
     # 合并转发（Comp.Nodes）是 OneBot v11 独有特性，其他平台均不支持
     @staticmethod
@@ -206,10 +206,6 @@ class ParserPlugin(Star):
             self.parsers["nga"] = NGAParser(self.downloader)
         if "acfun" not in disabled:
             self.parsers["acfun"] = AcfunParser(self.downloader)
-        if "xiaoheihe" not in disabled:
-            self.parsers["xiaoheihe"] = XiaoheiheParser(self.downloader)
-        if "zhihu" not in disabled:
-            self.parsers["zhihu"] = ZhihuParser(self.downloader)
         logger.info(f"已启用平台: {', '.join(self.parsers.keys())}")
 
     async def initialize(self):
@@ -301,16 +297,6 @@ class ParserPlugin(Star):
         async for r in self._dispatch(event, "acfun"):
             yield r
 
-    @filter.regex(XIAOHEIHE_PATTERN)
-    async def xiaoheihe_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
-        async for r in self._dispatch(event, "xiaoheihe"):
-            yield r
-
-    @filter.regex(ZHIHU_PATTERN)
-    async def zhihu_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
-        async for r in self._dispatch(event, "zhihu"):
-            yield r
-
     # ==================== JSON 卡片处理器 ====================
 
     @filter.regex(r".*")
@@ -390,15 +376,11 @@ class ParserPlugin(Star):
                     MessageChain().message(f"{header}\n").file_image(str(path)),
                 )
                 if not sent:
-                    raise RuntimeError("未找到匹配的平台会话")
-                logger.info(f"Cloudflare 网页截图已主动发送: {path.name}")
+                    logger.warning(f"Cloudflare 截图主动发送未找到匹配平台会话: {path.name}")
+                else:
+                    logger.info(f"Cloudflare 网页截图已主动发送: {path.name}")
             except Exception as e:
-                logger.warning(f"Cloudflare 截图主动发送失败，回退为回复发送: {e}")
-                parts = [
-                    Comp.Plain(f"{header}\n"),
-                    Comp.Image.fromFileSystem(str(path)),
-                ]
-                yield event.chain_result(parts)
+                logger.warning(f"Cloudflare 截图主动发送异常: {e}")
 
     @filter.regex(GENERIC_URL_PATTERN)
     async def cloudflare_fallback_handler(
@@ -481,13 +463,11 @@ class ParserPlugin(Star):
                         MessageChain().file_image(str(render_path)),
                     )
                     if not sent:
-                        raise RuntimeError("未找到匹配的平台会话")
-                    logger.info(f"解析卡片已单独发送: {render_path.name}")
+                        logger.warning(f"解析卡片主动发送未找到匹配平台会话: {render_path.name}")
+                    else:
+                        logger.info(f"解析卡片已单独发送: {render_path.name}")
                 except Exception as e:
-                    logger.warning(f"解析卡片主动发送失败，回退为回复发送: {e}")
-                    yield event.chain_result(
-                        [Comp.Image.fromFileSystem(str(render_path))]
-                    )
+                    logger.warning(f"解析卡片主动发送异常: {e}")
 
                 if is_video:
                     # 视频：卡片已承载全部信息（含时长超限警告），不再重复发送文字摘要或警告

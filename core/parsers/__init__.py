@@ -8,8 +8,6 @@ from .xiaohongshu import XiaoHongShuParser
 from .twitter import TwitterParser
 from .nga import NGAParser
 from .acfun import AcfunParser
-from .xiaoheihe import XiaoheiheParser
-from .zhihu import ZhihuParser
 
 __all__ = [
     "BilibiliParser",
@@ -20,6 +18,4 @@ __all__ = [
     "TwitterParser",
     "NGAParser",
     "AcfunParser",
-    "XiaoheiheParser",
-    "ZhihuParser",
 ]

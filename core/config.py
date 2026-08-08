@@ -16,7 +16,6 @@ CONFIG_GROUP_KEYS: dict[str, tuple[str, ...]] = {
         "DISABLED_PLATFORMS",
         "VIDEO_DURATION_MAXIMUM",
         "XHS_CK",
-        "ZHIHU_CK",
     ),
     "B站设置": (
         "BILI_CK",
@@ -74,7 +73,6 @@ _LEGACY_DEFAULTS: dict[str, Any] = {
     "DISABLED_PLATFORMS": "",
     "VIDEO_DURATION_MAXIMUM": 480,
     "XHS_CK": "",
-    "ZHIHU_CK": "",
     "BILI_CK": "",
     "BILI_QUALITY": "1080P",
     "BILI_COOKIE_MONITOR_ENABLED": True,
@@ -166,10 +164,6 @@ class ParserConfig:
     @property
     def XHS_CK(self) -> str | None:
         return self._cfg_get("XHS_CK", None)
-
-    @property
-    def ZHIHU_CK(self) -> str | None:
-        return self._cfg_get("ZHIHU_CK", None)
 
     @property
     def VIDEO_DURATION_MAXIMUM(self) -> int:
