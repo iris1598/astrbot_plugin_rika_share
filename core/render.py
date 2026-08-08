@@ -1681,6 +1681,9 @@ class ShareCardRenderer:
         line_h = self._line_height(font) + 4
         avail_w = inner_w - 46
 
+        # 下移 8px：加大与上方“多少人观看”的间距，同时靠近下方分界线
+        y += 8
+
         # 主题色彩适配：精致不张扬的琥珀警告色调
         if on_image:
             bg_rgb = (20, 24, 36)
@@ -1732,7 +1735,7 @@ class ShareCardRenderer:
 
             y += box_h + 12
 
-        return y - 12
+        return y - 24
 
     def _hero_aspect_height(self, hero_path: Path | None, box_w: int, default_h: int) -> int:
         """若开启了封面全尺寸模式 (cover_full_size)，按原图宽高比计算高度，否则使用 default_h。"""
