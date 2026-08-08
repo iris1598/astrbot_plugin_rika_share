@@ -939,7 +939,7 @@ class ShareCardRenderer:
         if stat_rows:
             y += len(stat_rows) * (_L.STAT_H + _L.STAT_ROW_GAP) - _L.STAT_ROW_GAP + 16
         if online_text:
-            y += 34
+            y += 40
         if warnings_h:
             y += warnings_h + 16
         if grid:
@@ -1259,7 +1259,7 @@ class ShareCardRenderer:
                 self._draw_text(
                     draw, (pad + 18, y), online_text, _L.F_ONLINE, accent
                 )
-            y += 34
+            y += 40
 
         # ============ 警告提示块 ============
         if limit_warnings:
@@ -1652,7 +1652,7 @@ class ShareCardRenderer:
         dot_cy = y + self._line_height(online_font) // 2
         draw.ellipse((_L.PAD, dot_cy - 4, _L.PAD + 8, dot_cy + 4), fill=accent)
         self._draw_text(draw, (_L.PAD + 18, y), d["online_text"], _L.F_ONLINE, accent)
-        return y + 34
+        return y + 40
 
     def _warning_block_height(self, warnings: list[str], inner_w: int) -> int:
         """计算警告提示块的总高度。"""
@@ -1893,7 +1893,7 @@ class ShareCardRenderer:
         if stats_h:
             y += stats_h + 16
         if d["online_text"]:
-            y += 34
+            y += 40
         if warnings_h:
             y += warnings_h + 16
         if grid_h:
@@ -2004,7 +2004,7 @@ class ShareCardRenderer:
         if stats_h:
             stack += stats_h + 16
         if d["online_text"]:
-            stack += 36
+            stack += 40
         if warnings_h:
             stack += warnings_h + 16
         stack += 96  # 页脚
@@ -2172,7 +2172,7 @@ class ShareCardRenderer:
         if stats_h:
             y += stats_h + 16
         if d["online_text"]:
-            y += 34
+            y += 40
         if warnings_h:
             y += warnings_h + 16
         if grid_h:
