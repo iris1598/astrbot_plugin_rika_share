@@ -170,22 +170,11 @@
 
 ## 🔐 Cookie 获取指南
 
-### 方式一：B站扫码登录 (极力推荐 ⭐⭐⭐⭐⭐)
+### B站扫码登录
 1. 在配置的管理员账号下，直接向机器人发送指令 `/bili_login`。
 2. 机器人将发送一张登录二维码图片。
 3. 打开手机 **B站 App** 扫描该二维码，并点击 **确认登录**。
 4. 机器人提示登录成功后，Cookie 会**加密保存并自动生效**，无需重启！
-
-### 方式二：手动配置 B站 SESSDATA
-1. 使用电脑浏览器登录 [bilibili.com](https://www.bilibili.com)。
-2. 按 `F12` 打开开发者工具，切换到 `Application` (应用) -> `Cookies`。
-3. 找到 `SESSDATA` 项，复制其 Value 值。
-4. 填入插件配置项中的 `BILI_CK`。
-
-### 方式三：小红书 Cookie 配置
-1. 使用电脑浏览器登录 [xiaohongshu.com](https://www.xiaohongshu.com)。
-2. 按 `F12` 打开开发者工具，在控制台 (Console) 中输入 `document.cookie` 并回车。
-3. 复制打印出的完整 Cookie 字符串，填入插件配置项中的 `XHS_CK`。
 
 ---
 
@@ -225,7 +214,7 @@ astrbot_plugin_rika_share/
 ## 🙏 致谢
 
 - [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser) — 感谢原 NoneBot2 插件作者的优秀思路与解析库逻辑。
-- [AstrBot](https://github.com/Soulter/AstrBot) — 强大的多平台 AI 机器人框架。
+- [AstrBot](https://github.com/AstrBotDevs/AstrBot) — 强大的多平台 AI 机器人框架。
 
 ---
 
