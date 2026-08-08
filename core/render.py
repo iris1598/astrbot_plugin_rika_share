@@ -205,7 +205,7 @@ class _L:
     QUOTE_BAR_W = 6
 
     # --- 页脚 ---
-    FOOTER_H = 108
+    FOOTER_H = 64
     WM_DOT = 10               # 水印圆点直径
     WM_DOT_GAP = 8            # 水印圆点与文字间距
 
@@ -941,14 +941,14 @@ class ShareCardRenderer:
         if online_text:
             y += 38
         if warnings_h:
-            y += warnings_h + 20
+            y += warnings_h + 18
         if grid:
             y += grid_h + 20
         if quote_h:
             y += quote_h + 20
         y += _L.FOOTER_H
         card_h = y
-        total_h = card_h + 14
+        total_h = card_h
 
         # ================= 绘制底层 =================
         canvas = Image.new("RGBA", (self.width, total_h), (0, 0, 0, 0))
@@ -1263,7 +1263,7 @@ class ShareCardRenderer:
 
         # ============ 警告提示块 ============
         if limit_warnings:
-            y = self._draw_warning_block(canvas, draw, theme, limit_warnings, y, inner_w)
+            y = self._draw_warning_block(canvas, draw, theme, limit_warnings, y, inner_w) + 10
             draw = ImageDraw.Draw(canvas)
 
         # ============ 图集网格 ============
@@ -1339,8 +1339,8 @@ class ShareCardRenderer:
             fill=_with_alpha(theme.divider, 14 if self.theme_name == "dark" else 12),
             width=1,
         )
-        canvas.alpha_composite(divider_layer, (pad, y + 12))
-        foot_y = y + 28
+        canvas.alpha_composite(divider_layer, (pad, y + 4))
+        foot_y = y + 18
 
         wm_text = "莉卡解析"
         wm_font = self._font(_L.F_FOOT, bold=True)
@@ -1518,7 +1518,7 @@ class ShareCardRenderer:
 
     def _base_canvas(self, theme: _Theme, accent_rgb: tuple[int, int, int], card_h: int):
         """阴影 + 渐变底 + 光晕 + 圆角 + 描边，返回 (canvas, draw)。"""
-        total_h = card_h + 14
+        total_h = card_h
         canvas = Image.new("RGBA", (self.width, total_h), (0, 0, 0, 0))
         shadow = Image.new("RGBA", (self.width, total_h), (0, 0, 0, 0))
         ImageDraw.Draw(shadow).rounded_rectangle(
@@ -1655,46 +1655,46 @@ class ShareCardRenderer:
         return y + 38
 
     def _warning_block_height(self, warnings: list[str], inner_w: int) -> int:
-        """计算警告提示块的总高度。"""
+        """计算警告提示块的总高度（包括内部框与多框间距）。"""
         if not warnings:
             return 0
-        font = self._font(20)
+        font = self._font(17)
         line_h = self._line_height(font) + 4
-        avail_w = inner_w - 46
+        avail_w = inner_w - 60
         total_h = 0
         for raw_msg in warnings:
             msg = strip_emoji(raw_msg)
             lines = self._wrap(msg, font, avail_w)
-            box_h = max(len(lines), 1) * line_h + 24
-            total_h += box_h + 12
-        return total_h - 12 if total_h > 0 else 0
+            box_h = max(len(lines), 1) * line_h + 20
+            total_h += box_h + 10
+        return total_h - 10 if total_h > 0 else 0
 
     def _draw_warning_block(
         self, canvas: Image.Image, draw: ImageDraw.ImageDraw, theme: _Theme,
         warnings: list[str], y: int, inner_w: int, on_image: bool = False
     ) -> int:
-        """渲染精致的时长超出限制警告提示块，返回结束 y。"""
+        """渲染精致的时长超出限制警告提示块，返回警告块底部 y。"""
         if not warnings:
             return y
         pad = _L.PAD
-        font = self._font(20)
+        font = self._font(17)
         line_h = self._line_height(font) + 4
-        avail_w = inner_w - 46
+        avail_w = inner_w - 60
 
         # 主题色彩适配：精致不张扬的琥珀警告色调
         if on_image:
             bg_rgb = (20, 24, 36)
-            bg_alpha = 160
+            bg_alpha = 170
             border_rgb = (245, 158, 11)
-            border_alpha = 75
-            bar_rgb = (245, 158, 11, 230)
+            border_alpha = 80
+            bar_rgb = (245, 158, 11, 235)
             text_color = (253, 230, 138)  # #FDE68A 柔金黄
         elif self.theme_name == "dark":
             bg_rgb = (245, 158, 11)
-            bg_alpha = 22
+            bg_alpha = 20
             border_rgb = (245, 158, 11)
-            border_alpha = 50
-            bar_rgb = (245, 158, 11, 220)
+            border_alpha = 55
+            bar_rgb = (245, 158, 11, 230)
             text_color = (252, 211, 77)   # #FCD34D 亮琥珀
         else:
             bg_rgb = (254, 243, 199)
@@ -1704,10 +1704,13 @@ class ShareCardRenderer:
             bar_rgb = (217, 119, 6, 220)
             text_color = (180, 83, 9)     # #B45309 深琥珀
 
-        for raw_msg in warnings:
+        for idx, raw_msg in enumerate(warnings):
+            if idx > 0:
+                y += 10
             msg = strip_emoji(raw_msg)
             lines = self._wrap(msg, font, avail_w)
-            box_h = max(len(lines), 1) * line_h + 24
+            text_total_h = max(len(lines), 1) * line_h
+            box_h = text_total_h + 20
 
             # 毛玻璃圆角卡片底
             self._glass(
@@ -1716,23 +1719,25 @@ class ShareCardRenderer:
                 border_rgb=border_rgb, border_alpha=border_alpha, blur=6,
             )
 
-            # 左侧 Warning Accent 竖条
-            bar_layer = Image.new("RGBA", (4, max(box_h - 16, 8)), (0, 0, 0, 0))
+            # 左侧 Warning Accent 竖条（垂直居中）
+            bar_h = max(box_h - 18, 10)
+            bar_y = y + (box_h - bar_h) // 2
+            bar_layer = Image.new("RGBA", (4, bar_h), (0, 0, 0, 0))
             ImageDraw.Draw(bar_layer).rounded_rectangle(
-                (0, 0, 3, max(box_h - 17, 7)), radius=2, fill=bar_rgb,
+                (0, 0, 3, bar_h - 1), radius=2, fill=bar_rgb,
             )
-            canvas.alpha_composite(bar_layer, (pad + 14, y + 8))
+            canvas.alpha_composite(bar_layer, (pad + 14, bar_y))
 
-            # 警告文本
+            # 警告文本（垂直居中，左右对称 30px 边距）
             draw = ImageDraw.Draw(canvas)
-            ty = y + 12
+            ty = y + (box_h - text_total_h) // 2
             for line in lines:
-                self._draw_text(draw, (pad + 28, ty), line, 20, text_color)
+                self._draw_text(draw, (pad + 30, ty), line, 17, text_color)
                 ty += line_h
 
-            y += box_h + 12
+            y += box_h
 
-        return y + 8
+        return y
 
     def _hero_aspect_height(self, hero_path: Path | None, box_w: int, default_h: int) -> int:
         """若开启了封面全尺寸模式 (cover_full_size)，按原图宽高比计算高度，否则使用 default_h。"""
@@ -1759,8 +1764,8 @@ class ShareCardRenderer:
                   else _with_alpha(theme.divider, 14 if self.theme_name == "dark" else 12)),
             width=1,
         )
-        canvas.alpha_composite(divider_layer, (pad, y + 12))
-        foot_y = y + 28
+        canvas.alpha_composite(divider_layer, (pad, y + 4))
+        foot_y = y + 18
         wm_font = self._font(_L.F_FOOT, bold=True)
         wm_text_w = self._text_width("莉卡解析", wm_font)
         wm_group_w = _L.WM_DOT + _L.WM_DOT_GAP + wm_text_w
@@ -1895,7 +1900,7 @@ class ShareCardRenderer:
         if d["online_text"]:
             y += 38
         if warnings_h:
-            y += warnings_h + 20
+            y += warnings_h + 18
         if grid_h:
             y += grid_h + 20
         if quote_h:
@@ -1966,7 +1971,7 @@ class ShareCardRenderer:
         if d["online_text"]:
             y = self._draw_online(draw, d, y, accent)
         if d["warnings"]:
-            y = self._draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w)
+            y = self._draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w) + 10
             draw = ImageDraw.Draw(canvas)
         y = self._draw_grid_block(canvas, draw, theme, d["grid"], y, inner_w, gap)
         y = self._draw_quote_block(canvas, ImageDraw.Draw(canvas), theme, accent_rgb, result, y, inner_w)
@@ -2005,13 +2010,13 @@ class ShareCardRenderer:
             stack += stats_h + 16
         if d["online_text"]:
             stack += 36
-        if warnings_h:
-            stack += warnings_h + 16
-        stack += 96  # 页脚
+        if d["warnings"]:
+            stack += warnings_h + 10
+        stack += 64  # 页脚
         full_hero_h = self._hero_aspect_height(d["hero"], self.width, round(self.width * 1.02))
         card_h = max(full_hero_h, _L.HERO_BADGE_TOP + _L.HERO_BADGE_H + stack + 48)
 
-        total_h = card_h + 14
+        total_h = card_h
         canvas = Image.new("RGBA", (self.width, total_h), (0, 0, 0, 0))
         shadow = Image.new("RGBA", (self.width, total_h), (0, 0, 0, 0))
         ImageDraw.Draw(shadow).rounded_rectangle(
@@ -2127,7 +2132,7 @@ class ShareCardRenderer:
         if d["online_text"]:
             y = self._draw_online(draw, d, y, accent) - 2
         if d["warnings"]:
-            y = self._draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w, on_image=True)
+            y = self._draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w, on_image=True) + 10
             draw = ImageDraw.Draw(canvas)
         self._footer_block(canvas, draw, theme, accent, accent_rgb, result, y, inner_w,
                            on_image=True)
@@ -2174,7 +2179,7 @@ class ShareCardRenderer:
         if d["online_text"]:
             y += 38
         if warnings_h:
-            y += warnings_h + 20
+            y += warnings_h + 18
         if grid_h:
             y += grid_h + 20
         if quote_h:
@@ -2265,7 +2270,7 @@ class ShareCardRenderer:
         if d["online_text"]:
             y = self._draw_online(draw, d, y, accent)
         if d["warnings"]:
-            y = self._draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w)
+            y = self._draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w) + 10
             draw = ImageDraw.Draw(canvas)
         y = self._draw_grid_block(canvas, draw, theme, d["grid"], y, inner_w, gap)
         y = self._draw_quote_block(canvas, ImageDraw.Draw(canvas), theme, accent_rgb, result, y, inner_w)
