@@ -23,7 +23,7 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult, Mess
 import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star, register, StarTools
 
-from .core.utils import cleanup_cache_dir, clear_cache_dir
+from .core.utils import clear_cache_dir, cleanup_cache_dir
 from .core.config import init_config, get_config
 from .core.download import StreamDownloader
 from .core.data import ParseResult
@@ -794,19 +794,6 @@ class ParserPlugin(Star):
             logger.exception("扫码登录出错")
             yield event.plain_result(f"❌ 生成二维码失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("rika_clear_cache", alias={"clear_cache", "清理缓存"})
-    async def clear_cache(self, event: AstrMessageEvent):
-        """手动清理插件缓存，仅管理员可用。"""
-        try:
-            cleaned = await clear_cache_dir(self.cache_dir)
-            self._result_cache.clear()
-            self._render_cache.clear()
-            yield event.plain_result(f"✅ 缓存清理完成，共清理 {cleaned} 个文件。")
-        except Exception as e:
-            logger.exception("手动清理缓存失败")
-            yield event.plain_result(f"❌ 缓存清理失败: {e}")
-
     @filter.command("bili_check")
     async def bili_check_cookie(self, event: AstrMessageEvent):
         """手动检测B站Cookie状态"""
@@ -847,6 +834,19 @@ class ParserPlugin(Star):
             if self._bili_last_check_time:
                 lines.append(f"检测时间: {self._bili_last_check_time.strftime('%Y-%m-%d %H:%M:%S')}")
         yield event.plain_result("\n".join(lines))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("rika_clear_cache", alias={"clear_cache", "清理缓存"})
+    async def rika_clear_cache(self, event: AstrMessageEvent):
+        """手动清理插件缓存。"""
+        try:
+            cleaned = await clear_cache_dir(self.cache_dir)
+            self._result_cache.clear()
+            self._render_cache.clear()
+            yield event.plain_result(f"✅ 莉卡解析缓存清理完成，共清理 {cleaned} 个文件")
+        except Exception as exc:
+            logger.exception("手动清理莉卡解析缓存失败")
+            yield event.plain_result(f"❌ 缓存清理失败: {exc}")
 
     # ---------- 内部方法 ----------
 

@@ -82,7 +82,7 @@
 | `/bili_login` | **ADMIN** | 启动 B站 扫码登录流程。机器人将生成并发送二维码图片，扫码确认后自动保存密钥并启用 Cookie。 |
 | `/bili_check` | 所有人 / ADMIN | 手动检测当前 B站 Cookie 的有效性，显示用户昵称、UID 及会员状态。 |
 | `/bili_status` | 所有人 / ADMIN | 查看当前 B站 Cookie 状态以及后台健康监控任务的运行状态。 |
-| `/rika_clear_cache` | **ADMIN** | 手动清理插件缓存文件；别名：`/clear_cache`、`/清理缓存`。 |
+| `/rika_clear_cache`<br>`/clear_cache`<br>`/清理缓存` | **ADMIN** | 清空插件下载文件、解析图片、网页截图等缓存，并同步清空内存缓存。 |
 
 ---
 
