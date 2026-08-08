@@ -14,6 +14,8 @@ AstrBot 链接分享自动解析插件。移植自 [nonebot-plugin-parser](https
 | Twitter/X | 推文/媒体 | 视频/图片 |
 | AcFun | 视频 | 视频 |
 | NGA | 帖子 | — |
+| 小黑盒 | 帖子/动态/文章 | 视频/图片 |
+| 知乎 | 文章/回答/问题/想法 | 视频/图片（需 Cookie） |
 
 ## 输出格式
 
@@ -97,6 +99,7 @@ WebUI 设置页按「平台 / B站 / 缓存 / 解析图片渲染 / Cloudflare �
 |--------|------|--------|------|
 | `BILI_CK` | string | — | B站 Cookie (SESSDATA)，获取 AI 总结和高清下载 |
 | `XHS_CK` | string | — | 小红书 Cookie，获取图片/视频下载 |
+| `ZHIHU_CK` | string | — | 知乎 Cookie，避开风控与登录引导以稳定解析知乎内容 |
 | `VIDEO_DURATION_MAXIMUM` | int | 480 | 视频最大时长（秒），超时不会下载 |
 | `DISABLED_PLATFORMS` | string | — | 禁用的平台（逗号分隔，如 `acfun,nga`） |
 
@@ -138,6 +141,11 @@ WebUI 设置页按「平台 / B站 / 缓存 / 解析图片渲染 / Cloudflare �
 2. F12 → 控制台 → 输入 `document.cookie`
 3. 复制整个 Cookie 字符串填入配置
 
+### 知乎 Cookie
+1. 浏览器登录 zhihu.com
+2. F12 → 控制台 → 输入 `document.cookie`
+3. 复制整个 Cookie 字符串填入配置 `ZHIHU_CK`
+
 ## 文件结构
 
 ```
@@ -149,7 +157,7 @@ astrbot_plugin_rika_share/
 ├── docs/
 │   └── previews/        # 渲染样式示例图
 ├── scripts/
-│   └── preview_layouts.py  # 全布局渲染回归脚本（一次性运行）
+│   └── preview_layouts.py  # 全布局渲染回归脚本
 ├── core/
 │   ├── config.py        # 配置管理
 │   ├── constants.py     # 常量和枚举
@@ -170,7 +178,9 @@ astrbot_plugin_rika_share/
 │   │   ├── xiaohongshu.py
 │   │   ├── twitter.py
 │   │   ├── nga.py
-│   │   └── acfun.py
+│   │   ├── acfun.py
+│   │   ├── xiaoheihe.py # 小黑盒解析器
+│   │   └── zhihu/       # 知乎解析器包
 │   └── bili_models/     # B站数据模型
 │       ├── video.py
 │       ├── dynamic.py

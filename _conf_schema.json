@@ -22,6 +22,12 @@
         "type": "string",
         "hint": "从浏览器获取 xiaohongshu.com 的 cookie (可选)",
         "obvious_hint": true
+      },
+      "ZHIHU_CK": {
+        "description": "知乎 Cookie",
+        "type": "string",
+        "hint": "从浏览器获取 zhihu.com 的 cookie (可选)",
+        "obvious_hint": true
       }
     }
   },

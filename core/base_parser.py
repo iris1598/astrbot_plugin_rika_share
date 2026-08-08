@@ -205,3 +205,21 @@ class BaseParser:
         else:
             path_task = url_or_task
         return AudioContent(PathTask(path_task), duration)
+
+    def create_video_content(self, url_or_task: str | asyncio.Task[Path], cover_url: str | None = None, duration: float | None = None, headers: dict[str, str] | None = None):
+        return self.create_video(url_or_task, cover_url=cover_url, duration=duration)
+
+    def create_image_contents(self, image_urls: list[str], headers: dict[str, str] | None = None):
+        return self.create_images(image_urls)
+
+    def create_audio_content(self, url_or_task: str | asyncio.Task[Path], duration: float = 0.0, headers: dict[str, str] | None = None):
+        return self.create_audio(url_or_task, duration=duration)
+
+    @property
+    def proxy(self) -> str | None:
+        return None
+
+    def create_video_content_by_task(self, path_task: Any, cover_url: str | None = None, duration: float | None = None, headers: dict[str, str] | None = None):
+        return self.create_video(path_task, cover_url=cover_url, duration=duration)
+
+
