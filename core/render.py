@@ -1263,7 +1263,7 @@ class ShareCardRenderer:
 
         # ============ 警告提示块 ============
         if limit_warnings:
-            y = self._draw_warning_block(canvas, draw, theme, limit_warnings, y, inner_w) + 16
+            y = self._draw_warning_block(canvas, draw, theme, limit_warnings, y, inner_w)
             draw = ImageDraw.Draw(canvas)
 
         # ============ 图集网格 ============
@@ -1681,8 +1681,8 @@ class ShareCardRenderer:
         line_h = self._line_height(font) + 4
         avail_w = inner_w - 46
 
-        # 下移 8px：加大与上方“多少人观看”的间距，同时靠近下方分界线
-        y += 8
+        # 精准居中对齐：上距“多少人观看”底 16px，下距分界线顶 16px
+        y += 2
 
         # 主题色彩适配：精致不张扬的琥珀警告色调
         if on_image:
@@ -1735,7 +1735,7 @@ class ShareCardRenderer:
 
             y += box_h + 12
 
-        return y - 24
+        return y - 18
 
     def _hero_aspect_height(self, hero_path: Path | None, box_w: int, default_h: int) -> int:
         """若开启了封面全尺寸模式 (cover_full_size)，按原图宽高比计算高度，否则使用 default_h。"""
@@ -1969,7 +1969,7 @@ class ShareCardRenderer:
         if d["online_text"]:
             y = self._draw_online(draw, d, y, accent)
         if d["warnings"]:
-            y = self._draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w) + 16
+            y = self._draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w)
             draw = ImageDraw.Draw(canvas)
         y = self._draw_grid_block(canvas, draw, theme, d["grid"], y, inner_w, gap)
         y = self._draw_quote_block(canvas, ImageDraw.Draw(canvas), theme, accent_rgb, result, y, inner_w)
@@ -2268,7 +2268,7 @@ class ShareCardRenderer:
         if d["online_text"]:
             y = self._draw_online(draw, d, y, accent)
         if d["warnings"]:
-            y = self._draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w) + 16
+            y = self._draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w)
             draw = ImageDraw.Draw(canvas)
         y = self._draw_grid_block(canvas, draw, theme, d["grid"], y, inner_w, gap)
         y = self._draw_quote_block(canvas, ImageDraw.Draw(canvas), theme, accent_rgb, result, y, inner_w)
