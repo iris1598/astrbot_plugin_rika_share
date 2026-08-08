@@ -1,184 +1,234 @@
-# 莉卡解析
+# 莉卡解析 (astrbot_plugin_rika_share)
 
-AstrBot 链接分享自动解析插件。移植自 [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser)。
+![AstrBot Plugin](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)
+![Version](https://img.shields.io/badge/Version-v2.4.0-brightgreen?style=flat-square)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square)
+![Pillow](https://img.shields.io/badge/Render-Pillow-orange?style=flat-square)
 
-## 支持平台
+**莉卡解析** 是一款专为 [AstrBot](https://github.com/Soulter/AstrBot) 打造的高能链接自动解析与媒体下载插件。移植自 [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser)，并针对 AstrBot 架构进行了深度重构与功能增强。
 
-| 平台 | 解析内容 | 下载 |
-|------|---------|------|
-| 哔哩哔哩 | 视频/动态/直播/专栏/收藏夹 | 视频（需 Cookie） |
-| 抖音 | 视频/图文 | 视频/图片 |
-| 快手 | 视频/图文 | 视频/图片 |
-| 微博 | 动态/文章/视频 | 视频/图片 |
-| 小红书 | 图文/视频 | 图片/视频（需 Cookie） |
-| Twitter/X | 推文/媒体 | 视频/图片 |
-| AcFun | 视频 | 视频 |
-| NGA | 帖子 | — |
+---
 
-## 输出格式
+## ✨ 核心亮点
 
-默认开启**精美解析卡片渲染**：解析结果会渲染成一张分享卡片图片**单独发送**
-（主动发送，不经过合并转发、也不会被附加上“引用回复”，任何平台一致）。
-卡片支持 **4 种可切换的布局**（详见[解析图片渲染](#解析图片渲染)），
-含封面横幅 / 毛玻璃徽章 / 统计药丸 / 图集网格 / 转发引用与页脚水印。
+- 🚀 **多平台自动解析**：自动识别聊天中的链接与 JSON 分享卡片，提取标题、正文、作者、数据统计、图集及无水印视频。
+- 🔑 **B站扫码登录 & Cookie 自动化监控**：
+  - **无需抓包**：聊天框直接发送 `/bili_login` 即可生成动态二维码，扫码确认自动完成登录。
+  - **加密持久化**：Cookie 使用 AES/Fernet 加密保存，重启不丢失。
+  - **健康度监控**：后台定时轮询检测 Cookie 有效性，检测到失效/恢复时自动通知指定管理员。
+  - **无缝自动应用**：扫码成功后自动注入解析引擎，无需手动重载配置。
+- 🎨 **Pillow 纯 Headless 渲染**：
+  - **无浏览器依赖**：使用 Python Pillow 库高性能无头渲染，毫秒级输出。
+  - **4 种现代卡片布局**：支持 `standard`（标准横幅）、`magazine`（双栏杂志）、`immersive`（沉浸全屏）、`feed`（社交动态）。
+  - **深/浅双主题**：支持 `dark` 与 `light` 配色模式、全尺寸封面模式、品牌光晕与毛玻璃徽章。
+- 🌐 **Cloudflare 网页截图 Fallback**：
+  - 未匹配到任何已有平台的常规网页链接，可自动调用 Cloudflare Browser Rendering API 渲染网页截图发送。
+  - 支持自定义视窗、清晰度倍率 (deviceScaleFactor)、CSS 元素截取、Cookie/Header 注入及黑名单过滤。
+- ⚡ **跨平台适配器自动优化**：
+  - **OneBot v11**：自动构建优雅的节点合并转发（Nodes），避免消息刷屏。
+  - **QQ Official / Telegram 等**：自动拆分兼容量，采用主动发送机制，防止消息被 `@` 回复格式干扰。
 
-渲染模式下：
+---
 
-- **图文 / 图集帖**：卡片发送后保留文字部分与图集图片，按平台规则发送
-  （OneBot 走合并转发，其他平台直接发送）；
-- **视频帖**：卡片已承载全部信息，不再重复发送文字摘要，视频文件仍单独发送；
-- 卡片图单独发送失败时自动回退为普通回复发送；渲染失败时回退为文本输出。
+## 🌐 支持平台矩阵
 
-关闭渲染后的文本输出格式（合并转发）：
+| 平台 | 覆盖类型 | 媒体/文件下载 | 平台特色与备注 |
+| :--- | :--- | :--- | :--- |
+| **哔哩哔哩 (Bilibili)** | 视频 / 动态 / 图文(Opus) / 直播 / 专栏 / 收藏夹 | 高清视频（支持 1080P/4K/8K）、封面、图集 | 支持 `/bili_login` 扫码登录、自动监控与高清视频下载 |
+| **抖音 (Douyin)** | 视频 / 图文动态 | 无水印视频、高清图集 | 支持短链解析、封面自动提取 |
+| **快手 (Kuaishou)** | 视频 / 图文 | 无水印视频、高清图片 | 支持短链与网页链接 |
+| **微博 (Weibo)** | 微博动态 / 文章 / 视频 | 原图图集、无水印视频 | 支持多图网格、转发引用结构提取 |
+| **小红书 (Xiaohongshu)** | 图文笔记 / 视频笔记 | 原图无水印图集、视频 | 支持 `XHS_CK` 鉴权与水印去除 |
+| **Twitter / X** | 推文 / 媒体 | 高清图片、视频 | 支持 `x.com` 链接解析 |
+| **AcFun (A站)** | 视频 | 视频文件 | 基础视频解析 |
+| **NGA 论坛** | 帖子内容 / 主题 | 帖子正文与图集 | 论坛内容快速展示 |
+| **通用网页 (Cloudflare)** | 任意 HTTP/HTTPS 网页 | 网页高清无头截图 | 需开通 Cloudflare Browser Rendering 兜底 |
 
-```
-（合并转发）
-  消息1：莉卡解析 | 平台 - 类型
-  消息2：标题 / 链接 / 封面
-  消息3：时长 / 统计 / 简介
-（单独发送）视频/图片文件
-```
+---
 
-各平台格式可自定义适配。
+## 🎨 精美解析卡片渲染
 
-## 解析图片渲染
+开启 `RENDER_ENABLED` 后，解析结果将无头渲染为现代视觉风格的分享卡片图片单独发送，带来极佳的视觉体验。
 
-使用 Pillow 将解析结果渲染为卡片图片，无需浏览器。采用**现代卡片风格**：
-深/浅双主题、毛玻璃徽章与统计药丸、品牌色渗透光晕、圆角与柔和投影。
-
-### 布局预览
+### 布局展示
 
 ![渲染样式总览](docs/previews/overview-layouts.png)
 
-四种布局可在配置中自由切换，适配全部已支持平台：
+插件提供 4 种自由切换的卡片布局：
 
-| 布局 | 说明 |
-|------|------|
-| `standard` 标准横幅 | 顶部全宽封面横幅 + 纵向信息流（默认） |
-| `magazine` 双栏杂志 | 封面缩为左侧方块，标题/作者置于右栏 |
-| `immersive` 沉浸全屏 | 封面铺满整卡，内容浮于渐变 scrim 上（无图内容自动回退标准布局） |
-| `feed` 社交动态 | 作者行置顶，媒体为内嵌圆角块，类似信息流卡片 |
+| 布局名称 (`RENDER_LAYOUT`) | 布局特点与适用场景 |
+| :--- | :--- |
+| **`standard` 标准横幅** *(默认)* | 顶部全宽封面横幅 + 纵向信息流，视觉大气平衡，适合绝大多数视频与动态。 |
+| **`magazine` 双栏杂志** | 封面紧凑收纳于左侧，标题与作者信息至于右侧，适合长文本及文章。 |
+| **`immersive` 沉浸全屏** | 封面高斯模糊+铺满整卡，文字浮于渐变 Dark Scrim 遮罩上（无图时自动回退 standard）。 |
+| **`feed` 社交动态** | 作者头像与信息行置顶，媒体块内嵌为圆角多图/单图，原生 App 社交流风格。 |
 
-浅色主题示例：
+### 主题风格
 
-![浅色主题](docs/previews/layout-standard-light.png)
+支持 **深色 (`dark`)** 与 **浅色 (`light`)** 两套配色：
 
-各布局共有的卡片元素：平台徽标（品牌色圆点）+ 内容类型 + 发布时间、圆形作者头像与
-签名、正文简介、数据统计徽章、图集网格（超过 6 张显示 +N）、转发内容引用卡片、
-底部链接与「莉卡解析」水印。
+![浅色主题示例](docs/previews/layout-standard-light.png)
 
+> 💡 **提示**：Linux 服务器环境建议安装中文字体（如 `apt install fonts-noto-cjk`），或在配置 `RENDER_FONT_PATH` 中手动指定 `.ttf/.otf` 字体文件，避免卡片文字显示为方块。
+
+---
+
+## 🛠️ 指令说明
+
+插件内置管理员专属的 B站 Cookie 运维指令：
+
+| 指令 | 权限要求 | 功能说明 |
+| :--- | :--- | :--- |
+| `/bili_login` | **ADMIN** | 启动 B站 扫码登录流程。机器人将生成并发送二维码图片，扫码确认后自动保存密钥并启用 Cookie。 |
+| `/bili_check` | 所有人 / ADMIN | 手动检测当前 B站 Cookie 的有效性，显示用户昵称、UID 及会员状态。 |
+| `/bili_status` | 所有人 / ADMIN | 查看当前 B站 Cookie 状态以及后台健康监控任务的运行状态。 |
+
+---
+
+## ⚙️ 配置说明
+
+在 AstrBot 管理面板 WebUI 中，配置已按逻辑划分为 7 大分组：
+
+### 1. 平台设置
 | 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `RENDER_ENABLED` | bool | true | 启用解析图片渲染，失败自动回退文本 |
-| `RENDER_THEME` | string | `dark` | 卡片主题：`dark` / `light` |
-| `RENDER_LAYOUT` | string | `standard` | 卡片布局：`standard` / `magazine` / `immersive` / `feed` |
-| `RENDER_WIDTH` | int | 800 | 卡片宽度（520-1080px） |
-| `RENDER_FONT_PATH` | string | — | 自定义字体文件/目录，留空自动探测系统中文字体 |
+| :--- | :--- | :--- | :--- |
+| `DISABLED_PLATFORMS` | string | `""` | 禁用的平台（逗号分隔，例如 `acfun,nga`，留空表示全部启用） |
+| `VIDEO_DURATION_MAXIMUM` | int | `480` | 视频/音频最大解析时长（秒），超出此时长的视频将不下载视频文件 |
+| `XHS_CK` | string | `""` | 小红书 Cookie（可选，填入后可解析/下载小红书高清视频与图集） |
 
-Linux 服务器建议安装中文字体（如 `fonts-noto-cjk`），否则卡片文字会显示为方块；
-也可以在 `RENDER_FONT_PATH` 中直接指定字体文件。
-
-## 安装
-
-1. 将 `astrbot_plugin_rika_share` 放入 `data/plugins/` 目录
-2. 安装依赖：
-
-```bash
-pip install -r requirements.txt
-```
-
-3. 重启 AstrBot，在 WebUI 插件管理中启用
-
-## 配置
-
-WebUI 设置页按「平台 / B站 / 缓存 / 解析图片渲染 / Cloudflare 基础 / Cloudflare 截图 / 调试」分组展示，以下为全部配置项：
-
+### 2. B站设置
 | 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `BILI_CK` | string | — | B站 Cookie (SESSDATA)，获取 AI 总结和高清下载 |
-| `XHS_CK` | string | — | 小红书 Cookie，获取图片/视频下载 |
-| `VIDEO_DURATION_MAXIMUM` | int | 480 | 视频最大时长（秒），超时不会下载 |
-| `DISABLED_PLATFORMS` | string | — | 禁用的平台（逗号分隔，如 `acfun,nga`） |
+| :--- | :--- | :--- | :--- |
+| `BILI_CK` | string | `""` | B站 Cookie (SESSDATA)。*建议直接使用 `/bili_login` 扫码登录自动填入* |
+| `BILI_QUALITY` | string | `"1080P"` | B站视频下载清晰度，可选: `360P`, `480P`, `720P`, `1080P`, `1080P+`, `4K`, `8K` (需账号权限) |
+| `BILI_COOKIE_MONITOR_ENABLED` | bool | `true` | 是否启用 B站 Cookie 定时监控 |
+| `BILI_COOKIE_CHECK_INTERVAL` | int | `3600` | Cookie 状态检测间隔时间（秒，最小 60 秒） |
+| `BILI_NOTIFY_USER_ID` | string | `""` | Cookie 失效/恢复时接收通知的 QQ 号或 UserID（留空仅打印日志） |
 
-## Cloudflare 网页截图
-
-链接不匹配任何已适配平台时，可自动用 Cloudflare Browser Rendering 渲染网页并截图发送。
-
+### 3. 缓存设置
 | 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `CLOUDFLARE_FALLBACK_ENABLED` | bool | false | 启用网页截图兜底 |
-| `CLOUDFLARE_ACCOUNT_ID` | string | — | Cloudflare 账号 ID（需开通 Browser Rendering） |
-| `CLOUDFLARE_API_TOKEN` | string | — | API Token（需 Browser Rendering - Edit 权限） |
-| `CLOUDFLARE_TIMEOUT` | int | 60 | 截图 API 超时（秒） |
-| `CLOUDFLARE_VIEWPORT_WIDTH` / `HEIGHT` | int | 1280 / 720 | 渲染视窗尺寸 |
-| `CLOUDFLARE_WAIT_UNTIL` | string | `networkidle0` | 页面加载策略：`load` / `domcontentloaded` / `networkidle0` / `networkidle2` |
-| `CLOUDFLARE_GOTO_TIMEOUT` | int | 45000 | 页面导航超时（毫秒） |
-| `CLOUDFLARE_FULL_PAGE` | bool | false | 整页截图（含滚动区域） |
-| `CLOUDFLARE_DEVICE_SCALE_FACTOR` | float | 1 | 截图清晰度，增大可避免大视窗截图模糊（1-3） |
-| `CLOUDFLARE_SCREENSHOT_TYPE` | string | `png` | 截图格式：`png` / `jpeg` |
-| `CLOUDFLARE_SCREENSHOT_QUALITY` | int | 0 | JPEG 质量 0-100（png 下自动忽略） |
-| `CLOUDFLARE_OMIT_BACKGROUND` | bool | false | 透明背景（仅 png 有效） |
-| `CLOUDFLARE_SELECTOR` | string | — | CSS 选择器，只截取指定元素 |
-| `CLOUDFLARE_WAIT_FOR_SELECTOR` | string | — | 等待该元素出现后再截图（JS 动态页面） |
-| `CLOUDFLARE_USER_AGENT` | string | — | 自定义 User-Agent |
-| `CLOUDFLARE_EXTRA_HEADERS` | text(JSON) | — | 附加请求头，如 `{"Authorization":"Bearer xxx"}` |
-| `CLOUDFLARE_COOKIES` | text(JSON) | — | 附加 Cookie 数组，如 `[{"name":"session","value":"xxx","domain":"example.com","path":"/"}]` |
-| `CLOUDFLARE_CACHE_TTL` | int | 0 | 截图缓存秒数，0 表示不缓存 |
-| `CLOUDFLARE_BLACKLIST` | list | — | 截图黑名单：域名（`example.com` 含子域名）、通配符（`*.example.com`）、路径前缀（`https://example.com/login`）或不含点的关键词 |
+| :--- | :--- | :--- | :--- |
+| `CACHE_TTL_HOURS` | int | `24` | 缓存过期清理时间（小时）。设为 `0` 禁用自动清理 |
+| `CACHE_CLEANUP_INTERVAL_MINUTES` | int | `60` | 缓存清理定时检查间隔（分钟） |
 
-## 获取 Cookie
+### 4. 解析图片渲染
+| 配置项 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `RENDER_ENABLED` | bool | `true` | 是否启用 Pillow 解析图片渲染（失败自动降级为文本形式） |
+| `RENDER_THEME` | string | `"dark"` | 卡片主题，可选：`dark`（深色） / `light`（浅色） |
+| `RENDER_LAYOUT` | string | `"standard"` | 卡片布局，可选：`standard` / `magazine` / `immersive` / `feed` |
+| `RENDER_WIDTH` | int | `800` | 卡片图片像素宽度（范围 520 - 1080px） |
+| `RENDER_COVER_FULL_SIZE` | bool | `false` | 开启后封面完整显示原始宽高比，不进行中心裁剪 |
+| `RENDER_FONT_PATH` | string | `""` | 自定义字体文件/目录路径（.ttf/.ttc/.otf），留空自动探测系统字体 |
 
-### B站 SESSDATA
-1. 浏览器登录 bilibili.com
-2. F12 → 控制台 → 输入 `document.cookie`
-3. 找到 `SESSDATA=xxx;`，复制 `xxx` 填入配置
+### 5. Cloudflare 基础设置 (网页截图 Fallback)
+| 配置项 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `CLOUDFLARE_FALLBACK_ENABLED` | bool | `false` | 启用通用链接网页截图兜底（未匹配已知适配器时触发） |
+| `CLOUDFLARE_ACCOUNT_ID` | string | `""` | Cloudflare 账号 ID (需开通 Browser Rendering 服务) |
+| `CLOUDFLARE_API_TOKEN` | string | `""` | Cloudflare API Token (需具备 Browser Rendering - Edit 权限) |
+| `CLOUDFLARE_TIMEOUT` | int | `60` | 截图 API 请求超时时间（秒） |
+| `CLOUDFLARE_CACHE_TTL` | int | `0` | 截图缓存 TTL（秒），`0` 表示不缓存每次重新渲染 |
+| `CLOUDFLARE_BLACKLIST` | list | `[]` | 截图黑名单规则（支持完整域名、`*.example.com` 通配符、路径前缀或无点关键词） |
 
-### 小红书 Cookie
-1. 浏览器登录 xiaohongshu.com
-2. F12 → 控制台 → 输入 `document.cookie`
-3. 复制整个 Cookie 字符串填入配置
+### 6. Cloudflare 截图高级设置
+| 配置项 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `CLOUDFLARE_VIEWPORT_WIDTH` / `HEIGHT` | int | `1280` / `720` | 无头浏览器视窗宽度与高度 |
+| `CLOUDFLARE_DEVICE_SCALE_FACTOR` | float | `1.0` | 截图清晰度缩放倍率（推荐 1.0~3.0，增大可消除大屏模糊） |
+| `CLOUDFLARE_WAIT_UNTIL` | string | `"networkidle0"` | 页面加载等待策略：`load` / `domcontentloaded` / `networkidle0` / `networkidle2` |
+| `CLOUDFLARE_FULL_PAGE` | bool | `false` | 是否截取完整长图（包含滚动区域） |
+| `CLOUDFLARE_SELECTOR` | string | `""` | 指定截取的 CSS 选择器（如 `#content`），留空截取整页 |
+| `CLOUDFLARE_WAIT_FOR_SELECTOR` | string | `""` | 等待指定 CSS 选择器元素出现后再截图（适合 SPA 动态渲染页） |
+| `CLOUDFLARE_SCREENSHOT_TYPE` | string | `"png"` | 截图格式，可选：`png` / `jpeg` |
+| `CLOUDFLARE_EXTRA_HEADERS` | JSON | `""` | 请求附加 HTTP Header (JSON 对象格式) |
+| `CLOUDFLARE_COOKIES` | JSON | `""` | 页面附加 Cookie (JSON 数组格式) |
 
-## 文件结构
+### 7. 调试设置
+| 配置项 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `DEBUG_LOG_ENABLED` | bool | `true` | 是否启用详细错误调试日志 |
 
-```
+---
+
+## 📦 安装与部署
+
+1. **获取插件代码**：
+   将 `astrbot_plugin_rika_share` 文件夹放入 AstrBot 的 `data/plugins/` 目录中。
+
+2. **安装依赖**：
+   在插件根目录下运行依赖安装：
+   ```bash
+   pip install -r requirements.txt
+   ```
+   *插件核心依赖包括 `aiohttp`, `qrcode`, `cryptography`, `pillow`, `pydantic` 等。*
+
+3. **启用插件**：
+   重启 AstrBot 并在管理面板 WebUI 中启用 `莉卡解析`。
+
+---
+
+## 🔐 Cookie 获取指南
+
+### 方式一：B站扫码登录 (极力推荐 ⭐⭐⭐⭐⭐)
+1. 在配置的管理员账号下，直接向机器人发送指令 `/bili_login`。
+2. 机器人将发送一张登录二维码图片。
+3. 打开手机 **B站 App** 扫描该二维码，并点击 **确认登录**。
+4. 机器人提示登录成功后，Cookie 会**加密保存并自动生效**，无需重启！
+
+### 方式二：手动配置 B站 SESSDATA
+1. 使用电脑浏览器登录 [bilibili.com](https://www.bilibili.com)。
+2. 按 `F12` 打开开发者工具，切换到 `Application` (应用) -> `Cookies`。
+3. 找到 `SESSDATA` 项，复制其 Value 值。
+4. 填入插件配置项中的 `BILI_CK`。
+
+### 方式三：小红书 Cookie 配置
+1. 使用电脑浏览器登录 [xiaohongshu.com](https://www.xiaohongshu.com)。
+2. 按 `F12` 打开开发者工具，在控制台 (Console) 中输入 `document.cookie` 并回车。
+3. 复制打印出的完整 Cookie 字符串，填入插件配置项中的 `XHS_CK`。
+
+---
+
+## 📁 目录结构
+
+```text
 astrbot_plugin_rika_share/
-├── main.py              # 插件入口
-├── metadata.yaml        # 插件元数据
-├── _conf_schema.json    # 配置定义
-├── requirements.txt     # 依赖
+├── main.py                    # 插件主入口 (事件响应、B站扫码登录/监控、Fallback路由)
+├── metadata.yaml              # 插件元数据定义
+├── _conf_schema.json          # WebUI 配置项分组 Schema 定义
+├── requirements.txt           # Python 依赖清单
 ├── docs/
-│   └── previews/        # 渲染样式示例图
+│   └── previews/              # 卡片渲染与布局预览图
 ├── scripts/
-│   └── preview_layouts.py  # 全布局渲染回归脚本（一次性运行）
-├── core/
-│   ├── config.py        # 配置管理
-│   ├── constants.py     # 常量和枚举
-│   ├── exception.py     # 异常类
-│   ├── utils.py         # 工具函数
-│   ├── utils_parser.py  # 解析工具
-│   ├── task.py          # 异步路径包装
-│   ├── data.py          # 数据模型
-│   ├── cookie.py        # Cookie 工具
-│   ├── download.py      # 下载器
-│   ├── render.py        # 精美解析卡片渲染（Pillow）
-│   ├── base_parser.py   # 解析器基类
-│   ├── parsers/         # 各平台解析器
-│   │   ├── bilibili.py
-│   │   ├── douyin.py
-│   │   ├── kuaishou.py
-│   │   ├── weibo.py
-│   │   ├── xiaohongshu.py
-│   │   ├── twitter.py
-│   │   ├── nga.py
-│   │   └── acfun.py
-│   └── bili_models/     # B站数据模型
-│       ├── video.py
-│       ├── dynamic.py
-│       ├── opus.py
-│       ├── live.py
-│       └── favlist.py
+│   └── preview_layouts.py     # 布局渲染测试回归脚本
+└── core/
+    ├── config.py              # 配置读取与旧版配置自动迁移
+    ├── constants.py           # 常量与枚举
+    ├── data.py                # ParseResult 等核心数据模型
+    ├── download.py            # 异步流式下载器 (支持进度与限速)
+    ├── render.py              # Pillow 卡片渲染引擎
+    ├── cloudflare_screenshot.py# Cloudflare Browser Rendering API 客户端
+    ├── bili_models/           # B站各种消息模型解析
+    └── parsers/               # 各平台解析适配器
+        ├── bilibili.py        # B站解析器
+        ├── douyin.py          # 抖音解析器
+        ├── kuaishou.py        # 快手解析器
+        ├── weibo.py           # 微博解析器
+        ├── xiaohongshu.py     # 小红书解析器
+        ├── twitter.py         # Twitter/X 解析器
+        ├── nga.py             # NGA 解析器
+        └── acfun.py           # AcFun 解析器
 ```
 
-## 致谢
+---
 
-- [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser) — 原版插件
+## 🙏 致谢
+
+- [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser) — 感谢原 NoneBot2 插件作者的优秀思路与解析库逻辑。
+- [AstrBot](https://github.com/Soulter/AstrBot) — 强大的多平台 AI 机器人框架。
+
+---
+
+## 📄 开源许可
+
+本项目遵循 MIT 许可证。
