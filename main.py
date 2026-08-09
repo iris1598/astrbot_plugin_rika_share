@@ -836,8 +836,8 @@ class ParserPlugin(Star):
         yield event.plain_result("\n".join(lines))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("rika_clear_cache", alias={"clear_cache", "清理缓存"})
-    async def rika_clear_cache(self, event: AstrMessageEvent):
+    @filter.command("clear_cache", alias={"清理缓存"})
+    async def clear_cache(self, event: AstrMessageEvent):
         """手动清理插件缓存。"""
         try:
             cleaned = await clear_cache_dir(self.cache_dir)
