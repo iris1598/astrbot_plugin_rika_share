@@ -61,7 +61,7 @@ CONFIG_GROUP_KEYS: dict[str, tuple[str, ...]] = {
         "CLOUDFLARE_EXTRA_HEADERS",
         "CLOUDFLARE_COOKIES",
     ),
-    "调试设置": ("DEBUG_LOG_ENABLED",),
+    "调试设置": ("DEBUG_LOG_ENABLED", "SEND_ERROR_MESSAGES"),
 }
 
 _KEY_GROUP_MAP: dict[str, str] = {
@@ -108,6 +108,7 @@ _LEGACY_DEFAULTS: dict[str, Any] = {
     "CLOUDFLARE_EXTRA_HEADERS": "",
     "CLOUDFLARE_COOKIES": "",
     "DEBUG_LOG_ENABLED": True,
+    "SEND_ERROR_MESSAGES": False,
 }
 
 
@@ -373,6 +374,11 @@ class ParserConfig:
     def DEBUG_LOG_ENABLED(self) -> bool:
         """是否启用详细错误日志"""
         return bool(self._cfg_get("DEBUG_LOG_ENABLED", True))
+
+    @property
+    def SEND_ERROR_MESSAGES(self) -> bool:
+        """是否向对话发送插件错误消息"""
+        return bool(self._cfg_get("SEND_ERROR_MESSAGES", False))
 
 
 def init_config(astrbot_config: Any, cache_dir: Path, config_dir: Path) -> ParserConfig:

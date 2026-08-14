@@ -513,14 +513,35 @@ class ParserPlugin(Star):
         except SilentException:
             return  # 匹配不到模式时静默失败，不发送通知
         except IgnoreException as e:
-            yield event.plain_result(f"ℹ️ {e.message}")
+            result = self._error_result(event, f"ℹ️ {e.message}")
+            if result is not None:
+                yield result
         except ParseException as e:
-            yield event.plain_result(f"❌ 解析失败: {e.message}")
+            result = self._error_result(event, f"❌ 解析失败: {e.message}")
+            if result is not None:
+                yield result
         except DownloadException as e:
-            yield event.plain_result(f"⚠️ 下载失败: {e.message}")
+            result = self._error_result(event, f"⚠️ 下载失败: {e.message}")
+            if result is not None:
+                yield result
         except Exception as e:
             logger.exception(f"解析异常")
-            yield event.plain_result(f"❌ 处理出错: {str(e)[:100]}")
+            result = self._error_result(event, f"❌ 处理出错: {str(e)[:100]}")
+            if result is not None:
+                yield result
+
+    @staticmethod
+    def _error_result(event: AstrMessageEvent, message: str) -> MessageEventResult | None:
+        """根据配置生成错误回复；关闭发送开关时不向对话发送。"""
+        if not get_config().SEND_ERROR_MESSAGES:
+            return None
+        return event.plain_result(message)
+
+    async def _notify_error_user(self, sender_id: str, message: str):
+        """向扫码登录用户发送错误消息，受错误消息发送开关控制。"""
+        if not get_config().SEND_ERROR_MESSAGES:
+            return
+        await self._bili_notify_user(sender_id, message)
 
     async def _try_send_media(self, event: AstrMessageEvent, result: ParseResult):
         """单独发送媒体文件。所有图片/封面已在合并转发中，不重复发送。
@@ -749,20 +770,30 @@ class ParserPlugin(Star):
                 data = await resp.json()
 
             if data.get("code") != 0:
-                yield event.plain_result(f"❌ 获取二维码失败: {data.get('message', '未知错误')}")
+                result = self._error_result(
+                    event, f"❌ 获取二维码失败: {data.get('message', '未知错误')}"
+                )
+                if result is not None:
+                    yield result
                 return
 
             qrcode_url = data["data"]["url"]
             qrcode_key = data["data"]["qrcode_key"]
 
             if not qrcode_key:
-                yield event.plain_result("❌ 获取qrcode_key失败")
+                result = self._error_result(event, "❌ 获取qrcode_key失败")
+                if result is not None:
+                    yield result
                 return
 
             # 生成二维码图片
             qr_image = self._bili_generate_qrcode_image(qrcode_url)
             if not qr_image:
-                yield event.plain_result("❌ 二维码生成失败，请检查是否已安装 qrcode 库")
+                result = self._error_result(
+                    event, "❌ 二维码生成失败，请检查是否已安装 qrcode 库"
+                )
+                if result is not None:
+                    yield result
                 return
 
             # 保存并发送二维码图片
@@ -787,12 +818,18 @@ class ParserPlugin(Star):
             self._bili_login_tasks[sender_id] = task
 
         except asyncio.TimeoutError:
-            yield event.plain_result("❌ 请求超时，请稍后重试")
+            result = self._error_result(event, "❌ 请求超时，请稍后重试")
+            if result is not None:
+                yield result
         except aiohttp.ClientError as e:
-            yield event.plain_result(f"❌ 网络错误: {e}")
+            result = self._error_result(event, f"❌ 网络错误: {e}")
+            if result is not None:
+                yield result
         except Exception as e:
             logger.exception("扫码登录出错")
-            yield event.plain_result(f"❌ 生成二维码失败: {e}")
+            result = self._error_result(event, f"❌ 生成二维码失败: {e}")
+            if result is not None:
+                yield result
 
     @filter.command("bili_check")
     async def bili_check_cookie(self, event: AstrMessageEvent):
@@ -812,14 +849,17 @@ class ParserPlugin(Star):
 
         if result["valid"]:
             msg = f"✅ B站Cookie有效\n用户: {result.get('username', '未知')}\nUID: {result.get('uid', 0)}"
+            yield event.plain_result(msg)
         else:
-            msg = f"❌ B站Cookie失效\n错误: {result.get('error', '未知错误')}"
+            error_result = self._error_result(
+                event, f"❌ B站Cookie失效\n错误: {result.get('error', '未知错误')}"
+            )
+            if error_result is not None:
+                yield error_result
 
         self._bili_last_status = result
         self._bili_last_check_time = datetime.now()
         await self._bili_save_last_status()
-
-        yield event.plain_result(msg)
 
     @filter.command("bili_status")
     async def bili_status(self, event: AstrMessageEvent):
@@ -846,7 +886,9 @@ class ParserPlugin(Star):
             yield event.plain_result(f"✅ 莉卡解析缓存清理完成，共清理 {cleaned} 个文件")
         except Exception as exc:
             logger.exception("手动清理莉卡解析缓存失败")
-            yield event.plain_result(f"❌ 缓存清理失败: {exc}")
+            result = self._error_result(event, f"❌ 缓存清理失败: {exc}")
+            if result is not None:
+                yield result
 
     # ---------- 内部方法 ----------
 
@@ -933,7 +975,9 @@ class ParserPlugin(Star):
                             cookie_dict[name.strip()] = value.strip()
 
                     if not cookie_dict:
-                        await self._bili_notify_user(sender_id, "❌ 登录成功但未获取到Cookie，请重试")
+                        await self._notify_error_user(
+                            sender_id, "❌ 登录成功但未获取到Cookie，请重试"
+                        )
                         break
 
                     cookie_str = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
@@ -969,7 +1013,7 @@ class ParserPlugin(Star):
                         )
                         self._bili_was_invalid = False
                     else:
-                        await self._bili_notify_user(
+                        await self._notify_error_user(
                             sender_id,
                             f"⚠️ Cookie已保存但验证失败: {result.get('error')}"
                         )

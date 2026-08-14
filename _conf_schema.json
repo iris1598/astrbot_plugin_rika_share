@@ -344,6 +344,13 @@
         "default": true,
         "hint": "关闭后，下载失败等错误将不会在日志中打印详细堆栈",
         "obvious_hint": false
+      },
+      "SEND_ERROR_MESSAGES": {
+        "description": "发送插件错误消息",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，插件发生错误时向对话发送错误信息；关闭后仅保留插件日志",
+        "obvious_hint": true
       }
     }
   },
@@ -684,6 +691,14 @@
     "default": true,
     "hint": "关闭后，下载失败等错误将不会在日志中打印详细堆栈",
     "obvious_hint": false,
+    "invisible": true
+  },
+  "SEND_ERROR_MESSAGES": {
+    "description": "发送插件错误消息",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，插件发生错误时向对话发送错误信息；关闭后仅保留插件日志",
+    "obvious_hint": true,
     "invisible": true
   }
 }
