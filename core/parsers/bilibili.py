@@ -28,6 +28,43 @@ except Exception:
 class BilibiliParser(BaseParser):
     platform: ClassVar[Platform] = Platform(name=PlatformEnum.BILIBILI, display_name="哔哩哔哩")
 
+    @staticmethod
+    def _is_transient_api_error(error: Exception) -> bool:
+        """判断 B 站接口错误是否适合重试。
+
+        -504 是 B 站上游服务调用超时，通常是临时性错误；网络层超时也按同样方式处理。
+        """
+        if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+            return True
+
+        code = getattr(error, "code", None)
+        if code is None:
+            code = getattr(error, "retcode", None)
+        try:
+            if int(code) == -504:
+                return True
+        except (TypeError, ValueError):
+            pass
+
+        message = str(error).lower()
+        return "-504" in message or "服务调用超时" in message or "timeout" in message or "timed out" in message
+
+    async def _call_bili_api_with_retry(self, call, *, operation: str, retries: int = 2):
+        """对 B 站临时超时做少量退避重试，避免瞬时故障直接导致解析失败。"""
+        for attempt in range(retries + 1):
+            try:
+                return await call()
+            except Exception as error:
+                if not self._is_transient_api_error(error) or attempt >= retries:
+                    raise
+
+                delay = 0.8 * (attempt + 1)
+                logger.warning(
+                    f"B站{operation}接口临时超时，{delay:.1f}秒后重试 "
+                    f"({attempt + 1}/{retries})：{error}"
+                )
+                await asyncio.sleep(delay)
+
     def __init__(self, downloader, bili_ck: str | None = None, config_dir=None):
         super().__init__(downloader)
         self.headers = HEADERS.copy()
@@ -83,8 +120,12 @@ class BilibiliParser(BaseParser):
     async def parse_video(self, *, bvid: str | None = None, avid: int | None = None, page_num: int = 1):
         from ..bili_models.video import VideoInfo, AIConclusion
 
-        video = Video(bvid=bvid, aid=avid, credential=await self.credential)
-        video_info = convert(await video.get_info(), VideoInfo)
+        credential = await self.credential
+        video = Video(bvid=bvid, aid=avid, credential=credential)
+        video_info = convert(
+            await self._call_bili_api_with_retry(video.get_info, operation="视频信息"),
+            VideoInfo,
+        )
         author = self.create_author(video_info.owner.name, video_info.owner.face)
         page_info = video_info.extract_info_with_page(page_num)
 
@@ -92,10 +133,18 @@ class BilibiliParser(BaseParser):
         pconfig = get_config()
 
         cid = page_info.cid
-        if self._credential and cid is not None:
-            ai_result = await video.get_ai_conclusion(cid=cid)
-            ai_conclusion = convert(ai_result, AIConclusion)
-            ai_summary = ai_conclusion.summary
+        ai_summary = "B站 AI 总结暂时不可用"
+        if credential and cid is not None:
+            try:
+                ai_result = await self._call_bili_api_with_retry(
+                    lambda: video.get_ai_conclusion(cid=cid),
+                    operation="AI总结",
+                )
+                ai_conclusion = convert(ai_result, AIConclusion)
+                ai_summary = ai_conclusion.summary
+            except Exception as error:
+                # AI 总结是附加信息，接口临时超时不应阻断标题、封面和视频解析。
+                logger.warning(f"B站 AI 总结获取失败，跳过该字段继续解析：{error}")
         else:
             ai_summary = "哔哩哔哩 cookie 未配置或失效, 无法使用 AI 总结"
 
@@ -308,7 +357,10 @@ class BilibiliParser(BaseParser):
         if video is None:
             video = Video(bvid=bvid, aid=avid, credential=await self.credential)
 
-        download_url_data = await video.get_download_url(page_index=page_index)
+        download_url_data = await self._call_bili_api_with_retry(
+            lambda: video.get_download_url(page_index=page_index),
+            operation="视频流地址",
+        )
         detecter = VideoDownloadURLDataDetecter(download_url_data)
         streams = detecter.detect_best_streams(
             video_max_quality=target_quality,
