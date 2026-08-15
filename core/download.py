@@ -27,13 +27,31 @@ class StreamDownloader:
         await self.client.aclose()
 
     @staticmethod
-    def _validate_content_length(response: httpx.Response) -> int:
+    def _validate_content_length(response: httpx.Response) -> int | None:
+        """校验明确声明的响应大小。
+
+        抖音 CDN 经常使用 ``Transfer-Encoding: chunked``，此时不会返回
+        ``Content-Length``。缺少该响应头并不代表响应为空，实际大小需要
+        在流式下载过程中统计。
+        """
         content_length = response.headers.get("Content-Length")
-        content_length = int(content_length) if content_length else 0
+        if not content_length:
+            return None
+
+        content_length = int(content_length)
         if content_length == 0:
             logger.warning(f"媒体 url: {response.url}, 大小为 0, 取消下载")
             raise IgnoreException
         return content_length
+
+    @staticmethod
+    async def _validate_downloaded_bytes(file_path: Path, url: str, received_bytes: int):
+        """防止把空响应当成成功下载，并清理已创建的空文件。"""
+        if received_bytes > 0:
+            return
+        await safe_unlink(file_path)
+        logger.warning(f"媒体 url: {url}, 大小为 0, 取消下载")
+        raise IgnoreException
 
     async def _download_file_with_httpx(
         self,
@@ -46,9 +64,17 @@ class StreamDownloader:
         async with self.client.stream("GET", url, headers=headers, follow_redirects=True) as response:
             response.raise_for_status()
             self._validate_content_length(response)
-            async with aiofiles.open(file_path, "wb") as file:
-                async for chunk in response.aiter_bytes(chunk_size):
-                    await file.write(chunk)
+            received_bytes = 0
+            try:
+                async with aiofiles.open(file_path, "wb") as file:
+                    async for chunk in response.aiter_bytes(chunk_size):
+                        if chunk:
+                            await file.write(chunk)
+                            received_bytes += len(chunk)
+            except Exception:
+                await safe_unlink(file_path)
+                raise
+            await self._validate_downloaded_bytes(file_path, str(response.url), received_bytes)
         return file_path
 
     async def _download_file_with_curl_cffi(
@@ -69,9 +95,17 @@ class StreamDownloader:
             )
             response.raise_for_status()
             self._validate_content_length(response)
-            async with aiofiles.open(file_path, "wb") as file:
-                async for chunk in response.aiter_content(chunk_size=8192):
-                    await file.write(chunk)
+            received_bytes = 0
+            try:
+                async with aiofiles.open(file_path, "wb") as file:
+                    async for chunk in response.aiter_content(chunk_size=8192):
+                        if chunk:
+                            await file.write(chunk)
+                            received_bytes += len(chunk)
+            except Exception:
+                await safe_unlink(file_path)
+                raise
+            await self._validate_downloaded_bytes(file_path, str(response.url), received_bytes)
         return file_path
 
     async def _download_file(
