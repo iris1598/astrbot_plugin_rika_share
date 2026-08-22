@@ -21,6 +21,7 @@ import asyncio
 import math
 import re
 import sys
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,13 @@ try:
 except ImportError:  # pragma: no cover
     Image = ImageDraw = ImageFilter = ImageFont = None
     ImageOps = None
+
+# fontTools 用于读取字体 cmap，实现「主字体缺字形时回退到符号字体」。
+# 缺失时优雅降级为单字体渲染（与旧版行为一致）。
+try:
+    from fontTools.ttLib import TTFont as _TTFont
+except ImportError:  # pragma: no cover
+    _TTFont = None
 
 try:
     _LANCZOS = Image.Resampling.LANCZOS
@@ -387,14 +395,123 @@ _FONT_DIRS = [
     "/System/Library/Fonts/Supplemental",
     "/usr/share/fonts/opentype/noto",
     "/usr/share/fonts/opentype/noto-cjk",
+    "/usr/share/fonts/truetype/noto",
     "/usr/share/fonts/truetype/noto-cjk",
     "/usr/share/fonts/noto-cjk",
     "/usr/share/fonts/truetype/wqy",
     "/usr/share/fonts/truetype/droid",
+    "/usr/share/fonts/truetype/dejavu",
     "/usr/share/fonts/truetype/arphic",
     "/usr/share/fonts/opentype/source-han-sans",
     "/usr/local/share/fonts",
 ]
+
+# 符号/生僻文字回退字体链（按优先级排列）。
+# 颜文字常用字符分布在数学算符、修饰字母、上标、东南亚文字、
+# 加拿大原住民音节等生僻 Unicode 区，中文字体普遍缺字形，
+# 需要回退到这些覆盖面更广的字体才能正常渲染。
+_SYMBOL_FONT_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "win32": (
+        "segoeui.ttf",              # Segoe UI：上标/修饰字母/附标/古尔穆奇 ੭ 等
+        "seguisym.ttf",             # Segoe UI Symbol：⌯ ♡ ⦁ ⩊ ⸝ 等杂项符号
+        "leelawui.ttf",             # Leelawadee UI：高棉文 ៸ 等
+        "gadugi.ttf",               # Gadugi：加拿大原住民音节 ᐠ
+        "malgun.ttf",               # Malgun Gothic：谚文兼容字母 ㅅ
+        "SansSerifCollection.ttf",  # 巽他文 ᯄ ᯠ / 吠陀记号 ᳐
+        "Nirmala.ttc",              # Nirmala UI：吠陀记号 ᳐
+        "ebrima.ttf",               # Ebrima：提非纳/瓦伊等
+        "DroidSansFallbackFull.ttf",
+    ),
+    "darwin": (
+        "Apple Symbols.ttf",
+        "Arial Unicode.ttf",
+        "Geneva.ttf",
+        "Helvetica.ttc",
+    ),
+    "linux": (
+        "NotoSansSymbols2-Regular.ttf",             # ⌯ ⸝ 等符号扩展
+        "NotoSansMath-Regular.ttf",                 # ⦁ ⩊ 数学算符
+        "NotoSansSymbols-Regular.ttf",              # ♡ 等杂项符号
+        "NotoSans-Regular.ttf",                     # ˗ ˬ ˊ ᴗ ᵔ ̫ 修饰字母/上标
+        "NotoSansGurmukhi-Regular.ttf",             # ੭ 古木基文
+        "NotoSansKhmer-Regular.ttf",                # 比较高棉文
+        "NotoSansSundanese-Regular.ttf",            # ᯄ ᯠ 巽他文
+        "NotoSansCanadianAboriginal-Regular.ttf",   # ᐠ 加拿大原住民音节
+        "NotoSansDevanagari-Regular.ttf",           # ᳐ 吠陀记号
+        "NotoSansCham-Regular.ttf",                 # 占文等东南亚文字
+        "DejaVuSans.ttf",
+        "DroidSansFallbackFull.ttf",
+        "wqy-zenhei.ttc",
+        "Symbola.ttf",
+    ),
+}
+
+# 字体文件 -> Unicode 码点集合 缓存（进程级共享）
+_CMAP_CACHE: dict[str, frozenset[int]] = {}
+
+
+def _font_cmap(path: str) -> frozenset[int]:
+    """读取字体 cmap 返回其覆盖的码点集合；读取失败返回空集合。"""
+    cached = _CMAP_CACHE.get(path)
+    if cached is not None:
+        return cached
+    codepoints: set[int] = set()
+    if _TTFont is not None:
+        try:
+            font = _TTFont(path, fontNumber=0, lazy=True)
+            try:
+                for table in font["cmap"].tables:
+                    if table.isUnicode():
+                        codepoints.update(table.cmap.keys())
+            finally:
+                font.close()
+        except Exception:
+            pass
+    result = frozenset(codepoints)
+    _CMAP_CACHE[path] = result
+    return result
+
+
+# 渲染字体均无法覆盖的码点（只记录一次日志）
+_UNCOVERED_WARNED: set[int] = set()
+
+# fontconfig 查询结果缓存：码点 -> 字体文件路径（可能为 None）
+_FC_CACHE: dict[int, str | None] = {}
+
+
+def _fontconfig_lookup(cp: int) -> str | None:
+    """通过 fontconfig 查找覆盖指定码点的系统字体（Linux/macOS 兜底）。
+
+    fc-list 支持 :charset=XXX 匹配，能直接给出覆盖该码点的字体文件，
+    用于应对预设回退链之外的字形。每个码点只查询一次，结果缓存。
+    """
+    if cp in _FC_CACHE:
+        return _FC_CACHE[cp]
+    path: str | None = None
+    if sys.platform != "win32":
+        try:
+            import shutil
+            import subprocess
+
+            if shutil.which("fc-list"):
+                out = subprocess.run(
+                    ["fc-list", f":charset={cp:X}", "file"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                ).stdout
+                for line in out.splitlines():
+                    # 形如 /usr/share/fonts/.../NotoSansSundanese-Regular.ttf:
+                    cand = line.strip().rstrip(":").strip()
+                    if cand and Path(cand).is_file():
+                        path = cand
+                        break
+        except Exception:
+            path = None
+    _FC_CACHE[cp] = path
+    if path:
+        logger.debug(f"fontconfig 为 U+{cp:04X} 找到回退字体: {path}")
+    return path
 
 
 def _discover_fonts(custom_path: str | None = None) -> tuple[str | None, str | None]:
@@ -465,12 +582,21 @@ class ShareCardRenderer:
         self._regular_font: str | None = None
         self._bold_font: str | None = None
         self._font_cache: dict[tuple[int, bool], Any] = {}
+        # id(font) -> (size, bold)，供 _text_width 反查字号
+        self._font_meta: dict[int, tuple[int, bool]] = {}
+        # 符号回退字体：[(路径, cmap)]，None 表示尚未加载
+        self._fallback_specs: list[tuple[str, frozenset[int]]] | None = None
+        # 主字体 cmap，None 表示尚未加载
+        self._primary_cmap: frozenset[int] | None = None
+        # 回退字体对象缓存 (路径, 字号) -> font
+        self._fallback_font_cache: dict[tuple[str, int], Any] = {}
         self._measure = ImageDraw.Draw(Image.new("RGBA", (1, 1))) if Image else None
 
     # ---------- 字体 ----------
 
     def _load_fonts(self) -> None:
         self._regular_font, self._bold_font = _discover_fonts(self.font_path)
+        self._primary_cmap = None  # 主字体变化后重新加载 cmap
         if not self._regular_font:
             logger.warning(
                 "未找到可用的中文字体，解析卡片文字可能显示为方块，"
@@ -493,7 +619,116 @@ class ShareCardRenderer:
             logger.exception(f"加载字体失败: {path}")
             font = ImageFont.load_default()
         self._font_cache[key] = font
+        self._font_meta[id(font)] = (size, bold)
         return font
+
+    def _get_primary_cmap(self) -> frozenset[int]:
+        """主字体（常规字重）的码点覆盖集合。"""
+        if self._primary_cmap is None:
+            if self._regular_font is None:
+                self._load_fonts()
+            self._primary_cmap = (
+                _font_cmap(self._regular_font) if self._regular_font else frozenset()
+            )
+        return self._primary_cmap
+
+    def _load_fallbacks(self) -> list[tuple[str, frozenset[int]]]:
+        """加载符号回退字体链（懒加载，仅加载一次）。"""
+        if self._fallback_specs is not None:
+            return self._fallback_specs
+        specs: list[tuple[str, frozenset[int]]] = []
+        if _TTFont is not None:
+            # 用户自定义字体目录中的字体优先作为回退
+            if self.font_path:
+                p = Path(self.font_path).expanduser()
+                if p.is_dir():
+                    for ext in ("*.ttf", "*.ttc", "*.otf"):
+                        for f in sorted(p.glob(ext)):
+                            cmap = _font_cmap(str(f))
+                            if cmap:
+                                specs.append((str(f), cmap))
+            names = _SYMBOL_FONT_CANDIDATES.get(
+                sys.platform, _SYMBOL_FONT_CANDIDATES["linux"]
+            )
+            dirs = [Path(d) for d in _FONT_DIRS]
+            for name in names:
+                for d in dirs:
+                    candidate = d / name
+                    if candidate.exists():
+                        cmap = _font_cmap(str(candidate))
+                        if cmap:
+                            specs.append((str(candidate), cmap))
+                        break
+        self._fallback_specs = specs
+        if specs:
+            logger.debug(f"符号回退字体链已加载: {[p for p, _ in specs]}")
+        return specs
+
+    def _fallback_font(self, path: str, size: int) -> Any:
+        """按路径与字号加载（并缓存）回退字体对象。"""
+        key = (path, size)
+        font = self._fallback_font_cache.get(key)
+        if font is None:
+            try:
+                font = ImageFont.truetype(str(path), size)
+            except Exception:
+                logger.warning(f"加载回退字体失败: {path}", exc_info=True)
+                font = ImageFont.load_default()
+            self._fallback_font_cache[key] = font
+        return font
+
+    def _split_runs(self, text: str, size: int, bold: bool) -> list[tuple[str, Any, bool]]:
+        """按字体覆盖情况将文本切分为渲染段。
+
+        返回 [(段文本, 字体对象, 是否主字体)]。主字体缺失字形的字符
+        会切换到第一个覆盖它的回退字体；组合附标（如 ̫）始终跟随
+        前一段，避免拆开后错位。无 fontTools 或无可用回退时退化为单段。
+        """
+        primary = self._font(size, bold)
+        fallbacks = self._load_fallbacks()
+        if not fallbacks or not text:
+            return [(text, primary, True)]
+        primary_cmap = self._get_primary_cmap()
+
+        runs: list[tuple[str, Any, bool]] = []
+        cur_text = ""
+        cur_path: str | None = None  # None 表示主字体
+        cur_font = primary
+
+        for ch in text:
+            if unicodedata.combining(ch) and cur_text:
+                # 组合附标跟随前一段，不单独成段
+                cur_text += ch
+                continue
+            cp = ord(ch)
+            path: str | None = None
+            if cp not in primary_cmap:
+                for fp, cmap in fallbacks:
+                    if cp in cmap:
+                        path = fp
+                        break
+                else:
+                    # 预设回退链未覆盖：尝试 fontconfig 动态查找并补入链中
+                    fc_path = _fontconfig_lookup(cp)
+                    if fc_path and cp in _font_cmap(fc_path):
+                        fallbacks.append((fc_path, _font_cmap(fc_path)))
+                        path = fc_path
+                    elif cp not in _UNCOVERED_WARNED and cp != 0x0A:
+                        _UNCOVERED_WARNED.add(cp)
+                        logger.debug(
+                            f"主字体与回退字体均不含字符 U+{cp:04X} {ch!r}，将显示为占位方块"
+                        )
+            if path == cur_path:
+                cur_text += ch
+            else:
+                if cur_text:
+                    runs.append((cur_text, cur_font, cur_path is None))
+                cur_text = ch
+                cur_path = path
+                cur_font = self._fallback_font(path, size) if path else primary
+        if cur_text:
+            runs.append((cur_text, cur_font, cur_path is None))
+        return runs
 
     def _bold_stroke(self, bold: bool) -> int:
         """使用常规字体模拟粗体时的描边宽度。"""
@@ -502,6 +737,12 @@ class ShareCardRenderer:
     # ---------- 文本工具 ----------
 
     def _text_width(self, text: str, font: Any) -> int:
+        meta = self._font_meta.get(id(font))
+        if meta is not None and self._load_fallbacks():
+            total = 0.0
+            for run_text, run_font, _ in self._split_runs(text, meta[0], meta[1]):
+                total += self._measure.textlength(run_text, font=run_font)
+            return math.ceil(total)
         return math.ceil(self._measure.textlength(text, font=font))
 
     def _wrap(self, text: str, font: Any, max_width: int) -> list[str]:
@@ -547,17 +788,42 @@ class ShareCardRenderer:
         size: int,
         fill: str | tuple[int, int, int],
         bold: bool = False,
+        stroke_width: int | None = None,
+        stroke_fill: str | tuple[int, int, int] | None = None,
     ) -> None:
         font = self._font(size, bold)
-        stroke = self._bold_stroke(bold)
-        draw.text(
-            xy,
-            text,
-            font=font,
-            fill=fill,
-            stroke_width=stroke,
-            stroke_fill=fill,
-        )
+        if stroke_width is None:
+            stroke_width = self._bold_stroke(bold)
+        if stroke_fill is None:
+            stroke_fill = fill
+        runs = self._split_runs(text, size, bold)
+        if len(runs) == 1:
+            draw.text(
+                xy,
+                text,
+                font=runs[0][1],
+                fill=fill,
+                stroke_width=stroke_width,
+                stroke_fill=stroke_fill,
+            )
+            return
+        # 多字体混排：逐段绘制并按主字体基线对齐
+        x, y = xy
+        base_ascent = font.getmetrics()[0]
+        for run_text, run_font, _ in runs:
+            try:
+                run_ascent = run_font.getmetrics()[0]
+            except Exception:
+                run_ascent = base_ascent
+            draw.text(
+                (x, y + base_ascent - run_ascent),
+                run_text,
+                font=run_font,
+                fill=fill,
+                stroke_width=stroke_width,
+                stroke_fill=stroke_fill,
+            )
+            x += self._measure.textlength(run_text, font=run_font)
 
     # ---------- 图片工具 ----------
 
@@ -1081,9 +1347,9 @@ class ShareCardRenderer:
                 sd = ImageDraw.Draw(shadow_layer)
                 sy = ty
                 for line in title_lines:
-                    sd.text(
-                        (pad, sy + 2), line, font=title_font,
-                        fill=(0, 0, 0, 140),
+                    self._draw_text(
+                        sd, (pad, sy + 2), line, _L.F_TITLE,
+                        (0, 0, 0, 140), bold=True,
                     )
                     sy += _L.F_TITLE_LINE_H
                 canvas.alpha_composite(
@@ -1093,10 +1359,10 @@ class ShareCardRenderer:
                 text_layer = Image.new("RGBA", (self.width, hero_h), (0, 0, 0, 0))
                 td = ImageDraw.Draw(text_layer)
                 for line in title_lines:
-                    td.text(
-                        (pad, ty), line, font=title_font,
-                        fill=(255, 255, 255, 255), stroke_width=1,
-                        stroke_fill=(0, 0, 0, 80),
+                    self._draw_text(
+                        td, (pad, ty), line, _L.F_TITLE,
+                        (255, 255, 255, 255), bold=True,
+                        stroke_width=1, stroke_fill=(0, 0, 0, 80),
                     )
                     ty += _L.F_TITLE_LINE_H
                 canvas.alpha_composite(text_layer, (0, 0))
@@ -2089,13 +2355,15 @@ class ShareCardRenderer:
             td = ImageDraw.Draw(tl)
             sy = y
             for line in title_lines:
-                td.text((pad, sy + 2), line, font=title_font, fill=(0, 0, 0, 130))
+                self._draw_text(td, (pad, sy + 2), line, _L.F_TITLE,
+                                (0, 0, 0, 130), bold=True)
                 sy += _L.F_TITLE_LINE_H
             canvas.alpha_composite(tl.filter(ImageFilter.GaussianBlur(4)), (0, 0))
             draw = ImageDraw.Draw(canvas)
             for line in title_lines:
-                draw.text((pad, y), line, font=title_font, fill=(255, 255, 255, 255),
-                          stroke_width=1, stroke_fill=(0, 0, 0, 70))
+                self._draw_text(draw, (pad, y), line, _L.F_TITLE,
+                                (255, 255, 255, 255), bold=True,
+                                stroke_width=1, stroke_fill=(0, 0, 0, 70))
                 y += _L.F_TITLE_LINE_H
             y += 18
         if d["author"]:

@@ -70,6 +70,7 @@
 ![浅色主题示例](docs/previews/layout-standard-light.png)
 
 > 💡 **提示**：Linux 服务器环境建议安装中文字体（如 `apt install fonts-noto-cjk`），或在配置 `RENDER_FONT_PATH` 中手动指定 `.ttf/.otf` 字体文件，避免卡片文字显示为方块。
+> 颜文字（᳐⦁⩊੭ᯠᯄᐠ⸝⌯ 等）会在主字体缺字形时自动回退到系统符号字体渲染（Windows: Segoe UI Symbol / Segoe UI / Leelawadee UI / Gadugi / SansSerifCollection 等；Linux: Noto Sans Symbols/Math/Sundanese 等），无需手动配置。Linux 建议一并安装 `fonts-noto-core`（含各脚本 Noto 字体）；预设链未覆盖的字符还会通过 `fc-list :charset=XXX` 动态查找系统字体兜底。
 
 ---
 
