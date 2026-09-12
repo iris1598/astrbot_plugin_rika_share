@@ -26,7 +26,7 @@ from astrbot.api.star import Context, Star, register, StarTools
 from .core.utils import clear_cache_dir, cleanup_cache_dir
 from .core.config import init_config, get_config
 from .core.download import StreamDownloader
-from .core.data import ParseResult
+from .core.data import ParseResult, VideoContent
 from .core.exception import (
     ParseException, IgnoreException, DownloadException, SilentException,
     is_timeout_exception,
@@ -452,7 +452,7 @@ class ParserPlugin(Star):
                     self._render_cache[cache_key] = render_path
 
             warnings = result.extra.get("limit_warnings") or []
-            is_video = bool(result.video_contents)
+            is_video = any(isinstance(c, VideoContent) and not c.is_gif for c in result.contents)
 
             if render_path is not None:
                 # 渲染图单独发送（主动发送，不经过事件回复管线，
@@ -559,14 +559,18 @@ class ParserPlugin(Star):
                 continue
 
             if isinstance(cont, VideoContent):
-                if cont.is_gif and cont.gif_path is not None:
-                    gif_path = await cont.gif_path.safe_get()
-                    if gif_path is not None:
-                        yield event.chain_result([Comp.Image.fromFileSystem(str(gif_path))])
-                        continue
+                if await self._resolve_gif_path(cont) is not None:
+                    continue  # 动图已作为图片并入合并转发
                 yield event.chain_result([Comp.Video.fromFileSystem(str(path))])
             elif isinstance(cont, AudioContent):
                 yield event.chain_result([Comp.Record(file=str(path))])
+
+    @staticmethod
+    async def _resolve_gif_path(cont: VideoContent) -> Path | None:
+        """动图转换结果；非动图或转换失败时返回 None"""
+        if not cont.is_gif or cont.gif_path is None:
+            return None
+        return await cont.gif_path.safe_get()
 
     async def _build_platform_output(self, event, result, platform: str):
         """构建各平台输出：返回 (标题头, 合并转发节点内容列表)"""
@@ -648,7 +652,7 @@ class ParserPlugin(Star):
 
         if platform == "douyin":
             from .core.data import VideoContent as _Vc
-            is_video = any(isinstance(c, _Vc) for c in result.contents)
+            is_video = any(isinstance(c, _Vc) and not c.is_gif for c in result.contents)
             header = f"莉卡解析 | {platform_name} - {'视频' if is_video else '图文'}"
             nodes = []
             text_items = []
@@ -664,7 +668,7 @@ class ParserPlugin(Star):
                 # 尝试加入封面
                 if result.contents:
                     from .core.data import VideoContent
-                    vc = next((c for c in result.contents if isinstance(c, VideoContent)), None)
+                    vc = next((c for c in result.contents if isinstance(c, VideoContent) and not c.is_gif), None)
                     if vc and vc.cover:
                         cover_path = await vc.cover.safe_get()
                         if cover_path:
@@ -676,6 +680,10 @@ class ParserPlugin(Star):
                     path = await c.path_task.safe_get()
                     if path:
                         nodes.append([Comp.Image.fromFileSystem(str(path))])
+                elif isinstance(c, VideoContent):
+                    gif_path = await self._resolve_gif_path(c)
+                    if gif_path is not None:
+                        nodes.append([Comp.Image.fromFileSystem(str(gif_path))])
             return header, nodes
 
         if platform == "kuaishou":
@@ -710,10 +718,14 @@ class ParserPlugin(Star):
                 path = await c.path_task.safe_get()
                 if path:
                     nodes.append([Comp.Image.fromFileSystem(str(path))])
-            elif isinstance(c, VideoContent) and c.cover:
-                cover_path = await c.cover.safe_get()
-                if cover_path:
-                    nodes.append([Comp.Image.fromFileSystem(str(cover_path))])
+            elif isinstance(c, VideoContent):
+                gif_path = await self._resolve_gif_path(c)
+                if gif_path is not None:
+                    nodes.append([Comp.Image.fromFileSystem(str(gif_path))])
+                elif c.cover:
+                    cover_path = await c.cover.safe_get()
+                    if cover_path:
+                        nodes.append([Comp.Image.fromFileSystem(str(cover_path))])
         return header, nodes
 
     async def _send_plain_output(
