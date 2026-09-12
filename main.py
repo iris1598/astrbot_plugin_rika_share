@@ -559,6 +559,11 @@ class ParserPlugin(Star):
                 continue
 
             if isinstance(cont, VideoContent):
+                if cont.is_gif and cont.gif_path is not None:
+                    gif_path = await cont.gif_path.safe_get()
+                    if gif_path is not None:
+                        yield event.chain_result([Comp.Image.fromFileSystem(str(gif_path))])
+                        continue
                 yield event.chain_result([Comp.Video.fromFileSystem(str(path))])
             elif isinstance(cont, AudioContent):
                 yield event.chain_result([Comp.Record(file=str(path))])

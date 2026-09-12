@@ -115,7 +115,7 @@ class BaseParser:
             author.avatar = PathTask(self.downloader.download_img(avatar_url, ext_headers=self.headers))
         return author
 
-    def create_video(self, url_or_task: str | asyncio.Task[Path], cover_url: str | None = None, duration: float | None = None, is_gif: bool = False):
+    def create_video(self, url_or_task: str | asyncio.Task[Path] | PathTask, cover_url: str | None = None, duration: float | None = None, is_gif: bool = False):
         if duration is not None:
             from .config import get_config
             from .utils_parser import fmt_duration
@@ -141,18 +141,20 @@ class BaseParser:
                 return video_content
 
         if isinstance(url_or_task, str):
-            path_task = self.downloader.download_video(url_or_task, ext_headers=self.headers)
-        else:
+            path_task = PathTask(self.downloader.download_video(url_or_task, ext_headers=self.headers))
+        elif isinstance(url_or_task, PathTask):
             path_task = url_or_task
+        else:
+            path_task = PathTask(url_or_task)
 
-        video_content = VideoContent(PathTask(path_task), duration=duration, is_gif=is_gif)
+        video_content = VideoContent(path_task, duration=duration, is_gif=is_gif)
 
         if cover_url:
             cover_task = self.downloader.download_img(cover_url, ext_headers=self.headers)
         else:
             async def extract_cover():
                 from .utils import extract_video_first_frame
-                video_path = await path_task
+                video_path = await path_task.get()
                 return await extract_video_first_frame(video_path)
             cover_task = extract_cover()
 
@@ -161,7 +163,7 @@ class BaseParser:
         if is_gif:
             async def convert_to_gif():
                 from .utils import convert_video_to_gif
-                video_path = await path_task
+                video_path = await path_task.get()
                 return await convert_video_to_gif(video_path)
             video_content.gif_path = PathTask(convert_to_gif())
 
