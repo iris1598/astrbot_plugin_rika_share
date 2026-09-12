@@ -1,11 +1,37 @@
 """Twitter/X 解析器"""
 import re
 from typing import ClassVar
+from urllib.parse import urlsplit
 from httpx import AsyncClient
 from msgspec import Struct, field
 from msgspec.json import Decoder
 from ..base_parser import BaseParser, PlatformEnum, handle
 from ..data import Platform, ParseResult
+
+_TWIMG_HOST_PREFIX = {
+    "pbs.twimg.com": "pbs",
+    "video.twimg.com": "video",
+}
+
+
+def proxy_media_url(url: str | None) -> str | None:
+    """将 X 官方媒体 CDN 地址改写为自定义反代地址"""
+    if not url:
+        return url
+    from ..config import get_config
+
+    config = get_config()
+    if not config.TWITTER_MEDIA_PROXY_ENABLED:
+        return url
+    base = config.TWITTER_MEDIA_PROXY_BASE
+    if not base:
+        return url
+    parts = urlsplit(url)
+    prefix = _TWIMG_HOST_PREFIX.get(parts.netloc.lower())
+    if prefix is None:
+        return url
+    query = f"?{parts.query}" if parts.query else ""
+    return f"{base}/{prefix}{parts.path}{query}"
 
 
 class MediaElement(Struct):
@@ -21,7 +47,7 @@ class MediaElement(Struct):
 
     @property
     def original_url(self) -> str:
-        return self.url + "?format=jpg&name=orig"
+        return self.url + "?name=orig"
 
 
 class Article(Struct):
@@ -68,16 +94,21 @@ class TwitterParser(BaseParser):
         return self._collect_result(data)
 
     def _collect_result(self, data: VxTwitterResponse) -> ParseResult:
-        author = self.create_author(data.user_name, data.user_profile_image_url)
+        author = self.create_author(data.user_name, proxy_media_url(data.user_profile_image_url))
         title = data.article.title if isinstance(data.article, Article) else data.article
         result = self.result(author=author, title=title, text=data.text, timestamp=data.date_epoch)
         for media in data.media_extended:
             if media.type in ["video", "gif"]:
                 self._add_limit_warning(result, media.duration)
-                video = self.create_video(media.url, media.thumbnail_url, duration=media.duration, is_gif=media.type == "gif")
+                video = self.create_video(
+                    proxy_media_url(media.url),
+                    proxy_media_url(media.thumbnail_url),
+                    duration=media.duration,
+                    is_gif=media.type == "gif",
+                )
                 result.contents.append(video)
             elif media.type == "image":
-                result.contents.append(self.create_image(media.original_url))
+                result.contents.append(self.create_image(proxy_media_url(media.original_url)))
         if data.qrt:
             result.repost = self._collect_result(data.qrt)
         return result

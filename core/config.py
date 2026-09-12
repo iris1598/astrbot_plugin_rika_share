@@ -17,6 +17,10 @@ CONFIG_GROUP_KEYS: dict[str, tuple[str, ...]] = {
         "VIDEO_DURATION_MAXIMUM",
         "XHS_CK",
     ),
+    "Twitter 设置": (
+        "TWITTER_MEDIA_PROXY_ENABLED",
+        "TWITTER_MEDIA_PROXY_BASE",
+    ),
     "B站设置": (
         "BILI_CK",
         "BILI_QUALITY",
@@ -73,6 +77,8 @@ _LEGACY_DEFAULTS: dict[str, Any] = {
     "DISABLED_PLATFORMS": "",
     "VIDEO_DURATION_MAXIMUM": 480,
     "XHS_CK": "",
+    "TWITTER_MEDIA_PROXY_ENABLED": False,
+    "TWITTER_MEDIA_PROXY_BASE": "",
     "BILI_CK": "",
     "BILI_QUALITY": "1080P",
     "BILI_COOKIE_MONITOR_ENABLED": True,
@@ -165,6 +171,16 @@ class ParserConfig:
     @property
     def XHS_CK(self) -> str | None:
         return self._cfg_get("XHS_CK", None)
+
+    @property
+    def TWITTER_MEDIA_PROXY_ENABLED(self) -> bool:
+        """是否启用 Twitter/X 媒体反代"""
+        return bool(self._cfg_get("TWITTER_MEDIA_PROXY_ENABLED", False))
+
+    @property
+    def TWITTER_MEDIA_PROXY_BASE(self) -> str:
+        """Twitter/X 媒体反代根地址（结尾斜杠会被去除）"""
+        return str(self._cfg_get("TWITTER_MEDIA_PROXY_BASE", "") or "").strip().rstrip("/")
 
     @property
     def VIDEO_DURATION_MAXIMUM(self) -> int:

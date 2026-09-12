@@ -24,6 +24,9 @@
 - 🌐 **Cloudflare 网页截图 Fallback**：
   - 未匹配到任何已有平台的常规网页链接，可自动调用 Cloudflare Browser Rendering API 渲染网页截图发送。
   - 支持自定义视窗、清晰度倍率 (deviceScaleFactor)、CSS 元素截取、Cookie/Header 注入及黑名单过滤。
+- 🛰️ **Twitter 媒体反代**：
+  - 推文图片、视频、封面与作者头像可自动改走自建 Cloudflare Worker 反代，解决 `pbs.twimg.com` / `video.twimg.com` 在国内无法直连的问题。
+  - Worker 代码随插件提供（`cloudflare-worker/`），部署后在 WebUI 开启并填入地址即可，不影响元数据接口。
 - ⚡ **跨平台适配器自动优化**：
   - **OneBot v11**：自动构建优雅的节点合并转发（Nodes），避免消息刷屏。
   - **QQ Official / Telegram 等**：自动拆分兼容量，采用主动发送机制，防止消息被 `@` 回复格式干扰。
@@ -39,7 +42,7 @@
 | **快手 (Kuaishou)** | 视频 / 图文 | 无水印视频、高清图片 | 支持短链与网页链接 |
 | **微博 (Weibo)** | 微博动态 / 文章 / 视频 | 原图图集、无水印视频 | 支持多图网格、转发引用结构提取 |
 | **小红书 (Xiaohongshu)** | 图文笔记 / 视频笔记 | 原图无水印图集、视频 | 支持 `XHS_CK` 鉴权与水印去除 |
-| **Twitter / X** | 推文 / 媒体 | 高清图片、视频 | 支持 `x.com` 链接解析 |
+| **Twitter / X** | 推文 / 媒体 | 高清图片、视频 | 支持 `x.com` 链接解析，媒体可走自建反代 |
 | **AcFun (A站)** | 视频 | 视频文件 | 基础视频解析 |
 | **NGA 论坛** | 帖子内容 / 主题 | 帖子正文与图集 | 论坛内容快速展示 |
 | **通用网页 (Cloudflare)** | 任意 HTTP/HTTPS 网页 | 网页高清无头截图 | 需开通 Cloudflare Browser Rendering 兜底 |
@@ -89,7 +92,7 @@
 
 ## ⚙️ 配置说明
 
-在 AstrBot 管理面板 WebUI 中，配置已按逻辑划分为 7 大分组：
+在 AstrBot 管理面板 WebUI 中，配置已按逻辑划分为 8 大分组：
 
 ### 1. 平台设置
 | 配置项 | 类型 | 默认值 | 说明 |
@@ -98,7 +101,13 @@
 | `VIDEO_DURATION_MAXIMUM` | int | `480` | 视频/音频最大解析时长（秒），超出此时长的视频将不下载视频文件 |
 | `XHS_CK` | string | `""` | 小红书 Cookie（可选，填入后可解析/下载小红书高清视频与图集） |
 
-### 2. B站设置
+### 2. Twitter 设置
+| 配置项 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `TWITTER_MEDIA_PROXY_ENABLED` | bool | `false` | 是否启用 Twitter/X 媒体反代（推文图片、视频、封面与头像改走反代地址） |
+| `TWITTER_MEDIA_PROXY_BASE` | string | `""` | 自建 Cloudflare Worker 反代根地址，如 `https://x-media-proxy.xxx.workers.dev`（结尾不要带斜杠） |
+
+### 3. B站设置
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `BILI_CK` | string | `""` | B站 Cookie (SESSDATA)。*建议直接使用 `/bili_login` 扫码登录自动填入* |
@@ -107,13 +116,13 @@
 | `BILI_COOKIE_CHECK_INTERVAL` | int | `3600` | Cookie 状态检测间隔时间（秒，最小 60 秒） |
 | `BILI_NOTIFY_USER_ID` | string | `""` | Cookie 失效/恢复时接收通知的 QQ 号或 UserID（留空仅打印日志） |
 
-### 3. 缓存设置
+### 4. 缓存设置
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `CACHE_TTL_HOURS` | int | `24` | 缓存过期清理时间（小时）。设为 `0` 禁用自动清理 |
 | `CACHE_CLEANUP_INTERVAL_MINUTES` | int | `60` | 缓存清理定时检查间隔（分钟） |
 
-### 4. 解析图片渲染
+### 5. 解析图片渲染
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `RENDER_ENABLED` | bool | `true` | 是否启用 Pillow 解析图片渲染（失败自动降级为文本形式） |
@@ -123,7 +132,7 @@
 | `RENDER_COVER_FULL_SIZE` | bool | `false` | 开启后封面完整显示原始宽高比，不进行中心裁剪 |
 | `RENDER_FONT_PATH` | string | `""` | 自定义字体文件/目录路径（.ttf/.ttc/.otf），留空自动探测系统字体 |
 
-### 5. Cloudflare 基础设置 (网页截图 Fallback)
+### 6. Cloudflare 基础设置 (网页截图 Fallback)
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `CLOUDFLARE_FALLBACK_ENABLED` | bool | `false` | 启用通用链接网页截图兜底（未匹配已知适配器时触发） |
@@ -133,7 +142,7 @@
 | `CLOUDFLARE_CACHE_TTL` | int | `0` | 截图缓存 TTL（秒），`0` 表示不缓存每次重新渲染 |
 | `CLOUDFLARE_BLACKLIST` | list | `[]` | 截图黑名单规则（支持完整域名、`*.example.com` 通配符、路径前缀或无点关键词） |
 
-### 6. Cloudflare 截图高级设置
+### 7. Cloudflare 截图高级设置
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `CLOUDFLARE_VIEWPORT_WIDTH` / `HEIGHT` | int | `1280` / `720` | 无头浏览器视窗宽度与高度 |
@@ -146,7 +155,7 @@
 | `CLOUDFLARE_EXTRA_HEADERS` | JSON | `""` | 请求附加 HTTP Header (JSON 对象格式) |
 | `CLOUDFLARE_COOKIES` | JSON | `""` | 页面附加 Cookie (JSON 数组格式) |
 
-### 7. 调试设置
+### 8. 调试设置
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `DEBUG_LOG_ENABLED` | bool | `true` | 是否启用详细错误调试日志 |
@@ -189,6 +198,10 @@ astrbot_plugin_rika_share/
 ├── metadata.yaml              # 插件元数据定义
 ├── _conf_schema.json          # WebUI 配置项分组 Schema 定义
 ├── requirements.txt           # Python 依赖清单
+├── cloudflare-worker/         # X 官方媒体 CDN 反代 (Cloudflare Worker)
+│   ├── worker.js              # 反代实现 (pbs.twimg.com / video.twimg.com)
+│   ├── wrangler.toml          # 部署配置
+│   └── README.md              # 部署与使用说明
 ├── docs/
 │   └── previews/              # 卡片渲染与布局预览图
 ├── scripts/

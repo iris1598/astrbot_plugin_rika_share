@@ -25,6 +25,26 @@
       }
     }
   },
+  "Twitter 设置": {
+    "type": "object",
+    "description": "Twitter/X 媒体反代（图片、视频、头像改走自定义反代，绕过 twimg.com 无法直连）",
+    "items": {
+      "TWITTER_MEDIA_PROXY_ENABLED": {
+        "description": "启用 Twitter 媒体反代",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，推文的图片、视频、封面与作者头像改从自定义反代地址下载",
+        "obvious_hint": true
+      },
+      "TWITTER_MEDIA_PROXY_BASE": {
+        "description": "Twitter 媒体反代地址",
+        "type": "string",
+        "default": "",
+        "hint": "Cloudflare Worker 反代根地址，例如 https://x-media-proxy.xxx.workers.dev（结尾不要带斜杠）",
+        "obvious_hint": true
+      }
+    }
+  },
   "B站设置": {
     "type": "object",
     "description": "B站 Cookie、下载清晰度与 Cookie 监控",
@@ -374,6 +394,22 @@
     "description": "小红书 Cookie",
     "type": "string",
     "hint": "从浏览器获取 xiaohongshu.com 的 cookie (可选)",
+    "obvious_hint": true,
+    "invisible": true
+  },
+  "TWITTER_MEDIA_PROXY_ENABLED": {
+    "description": "启用 Twitter 媒体反代",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，推文的图片、视频、封面与作者头像改从自定义反代地址下载",
+    "obvious_hint": true,
+    "invisible": true
+  },
+  "TWITTER_MEDIA_PROXY_BASE": {
+    "description": "Twitter 媒体反代地址",
+    "type": "string",
+    "default": "",
+    "hint": "Cloudflare Worker 反代根地址，例如 https://x-media-proxy.xxx.workers.dev（结尾不要带斜杠）",
     "obvious_hint": true,
     "invisible": true
   },
