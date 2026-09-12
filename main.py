@@ -652,7 +652,7 @@ class ParserPlugin(Star):
 
         if platform == "douyin":
             from .core.data import VideoContent as _Vc
-            is_video = any(isinstance(c, _Vc) and not c.is_gif for c in result.contents)
+            is_video = not result.img_contents and any(isinstance(c, _Vc) and not c.is_gif for c in result.contents)
             header = f"莉卡解析 | {platform_name} - {'视频' if is_video else '图文'}"
             nodes = []
             text_items = []
@@ -662,11 +662,11 @@ class ParserPlugin(Star):
                 tags = " #".join(result.text.split()[:5])
                 if tags:
                     text_items.append(f"#{tags}")
-            # 简介 + 封面放在同一条消息
+            # 简介 + 封面放在同一条消息（仅纯视频，图文/动图已放入图片节点）
             if text_items:
                 content = [Comp.Plain("\n".join(text_items))]
                 # 尝试加入封面
-                if result.contents:
+                if is_video:
                     from .core.data import VideoContent
                     vc = next((c for c in result.contents if isinstance(c, VideoContent) and not c.is_gif), None)
                     if vc and vc.cover:
@@ -674,7 +674,7 @@ class ParserPlugin(Star):
                         if cover_path:
                             content.append(Comp.Image.fromFileSystem(str(cover_path)))
                 nodes.append(content)
-            # 图片内容也放进合并转发
+            # 图片 / 动图内容放进合并转发
             for c in result.contents:
                 if isinstance(c, ImageContent):
                     path = await c.path_task.safe_get()

@@ -111,6 +111,11 @@ def strip_emoji(text: str | None) -> str:
     return cleaned.strip()
 
 
+def one_line(text: str | None) -> str:
+    """折叠换行与多余空白，供单行文本绘制使用。"""
+    return " ".join(strip_emoji(text).split())
+
+
 def parse_stats_line(stats_line: str | None) -> list[tuple[str, str]]:
     """将类似『👍 1.2万 🪙 8千』的统计行解析为 (标签, 数值) 列表。"""
     if not stats_line:
@@ -791,6 +796,8 @@ class ShareCardRenderer:
         stroke_width: int | None = None,
         stroke_fill: str | tuple[int, int, int] | None = None,
     ) -> None:
+        # 单行文本绘制：换行会导致 PIL 无法测量宽度
+        text = text.replace("\r", " ").replace("\n", " ")
         font = self._font(size, bold)
         if stroke_width is None:
             stroke_width = self._bold_stroke(bold)
@@ -1176,7 +1183,7 @@ class ShareCardRenderer:
         author = result.author
         avatar_size = _L.AVATAR
         name = strip_emoji(author.name) or "未知作者" if author else ""
-        author_desc = strip_emoji(author.description or "")[:40] if author else ""
+        author_desc = one_line(author.description)[:40] if author else ""
 
         # 统计（时长并入统计徽章）
         stats = parse_stats_line(result.extra.get("stats_line"))
@@ -1776,7 +1783,7 @@ class ShareCardRenderer:
             "text": strip_emoji(result.text),
             "author": author,
             "name": (strip_emoji(author.name) or "未知作者") if author else "",
-            "author_desc": strip_emoji(author.description or "")[:40] if author else "",
+            "author_desc": one_line(author.description)[:40] if author else "",
             "stats": stats,
             "online_text": strip_emoji(result.extra.get("online") or ""),
             "warnings": result.extra.get("limit_warnings") or [],
