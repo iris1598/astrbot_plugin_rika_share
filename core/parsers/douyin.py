@@ -58,7 +58,7 @@ class DouyinParser(BaseParser):
         )
 
         result = self.result(
-            text=aweme.share_info.text,
+            title=aweme.share_info.text,
             author=author,
             timestamp=aweme.create_time,
             url=aweme.share_url.split("?")[0] or None,
