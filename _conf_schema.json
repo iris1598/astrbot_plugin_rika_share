@@ -27,17 +27,17 @@
   },
   "Twitter 设置": {
     "type": "object",
-    "description": "Twitter/X 媒体反代（图片、视频、头像改走自定义反代，绕过 twimg.com 无法直连）",
+    "description": "Twitter/X 反代（媒体与解析接口改走自定义反代，绕过 twimg.com / api.vxtwitter.com 无法直连）",
     "items": {
       "TWITTER_MEDIA_PROXY_ENABLED": {
-        "description": "启用 Twitter 媒体反代",
+        "description": "启用 Twitter 反代",
         "type": "bool",
         "default": false,
-        "hint": "开启后，推文的图片、视频、封面与作者头像改从自定义反代地址下载",
+        "hint": "开启后，推文的图片、视频、封面与作者头像改从自定义反代地址下载，解析接口 api.vxtwitter.com 也一并改走反代（需部署最新版 Worker）",
         "obvious_hint": true
       },
       "TWITTER_MEDIA_PROXY_BASE": {
-        "description": "Twitter 媒体反代地址",
+        "description": "Twitter 反代地址",
         "type": "string",
         "default": "",
         "hint": "Cloudflare Worker 反代根地址，例如 https://x-media-proxy.xxx.workers.dev（结尾不要带斜杠）",

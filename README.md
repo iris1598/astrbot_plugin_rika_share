@@ -24,9 +24,9 @@
 - 🌐 **Cloudflare 网页截图 Fallback**：
   - 未匹配到任何已有平台的常规网页链接，可自动调用 Cloudflare Browser Rendering API 渲染网页截图发送。
   - 支持自定义视窗、清晰度倍率 (deviceScaleFactor)、CSS 元素截取、Cookie/Header 注入及黑名单过滤。
-- 🛰️ **Twitter 媒体反代**：
-  - 推文图片、视频、封面与作者头像可自动改走自建 Cloudflare Worker 反代，解决 `pbs.twimg.com` / `video.twimg.com` 在国内无法直连的问题。
-  - Worker 代码随插件提供（`cloudflare-worker/`），部署后在 WebUI 开启并填入地址即可，不影响元数据接口。
+- 🛰️ **Twitter/X 全链路反代**：
+  - 解析接口（`api.vxtwitter.com`）与推文图片、视频、封面、作者头像均可自动改走自建 Cloudflare Worker 反代，解决 X 在国内无法直连的问题。
+  - Worker 代码随插件提供（`cloudflare-worker/`），部署后在 WebUI 开启并填入地址即可；反代不可用时会自动回退直连。
 - ⚡ **跨平台适配器自动优化**：
   - **OneBot v11**：自动构建优雅的节点合并转发（Nodes），避免消息刷屏。
   - **QQ Official / Telegram 等**：自动拆分兼容量，采用主动发送机制，防止消息被 `@` 回复格式干扰。
@@ -42,7 +42,7 @@
 | **快手 (Kuaishou)** | 视频 / 图文 | 无水印视频、高清图片 | 支持短链与网页链接 |
 | **微博 (Weibo)** | 微博动态 / 文章 / 视频 | 原图图集、无水印视频 | 支持多图网格、转发引用结构提取 |
 | **小红书 (Xiaohongshu)** | 图文笔记 / 视频笔记 | 原图无水印图集、视频 | 支持 `XHS_CK` 鉴权与水印去除 |
-| **Twitter / X** | 推文 / 媒体 | 高清图片、视频 | 支持 `x.com` 链接解析，媒体可走自建反代 |
+| **Twitter / X** | 推文 / 媒体 | 高清图片、视频 | 支持 `x.com` 链接解析，解析接口与媒体均可走自建反代 |
 | **AcFun (A站)** | 视频 | 视频文件 | 基础视频解析 |
 | **NGA 论坛** | 帖子内容 / 主题 | 帖子正文与图集 | 论坛内容快速展示 |
 | **通用网页 (Cloudflare)** | 任意 HTTP/HTTPS 网页 | 网页高清无头截图 | 需开通 Cloudflare Browser Rendering 兜底 |
@@ -104,7 +104,7 @@
 ### 2. Twitter 设置
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `TWITTER_MEDIA_PROXY_ENABLED` | bool | `false` | 是否启用 Twitter/X 媒体反代（推文图片、视频、封面与头像改走反代地址） |
+| `TWITTER_MEDIA_PROXY_ENABLED` | bool | `false` | 是否启用 Twitter/X 反代（解析接口 `api.vxtwitter.com` 与推文图片、视频、封面、头像均改走反代地址） |
 | `TWITTER_MEDIA_PROXY_BASE` | string | `""` | 自建 Cloudflare Worker 反代根地址，如 `https://x-media-proxy.xxx.workers.dev`（结尾不要带斜杠） |
 
 ### 3. B站设置
@@ -198,8 +198,8 @@ astrbot_plugin_rika_share/
 ├── metadata.yaml              # 插件元数据定义
 ├── _conf_schema.json          # WebUI 配置项分组 Schema 定义
 ├── requirements.txt           # Python 依赖清单
-├── cloudflare-worker/         # X 官方媒体 CDN 反代 (Cloudflare Worker)
-│   ├── worker.js              # 反代实现 (pbs.twimg.com / video.twimg.com)
+├── cloudflare-worker/         # X 反代 (Cloudflare Worker)
+│   ├── worker.js              # 反代实现 (pbs.twimg.com / video.twimg.com / api.vxtwitter.com)
 │   ├── wrangler.toml          # 部署配置
 │   └── README.md              # 部署与使用说明
 ├── docs/

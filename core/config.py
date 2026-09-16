@@ -174,12 +174,12 @@ class ParserConfig:
 
     @property
     def TWITTER_MEDIA_PROXY_ENABLED(self) -> bool:
-        """是否启用 Twitter/X 媒体反代"""
+        """是否启用 Twitter/X 反代（媒体 CDN + 解析接口）"""
         return bool(self._cfg_get("TWITTER_MEDIA_PROXY_ENABLED", False))
 
     @property
     def TWITTER_MEDIA_PROXY_BASE(self) -> str:
-        """Twitter/X 媒体反代根地址（结尾斜杠会被去除）"""
+        """Twitter/X 反代根地址（结尾斜杠会被去除）"""
         return str(self._cfg_get("TWITTER_MEDIA_PROXY_BASE", "") or "").strip().rstrip("/")
 
     @property
