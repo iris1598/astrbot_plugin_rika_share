@@ -184,23 +184,25 @@ class BaseParser:
                 logger.warning(msg)
                 result.extra.setdefault("limit_warnings", []).append(msg)
 
-    def create_gif(self, url_or_task: str | asyncio.Task[Path], cover_url: str | None = None):
-        return self.create_video(url_or_task, cover_url=cover_url, is_gif=True)
-
     def create_live_photo(
         self,
         image_url: str,
         video_url: str,
         cover_url: str | None = None,
         duration: float | None = None,
+        is_live_photo: bool = True,
     ):
-        """实况照片：主图(JPEG) + 短视频(MP4) 重建为单文件动态照片。
+        """「主图(JPEG) + 短视频(MP4)」重建为单文件动态照片。
 
         主图与视频各自独立下载，再合成为一个 JPEG 文件（XMP 索引 + 尾部视频）。
-        合成失败时自动回退为动图，保证内容不会整个丢失。
+        合成失败时回退为静态主图，保证内容不会整个丢失。
+
+        Args:
+            is_live_photo: 源内容是否被平台标记为实况照片（抖音 clip_type==5）。
+                普通动图(clip_type==4)走同一条重建路径，但文案上不算实况照片。
 
         Note:
-            实况照片的附带动图本身就是 2~4 秒的短片，不做时长上限判断。
+            这类附带动图本身就是 2~4 秒的短片，不做时长上限判断。
         """
         still_task = asyncio.ensure_future(
             self.downloader.download_img(image_url, ext_headers=self.headers)
@@ -211,7 +213,7 @@ class BaseParser:
         )
 
         video_content = VideoContent(
-            video_path_task, duration=duration, is_live_photo=True
+            video_path_task, duration=duration, is_live_photo=is_live_photo
         )
         # 封面：优先用平台给的封面图，没有就直接用主图
         if cover_url:
@@ -224,20 +226,21 @@ class BaseParser:
         async def build_live_photo():
             from astrbot.api import logger
             from .live_photo import create_motion_photo
-            from .utils import convert_video_to_gif
 
-            video_path = await video_path_task.get()
             try:
                 still_path = await still_path_task.get()
+            except Exception as e:
+                # 主图都没拿到，只能让上层去发原始视频
+                logger.warning(f"实况照片主图获取失败，回退为原始视频: {e}")
+                return None
+
+            try:
+                video_path = await video_path_task.get()
                 dest = video_path.with_name(f"{video_path.stem}_live.jpg")
                 return await create_motion_photo(still_path, video_path, dest)
             except Exception as e:
-                logger.warning(f"实况照片重建失败，回退为动图: {e}")
-                try:
-                    return await convert_video_to_gif(video_path)
-                except Exception as gif_error:
-                    logger.warning(f"动图回退同样失败: {gif_error}")
-                    return None
+                logger.warning(f"实况照片重建失败，回退为静态主图: {e}")
+                return still_path
 
         video_content.live_photo_path = PathTask(build_live_photo())
         return video_content

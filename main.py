@@ -540,8 +540,6 @@ class ParserPlugin(Star):
         """
         from .core.data import VideoContent, AudioContent
 
-        live_photo_as_file = self._live_photo_as_file(event)
-
         for cont in result.contents:
             if not isinstance(cont, (VideoContent, AudioContent)):
                 continue  # 图片已在合并转发中
@@ -550,34 +548,16 @@ class ParserPlugin(Star):
                 continue
 
             if isinstance(cont, VideoContent):
-                still_path = await self._resolve_still_path(cont)
-                if still_path is not None:
-                    if cont.is_live_photo and live_photo_as_file:
-                        # 以文件投递：字节原样保留，收件人下载后仍是完整实况照片
-                        yield event.chain_result(
-                            [Comp.File(name=still_path.name, file=str(still_path))]
-                        )
+                if await self._resolve_still_path(cont) is not None:
                     continue  # 动图 / 实况照片已作为图片并入合并转发
                 yield event.chain_result([Comp.Video.fromFileSystem(str(path))])
             elif isinstance(cont, AudioContent):
                 yield event.chain_result([Comp.Record(file=str(path))])
 
     @staticmethod
-    def _live_photo_as_file(event: AstrMessageEvent) -> bool:
-        """实况照片是否改走「文件」投递。
-
-        发图片时平台会重新编码，尾部拼接的视频会被丢弃，只有文件投递能原样保留字节。
-        目前仅 OneBot(aiocqhttp) 支持发送文件段。
-        """
-        if getattr(Comp, "File", None) is None:
-            return False
-        if not get_config().DOUYIN_LIVE_PHOTO_AS_FILE:
-            return False
-        return ParserPlugin._is_onebot(event)
-
-    @staticmethod
     async def _resolve_still_path(cont: VideoContent) -> Path | None:
-        """动图(.gif) / 实况照片(.jpg) 的输出文件；普通视频或转换失败时返回 None"""
+        """图片类产物路径：动态照片(.jpg，抖音) / 动图(.gif，Twitter)；
+        普通视频或产物缺失时返回 None"""
         if not cont.is_image_like:
             return None
         task = cont.still_path
@@ -667,10 +647,17 @@ class ParserPlugin(Star):
             from .core.data import VideoContent as _Vc
             is_video = not result.img_contents and any(isinstance(c, _Vc) and not c.is_image_like for c in result.contents)
             has_live_photo = any(isinstance(c, _Vc) and c.is_live_photo for c in result.contents)
+            # 重建后的普通动图（非实况照片）
+            has_animated = any(
+                isinstance(c, _Vc) and c.is_image_like and not c.is_live_photo
+                for c in result.contents
+            )
             if is_video:
                 kind = "视频"
             elif has_live_photo:
                 kind = "实况"
+            elif has_animated:
+                kind = "动图"
             else:
                 kind = "图文"
             header = f"莉卡解析 | {platform_name} - {kind}"
@@ -701,8 +688,6 @@ class ParserPlugin(Star):
                     if path:
                         nodes.append([Comp.Image.fromFileSystem(str(path))])
                 elif isinstance(c, VideoContent):
-                    if c.is_live_photo and self._live_photo_as_file(event):
-                        continue  # 已改为独立以文件发送，不再重复放进合并转发
                     still_path = await self._resolve_still_path(c)
                     if still_path is not None:
                         nodes.append([Comp.Image.fromFileSystem(str(still_path))])

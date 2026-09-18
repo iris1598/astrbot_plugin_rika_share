@@ -18,17 +18,10 @@
         "obvious_hint": true
       },
       "DOUYIN_LIVE_PHOTO_ENABLED": {
-        "description": "抖音实况照片重建",
+        "description": "抖音动态图重建",
         "type": "bool",
         "default": true,
-        "hint": "开启后，抖音实况照片(clip_type=5)改为「主图 + 短视频」重建为单文件动态照片（可用 Google 相册 / 小米 / OPPO / vivo / 三星相册播放）；关闭则回退为视频转动图。不依赖 ffmpeg",
-        "obvious_hint": true
-      },
-      "DOUYIN_LIVE_PHOTO_AS_FILE": {
-        "description": "实况照片以文件发送",
-        "type": "bool",
-        "default": false,
-        "hint": "关闭(默认)时实况照片并入合并转发当作图片发送，但 QQ 等平台会重新编码图片、丢掉内嵌视频。开启后改为独立发送「文件」，字节原样保留，收件人下载即得完整实况照片。仅对 OneBot(aiocqhttp) 生效",
+        "hint": "开启后，抖音的实况照片(clip_type=5)与普通动图(clip_type=4)都改为「主图 + 短视频」重建为单文件动态照片（可用 Google 相册 / 小米 / OPPO / vivo / 三星相册播放）；关闭则只发静态主图。不依赖 ffmpeg",
         "obvious_hint": true
       },
       "XHS_CK": {
@@ -419,18 +412,10 @@
     "invisible": true
   },
   "DOUYIN_LIVE_PHOTO_ENABLED": {
-    "description": "抖音实况照片重建",
+    "description": "抖音动态图重建",
     "type": "bool",
     "default": true,
-    "hint": "开启后，抖音实况照片重建为单文件动态照片；关闭则回退为视频转动图",
-    "obvious_hint": true,
-    "invisible": true
-  },
-  "DOUYIN_LIVE_PHOTO_AS_FILE": {
-    "description": "实况照片以文件发送",
-    "type": "bool",
-    "default": false,
-    "hint": "开启后实况照片独立以文件发送，字节原样保留；仅对 OneBot 生效",
+    "hint": "开启后，抖音实况照片与普通动图都重建为单文件动态照片；关闭则只发静态主图",
     "obvious_hint": true,
     "invisible": true
   },
