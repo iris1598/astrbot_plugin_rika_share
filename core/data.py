@@ -37,6 +37,18 @@ class VideoContent(MediaContent):
     duration: float | None = None
     is_gif: bool = False
     gif_path: PathTask | None = None
+    is_live_photo: bool = False
+    live_photo_path: PathTask | None = None
+
+    @property
+    def is_image_like(self) -> bool:
+        """动图 / 实况照片：对外以图片形式发送，而不是当视频再发一遍"""
+        return self.is_gif or self.is_live_photo
+
+    @property
+    def still_path(self) -> PathTask | None:
+        """对外发送的静态图文件（动图 .gif / 实况照片 .jpg）"""
+        return self.gif_path if self.is_gif else self.live_photo_path
 
     @property
     def display_duration(self) -> str | None:
@@ -49,6 +61,8 @@ class VideoContent(MediaContent):
             repr += f", cover={self.cover}"
         if self.duration:
             repr += f", duration={self.duration}"
+        if self.is_live_photo:
+            repr += ", live_photo=True"
         return repr + ")"
 
 
@@ -120,7 +134,7 @@ class ParseResult:
         if len(self.contents) != 1:
             return None
         cont = self.contents[0]
-        return cont if isinstance(cont, VideoContent) and not cont.is_gif else None
+        return cont if isinstance(cont, VideoContent) and not cont.is_image_like else None
 
     @video.setter
     def video(self, video: VideoContent | None):

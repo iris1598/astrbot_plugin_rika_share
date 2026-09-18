@@ -187,6 +187,61 @@ class BaseParser:
     def create_gif(self, url_or_task: str | asyncio.Task[Path], cover_url: str | None = None):
         return self.create_video(url_or_task, cover_url=cover_url, is_gif=True)
 
+    def create_live_photo(
+        self,
+        image_url: str,
+        video_url: str,
+        cover_url: str | None = None,
+        duration: float | None = None,
+    ):
+        """实况照片：主图(JPEG) + 短视频(MP4) 重建为单文件动态照片。
+
+        主图与视频各自独立下载，再合成为一个 JPEG 文件（XMP 索引 + 尾部视频）。
+        合成失败时自动回退为动图，保证内容不会整个丢失。
+
+        Note:
+            实况照片的附带动图本身就是 2~4 秒的短片，不做时长上限判断。
+        """
+        still_task = asyncio.ensure_future(
+            self.downloader.download_img(image_url, ext_headers=self.headers)
+        )
+        still_path_task = PathTask(still_task)
+        video_path_task = PathTask(
+            self.downloader.download_video(video_url, ext_headers=self.headers)
+        )
+
+        video_content = VideoContent(
+            video_path_task, duration=duration, is_live_photo=True
+        )
+        # 封面：优先用平台给的封面图，没有就直接用主图
+        if cover_url:
+            video_content.cover = PathTask(
+                self.downloader.download_img(cover_url, ext_headers=self.headers)
+            )
+        else:
+            video_content.cover = still_path_task
+
+        async def build_live_photo():
+            from astrbot.api import logger
+            from .live_photo import create_motion_photo
+            from .utils import convert_video_to_gif
+
+            video_path = await video_path_task.get()
+            try:
+                still_path = await still_path_task.get()
+                dest = video_path.with_name(f"{video_path.stem}_live.jpg")
+                return await create_motion_photo(still_path, video_path, dest)
+            except Exception as e:
+                logger.warning(f"实况照片重建失败，回退为动图: {e}")
+                try:
+                    return await convert_video_to_gif(video_path)
+                except Exception as gif_error:
+                    logger.warning(f"动图回退同样失败: {gif_error}")
+                    return None
+
+        video_content.live_photo_path = PathTask(build_live_photo())
+        return video_content
+
     def create_images(self, image_urls: list[str]):
         contents: list[ImageContent] = []
         for url in image_urls:

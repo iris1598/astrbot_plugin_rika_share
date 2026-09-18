@@ -20,6 +20,13 @@ class Video(Struct):
 class Image(Struct):
     video: Video | None = None
     url_list: list[str] = field(default_factory=list)
+    clip_type: int | None = None
+    live_photo_type: int | None = None
+
+    @property
+    def is_live_photo(self) -> bool:
+        """是否为实况照片（抖音用 clip_type==5 标识，区别于 clip_type==4 的动图）"""
+        return self.clip_type == 5 and self.video is not None
 
 
 class Avatar(Struct):

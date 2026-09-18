@@ -17,6 +17,20 @@
         "hint": "超过此时长的视频将不会被下载",
         "obvious_hint": true
       },
+      "DOUYIN_LIVE_PHOTO_ENABLED": {
+        "description": "抖音实况照片重建",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，抖音实况照片(clip_type=5)改为「主图 + 短视频」重建为单文件动态照片（可用 Google 相册 / 小米 / OPPO / vivo / 三星相册播放）；关闭则回退为视频转动图。不依赖 ffmpeg",
+        "obvious_hint": true
+      },
+      "DOUYIN_LIVE_PHOTO_AS_FILE": {
+        "description": "实况照片以文件发送",
+        "type": "bool",
+        "default": false,
+        "hint": "关闭(默认)时实况照片并入合并转发当作图片发送，但 QQ 等平台会重新编码图片、丢掉内嵌视频。开启后改为独立发送「文件」，字节原样保留，收件人下载即得完整实况照片。仅对 OneBot(aiocqhttp) 生效",
+        "obvious_hint": true
+      },
       "XHS_CK": {
         "description": "小红书 Cookie",
         "type": "string",
@@ -33,7 +47,7 @@
       "FORWARD_MAX_BATCH_MB": {
         "description": "单条合并转发图片体积上限(MB)",
         "type": "int",
-        "default": 12,
+        "default": 30,
         "hint": "按图片原始字节累计计算，超出即拆成下一条。调小更省内存但会发更多条消息，调大则相反。单张超过此值的图片会单独成一条发送",
         "obvious_hint": true
       }
@@ -401,6 +415,22 @@
     "type": "int",
     "default": 480,
     "hint": "超过此时长的视频将不会被下载",
+    "obvious_hint": true,
+    "invisible": true
+  },
+  "DOUYIN_LIVE_PHOTO_ENABLED": {
+    "description": "抖音实况照片重建",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，抖音实况照片重建为单文件动态照片；关闭则回退为视频转动图",
+    "obvious_hint": true,
+    "invisible": true
+  },
+  "DOUYIN_LIVE_PHOTO_AS_FILE": {
+    "description": "实况照片以文件发送",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后实况照片独立以文件发送，字节原样保留；仅对 OneBot 生效",
     "obvious_hint": true,
     "invisible": true
   },

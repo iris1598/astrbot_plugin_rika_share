@@ -15,6 +15,8 @@ CONFIG_GROUP_KEYS: dict[str, tuple[str, ...]] = {
     "平台设置": (
         "DISABLED_PLATFORMS",
         "VIDEO_DURATION_MAXIMUM",
+        "DOUYIN_LIVE_PHOTO_ENABLED",
+        "DOUYIN_LIVE_PHOTO_AS_FILE",
         "XHS_CK",
         "FORWARD_MAX_NODES",
         "FORWARD_MAX_BATCH_MB",
@@ -78,6 +80,8 @@ _KEY_GROUP_MAP: dict[str, str] = {
 _LEGACY_DEFAULTS: dict[str, Any] = {
     "DISABLED_PLATFORMS": "",
     "VIDEO_DURATION_MAXIMUM": 480,
+    "DOUYIN_LIVE_PHOTO_ENABLED": True,
+    "DOUYIN_LIVE_PHOTO_AS_FILE": False,
     "XHS_CK": "",
     "FORWARD_MAX_NODES": 10,
     "FORWARD_MAX_BATCH_MB": 12,
@@ -189,6 +193,21 @@ class ParserConfig:
     @property
     def VIDEO_DURATION_MAXIMUM(self) -> int:
         return int(self._cfg_get("VIDEO_DURATION_MAXIMUM", 480))
+
+    @property
+    def DOUYIN_LIVE_PHOTO_ENABLED(self) -> bool:
+        """抖音实况照片是否重建为单文件动态照片（关闭则回退为原来的视频转动图）"""
+        return bool(self._cfg_get("DOUYIN_LIVE_PHOTO_ENABLED", True))
+
+    @property
+    def DOUYIN_LIVE_PHOTO_AS_FILE(self) -> bool:
+        """实况照片是否以「文件」而非「图片」投递。
+
+        QQ 等平台收到图片后会重新编码，尾部拼接的视频会被丢掉，收件人只能看到
+        静态主图。改走文件投递可原样保留字节，收件人下载后即为完整的实况照片。
+        仅对 OneBot(aiocqhttp) 生效。
+        """
+        return bool(self._cfg_get("DOUYIN_LIVE_PHOTO_AS_FILE", False))
 
     @property
     def APPEND_URL(self) -> bool:

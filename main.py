@@ -452,7 +452,7 @@ class ParserPlugin(Star):
                     self._render_cache[cache_key] = render_path
 
             warnings = result.extra.get("limit_warnings") or []
-            is_video = any(isinstance(c, VideoContent) and not c.is_gif for c in result.contents)
+            is_video = any(isinstance(c, VideoContent) and not c.is_image_like for c in result.contents)
 
             if render_path is not None:
                 # 渲染图单独发送（主动发送，不经过事件回复管线，
@@ -540,6 +540,8 @@ class ParserPlugin(Star):
         """
         from .core.data import VideoContent, AudioContent
 
+        live_photo_as_file = self._live_photo_as_file(event)
+
         for cont in result.contents:
             if not isinstance(cont, (VideoContent, AudioContent)):
                 continue  # 图片已在合并转发中
@@ -548,18 +550,40 @@ class ParserPlugin(Star):
                 continue
 
             if isinstance(cont, VideoContent):
-                if await self._resolve_gif_path(cont) is not None:
-                    continue  # 动图已作为图片并入合并转发
+                still_path = await self._resolve_still_path(cont)
+                if still_path is not None:
+                    if cont.is_live_photo and live_photo_as_file:
+                        # 以文件投递：字节原样保留，收件人下载后仍是完整实况照片
+                        yield event.chain_result(
+                            [Comp.File(name=still_path.name, file=str(still_path))]
+                        )
+                    continue  # 动图 / 实况照片已作为图片并入合并转发
                 yield event.chain_result([Comp.Video.fromFileSystem(str(path))])
             elif isinstance(cont, AudioContent):
                 yield event.chain_result([Comp.Record(file=str(path))])
 
     @staticmethod
-    async def _resolve_gif_path(cont: VideoContent) -> Path | None:
-        """动图转换结果；非动图或转换失败时返回 None"""
-        if not cont.is_gif or cont.gif_path is None:
+    def _live_photo_as_file(event: AstrMessageEvent) -> bool:
+        """实况照片是否改走「文件」投递。
+
+        发图片时平台会重新编码，尾部拼接的视频会被丢弃，只有文件投递能原样保留字节。
+        目前仅 OneBot(aiocqhttp) 支持发送文件段。
+        """
+        if getattr(Comp, "File", None) is None:
+            return False
+        if not get_config().DOUYIN_LIVE_PHOTO_AS_FILE:
+            return False
+        return ParserPlugin._is_onebot(event)
+
+    @staticmethod
+    async def _resolve_still_path(cont: VideoContent) -> Path | None:
+        """动图(.gif) / 实况照片(.jpg) 的输出文件；普通视频或转换失败时返回 None"""
+        if not cont.is_image_like:
             return None
-        return await cont.gif_path.safe_get()
+        task = cont.still_path
+        if task is None:
+            return None
+        return await task.safe_get()
 
     async def _build_platform_output(self, event, result, platform: str):
         """构建各平台输出：返回 (标题头, 合并转发节点内容列表)"""
@@ -641,8 +665,15 @@ class ParserPlugin(Star):
 
         if platform == "douyin":
             from .core.data import VideoContent as _Vc
-            is_video = not result.img_contents and any(isinstance(c, _Vc) and not c.is_gif for c in result.contents)
-            header = f"莉卡解析 | {platform_name} - {'视频' if is_video else '图文'}"
+            is_video = not result.img_contents and any(isinstance(c, _Vc) and not c.is_image_like for c in result.contents)
+            has_live_photo = any(isinstance(c, _Vc) and c.is_live_photo for c in result.contents)
+            if is_video:
+                kind = "视频"
+            elif has_live_photo:
+                kind = "实况"
+            else:
+                kind = "图文"
+            header = f"莉卡解析 | {platform_name} - {kind}"
             nodes = []
             text_items = []
             if result.title:
@@ -657,7 +688,7 @@ class ParserPlugin(Star):
                 # 尝试加入封面
                 if is_video:
                     from .core.data import VideoContent
-                    vc = next((c for c in result.contents if isinstance(c, VideoContent) and not c.is_gif), None)
+                    vc = next((c for c in result.contents if isinstance(c, VideoContent) and not c.is_image_like), None)
                     if vc and vc.cover:
                         cover_path = await vc.cover.safe_get()
                         if cover_path:
@@ -670,9 +701,11 @@ class ParserPlugin(Star):
                     if path:
                         nodes.append([Comp.Image.fromFileSystem(str(path))])
                 elif isinstance(c, VideoContent):
-                    gif_path = await self._resolve_gif_path(c)
-                    if gif_path is not None:
-                        nodes.append([Comp.Image.fromFileSystem(str(gif_path))])
+                    if c.is_live_photo and self._live_photo_as_file(event):
+                        continue  # 已改为独立以文件发送，不再重复放进合并转发
+                    still_path = await self._resolve_still_path(c)
+                    if still_path is not None:
+                        nodes.append([Comp.Image.fromFileSystem(str(still_path))])
             return header, nodes
 
         if platform == "kuaishou":
@@ -708,9 +741,9 @@ class ParserPlugin(Star):
                 if path:
                     nodes.append([Comp.Image.fromFileSystem(str(path))])
             elif isinstance(c, VideoContent):
-                gif_path = await self._resolve_gif_path(c)
-                if gif_path is not None:
-                    nodes.append([Comp.Image.fromFileSystem(str(gif_path))])
+                still_path = await self._resolve_still_path(c)
+                if still_path is not None:
+                    nodes.append([Comp.Image.fromFileSystem(str(still_path))])
                 elif c.cover:
                     cover_path = await c.cover.safe_get()
                     if cover_path:

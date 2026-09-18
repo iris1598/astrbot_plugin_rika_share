@@ -5,6 +5,7 @@ from typing import ClassVar
 from httpx import AsyncClient
 
 from ..base_parser import BaseParser, PlatformEnum, ParseException, handle
+from ..config import get_config
 from ..constants import COMMON_TIMEOUT
 from ..data import Platform, ParseResult
 from ..douyin_models.video import decoder
@@ -65,13 +66,25 @@ class DouyinParser(BaseParser):
         )
 
         if images := aweme.images:
+            live_photo_enabled = get_config().DOUYIN_LIVE_PHOTO_ENABLED
             for image in images:
                 if image.clip_type == 2 or image.clip_type is None:
                     result.contents.append(self.create_image(image.url_list[-1]))
                 elif image_video := image.video:
-                    result.contents.append(
-                        self.create_gif(image_video.url, cover_url=image_video.cover_url)
-                    )
+                    # clip_type==5 为实况照片，clip_type==4 为普通动图
+                    if image.is_live_photo and live_photo_enabled:
+                        result.contents.append(
+                            self.create_live_photo(
+                                image.url_list[-1],
+                                image_video.url,
+                                cover_url=image_video.cover_url,
+                                duration=image_video.duration_seconds,
+                            )
+                        )
+                    else:
+                        result.contents.append(
+                            self.create_gif(image_video.url, cover_url=image_video.cover_url)
+                        )
         elif video := aweme.video:
             self._add_limit_warning(result, video.duration_seconds)
             result.video = self.create_video(

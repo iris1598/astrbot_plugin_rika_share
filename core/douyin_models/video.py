@@ -49,7 +49,14 @@ class Video(Struct):
 class Image(Struct):
     url_list: list[str] = field(default_factory=list)
     clip_type: int | None = None
+    # 仅实况照片(clip_type==5)会带该字段，实测取值 1
+    live_photo_type: int | None = None
     video: Video | None = None
+
+    @property
+    def is_live_photo(self) -> bool:
+        """是否为实况照片（抖音用 clip_type==5 标识，区别于 clip_type==4 的动图）"""
+        return self.clip_type == 5 and self.video is not None
 
 
 class ShareInfo(Struct):
