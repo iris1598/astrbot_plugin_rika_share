@@ -16,6 +16,8 @@ CONFIG_GROUP_KEYS: dict[str, tuple[str, ...]] = {
         "DISABLED_PLATFORMS",
         "VIDEO_DURATION_MAXIMUM",
         "XHS_CK",
+        "FORWARD_MAX_NODES",
+        "FORWARD_MAX_BATCH_MB",
     ),
     "Twitter 设置": (
         "TWITTER_MEDIA_PROXY_ENABLED",
@@ -77,6 +79,8 @@ _LEGACY_DEFAULTS: dict[str, Any] = {
     "DISABLED_PLATFORMS": "",
     "VIDEO_DURATION_MAXIMUM": 480,
     "XHS_CK": "",
+    "FORWARD_MAX_NODES": 10,
+    "FORWARD_MAX_BATCH_MB": 12,
     "TWITTER_MEDIA_PROXY_ENABLED": False,
     "TWITTER_MEDIA_PROXY_BASE": "",
     "BILI_CK": "",
@@ -200,6 +204,16 @@ class ParserConfig:
     @property
     def NEED_FORWARD_CONTENTS(self) -> bool:
         return bool(self._cfg_get("NEED_FORWARD_CONTENTS", True))
+
+    @property
+    def FORWARD_MAX_NODES(self) -> int:
+        """单条合并转发最多容纳的节点数（超出则拆成多条发送）"""
+        return max(1, min(50, int(self._cfg_get("FORWARD_MAX_NODES", 10))))
+
+    @property
+    def FORWARD_MAX_BATCH_MB(self) -> int:
+        """单条合并转发内图片原始字节累计上限（MB，超出则拆成多条发送）"""
+        return max(1, min(64, int(self._cfg_get("FORWARD_MAX_BATCH_MB", 12))))
 
     @property
     def CACHE_TTL_HOURS(self) -> int:

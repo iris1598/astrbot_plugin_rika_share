@@ -22,6 +22,20 @@
         "type": "string",
         "hint": "从浏览器获取 xiaohongshu.com 的 cookie (可选)",
         "obvious_hint": true
+      },
+      "FORWARD_MAX_NODES": {
+        "description": "单条合并转发最大节点数",
+        "type": "int",
+        "default": 10,
+        "hint": "OneBot 合并转发会把节点内的图片全部 base64 编码后再整体序列化，峰值内存约为图片总量的 4 倍。图集较大时按此值拆成多条合并转发发送，避免 OOM。仅对 OneBot(aiocqhttp) 生效",
+        "obvious_hint": true
+      },
+      "FORWARD_MAX_BATCH_MB": {
+        "description": "单条合并转发图片体积上限(MB)",
+        "type": "int",
+        "default": 12,
+        "hint": "按图片原始字节累计计算，超出即拆成下一条。调小更省内存但会发更多条消息，调大则相反。单张超过此值的图片会单独成一条发送",
+        "obvious_hint": true
       }
     }
   },

@@ -487,19 +487,8 @@ class ParserPlugin(Star):
             if text_items:
                 # 按平台规则发送剩余内容：OneBot 使用合并转发，其他平台直接发送
                 if self._is_onebot(event):
-                    sender_name = event.get_sender_name()
-                    sender_id = event.get_sender_id()
-                    nodes = Comp.Nodes([])
-                    if header_text:
-                        nodes.nodes.append(Comp.Node(
-                            uin=sender_id, name=sender_name,
-                            content=[Comp.Plain(header_text)],
-                        ))
-                    for item in text_items:
-                        nodes.nodes.append(Comp.Node(
-                            uin=sender_id, name=sender_name, content=item,
-                        ))
-                    yield event.chain_result([nodes])
+                    async for r in self._send_nodes_batched(event, header_text, text_items):
+                        yield r
                 else:
                     # 其他平台（QQ Official / Telegram 等）：拆分为独立消息
                     async for r in self._send_plain_output(event, header_text, text_items):
@@ -727,6 +716,97 @@ class ParserPlugin(Star):
                     if cover_path:
                         nodes.append([Comp.Image.fromFileSystem(str(cover_path))])
         return header, nodes
+
+    @staticmethod
+    def _estimate_item_bytes(item: list) -> int:
+        """估算单个节点内容的图片字节数（文本忽略不计）。"""
+        total = 0
+        for comp in item:
+            if not isinstance(comp, Comp.Image):
+                continue
+            raw = comp.path or ""
+            if not raw:
+                continue
+            try:
+                path = Path(raw)
+                if path.is_file():
+                    total += path.stat().st_size
+            except Exception:
+                continue
+        return total
+
+    def _split_node_items(self, text_items: list[list]) -> list[list[list]]:
+        """按字节预算与节点数上限把节点切成多批。
+
+        OneBot 发送合并转发时会把节点内所有图片完整 base64 编码，再整体
+        JSON 序列化，峰值内存约为图片原始总量的 4 倍，且这些拷贝同时存活。
+        大图集一次性发送极易 OOM，因此按预算切分，使峰值只与单批相关。
+        单张超过预算的图片无法再拆，会单独成一条发送。
+        """
+        pconfig = get_config()
+        max_bytes = pconfig.FORWARD_MAX_BATCH_MB * 1024 * 1024
+        max_nodes = pconfig.FORWARD_MAX_NODES
+
+        batches: list[list[list]] = []
+        current: list[list] = []
+        current_bytes = 0
+
+        for item in text_items:
+            size = self._estimate_item_bytes(item)
+            if current and (
+                current_bytes + size > max_bytes or len(current) >= max_nodes
+            ):
+                batches.append(current)
+                current, current_bytes = [], 0
+            current.append(item)
+            current_bytes += size
+            if current_bytes >= max_bytes or len(current) >= max_nodes:
+                batches.append(current)
+                current, current_bytes = [], 0
+
+        if current:
+            batches.append(current)
+        return batches
+
+    async def _send_nodes_batched(
+        self,
+        event: AstrMessageEvent,
+        header: str,
+        text_items: list[list],
+    ):
+        """按预算拆成多条合并转发逐条发送。
+
+        每条独立经历 to_dict -> base64 -> 发送 -> 释放，因此峰值内存只与
+        单批大小相关，而不是整个图集。
+        """
+        batches = self._split_node_items(text_items)
+        if not batches:
+            return
+
+        sender_name = event.get_sender_name()
+        sender_id = event.get_sender_id()
+        total = len(batches)
+        if total > 1:
+            logger.info(f"[rika_share] 图集较大，合并转发拆分为 {total} 条发送")
+
+        for idx, batch in enumerate(batches, start=1):
+            nodes = Comp.Nodes([])
+            if idx == 1:
+                title = header
+            else:
+                title = f"{header} (图集 {idx}/{total})" if header else f"图集 {idx}/{total}"
+            if title:
+                nodes.nodes.append(Comp.Node(
+                    uin=sender_id, name=sender_name,
+                    content=[Comp.Plain(title)],
+                ))
+            for item in batch:
+                nodes.nodes.append(Comp.Node(
+                    uin=sender_id, name=sender_name, content=item,
+                ))
+            yield event.chain_result([nodes])
+            if idx < total:
+                await asyncio.sleep(0.5)
 
     async def _send_plain_output(
         self,
