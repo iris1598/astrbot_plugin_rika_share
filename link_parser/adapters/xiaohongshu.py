@@ -17,6 +17,9 @@ from .registry import AdapterSpec, register_adapter
 class XiaoHongShuParser(BaseParser):
     platform: ClassVar[Platform] = Platform(name=PlatformEnum.XIAOHONGSHU, display_name="小红书")
 
+    #: xhslink 短链：需先跟随跳转才能拿到笔记 ID（note_id）
+    SHORT_LINK_KEYWORDS = ("xhslink.com", "xhslink.cn")
+
     def __init__(self, downloader, xhs_ck: str | None = None):
         super().__init__(downloader)
         explore_headers = {
@@ -39,6 +42,10 @@ class XiaoHongShuParser(BaseParser):
         if xhs_ck:
             self.headers["cookie"] = xhs_ck
             self.ios_headers["cookie"] = xhs_ck
+
+    def short_link_headers(self) -> dict[str, str]:
+        """短链跳转沿用移动端请求头，与解析时的行为保持一致。"""
+        return self.ios_headers
 
     @handle("xhslink.com", r"xhslink\.com/[A-Za-z0-9._?%&+=/#@-]+")
     async def _parse_short_link(self, searched: re.Match[str]):

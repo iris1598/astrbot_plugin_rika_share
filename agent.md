@@ -108,7 +108,7 @@ astrbot_plugin_rika_share/
 | `bili_cookie_status.json` | 上次检测状态 / 是否曾失效 | 同上 |
 | `.bili_cookie_key` | Fernet 密钥（权限尽量 0600） | 同上 |
 
-缓存清理：`initialize()` 起定时任务（`CACHE_TTL_HOURS` / `CACHE_CLEANUP_INTERVAL_MINUTES`），清理后**同时清空内存缓存** `_result_cache` / `_render_cache`；`/clear_cache` 做同样的事。**新增任何内存缓存都要挂到这两处清理点。**
+缓存清理：`initialize()` 起定时任务（`CACHE_TTL_HOURS` / `CACHE_CLEANUP_INTERVAL_MINUTES`），清理后**同时清空内存缓存** `_result_cache` / `_identity_cache` / `_render_cache`；`/clear_cache` 做同样的事。**新增任何内存缓存都要挂到这两处清理点。**
 
 ---
 
@@ -124,18 +124,20 @@ astrbot_plugin_rika_share/
  _dispatch：若消息含 JSON 卡片组件则直接 return（避免与 json_card_handler 重复解析）
          ↓ 取 self.parsers[平台名]
  _process_url(event, parser)   ← 所有解析流量的唯一主干
-   1. parser.search_url(url)      → (keyword, match)；不匹配抛 SilentException
-   2. parser.parse(keyword, match)→ ParseResult（create_* 只提交下载任务，返回 PathTask）
-   3. 内存缓存 _result_cache[url[:64]]（命中则先回一句「🔄 命中缓存...」）
-   4. build_platform_output(result, platform) → (header, nodes_content)
-   5. ShareCardRenderer.render(...)           → 卡片 PNG（失败返回 None）
-   6. 有卡片：context.send_message(umo, MessageChain().file_image(...)) 主动发送
+   1. parser.cache_identity(url)  → 缓存键「内容标识」（规则见 5.7，
+                                    短链会先跟随跳转；结果按原始文本记忆在 _identity_cache）
+   2. _result_cache 命中则直接跳到第 4 步（**只写日志、不向对话发消息**）；
+      未命中：parser.search_url(url) → (keyword, match) → parser.parse(...) → ParseResult
+      （create_* 只提交下载任务，返回 PathTask），再写入 _result_cache[cache_key]
+   3. build_platform_output(result, platform) → (header, nodes_content)
+   4. ShareCardRenderer.render(...)           → 卡片 PNG（失败返回 None）
+   5. 有卡片：context.send_message(umo, MessageChain().file_image(...)) 主动发送
         视频：不再发文字摘要；图文/动态：仍发 header + 图集
       无卡片：文本输出，并把 extra["limit_warnings"] 逐条追加为文本
-   7. 文本/图集发送：OneBot → send_nodes_batched（按预算拆多条）
+   6. 文本/图集发送：OneBot → send_nodes_batched（按预算拆多条）
                      其他平台 → send_plain_output
-   8. try_send_media：单独发视频/音频（图片已在节点里，不重复发）
-   9. 异常 → SilentException 静默 / IgnoreException ℹ️ / ParseException ❌
+   7. try_send_media：单独发视频/音频（图片已在节点里，不重复发）
+   8. 异常 → SilentException 静默 / IgnoreException ℹ️ / ParseException ❌
              / DownloadException ⚠️ / 其他 ❌（error_result 受 SEND_ERROR_MESSAGES 控制）
 ```
 
@@ -233,6 +235,38 @@ ADAPTER = register_adapter(
 - 配置项**同时存在分组键与旧版扁平键**：`CONFIG_GROUP_KEYS` 分组表 + `_LEGACY_DEFAULTS` 默认值表；`_cfg_get()` 先读分组，分组仍是默认值而扁平旧值被改过时优先旧值；启动时 `migrate_grouped_config()` 把旧值搬进分组。
 - **新增配置项必须同时改 4 处**：`_conf_schema.json`（分组里加 + 底部加 `invisible: true` 的旧版扁平项）、`config.py`（`CONFIG_GROUP_KEYS`、`_LEGACY_DEFAULTS`、`ParserConfig` 属性）、README 配置表、（可选）`agent.md` 本文档。
 
+### 5.7 缓存键 =「内容标识」（`BaseParser.cache_identity`）
+
+解析结果缓存键**不是原始链接**，而是适配器给出的内容标识，目的是让**同一内容的不同链接共用一条缓存**（不同短链、长短链混用、同一作品的不同分享形态）。
+
+判定阶梯（`cache_identity(text)`，永不抛异常）：
+
+| 级别 | 规则 | 例子 |
+| :--- | :--- | :--- |
+| 1 | `search_url()` 匹配到的**命名分组**拼接；`page_num=1` 与缺省等价 | `bilibili:bvid=BV1xx411c7mD`、`douyin:aweme_id=7412…`、`nga:tid=456` |
+| 2 | 命中 `SHORT_LINK_KEYWORDS` 时先跟随跳转（`resolve_url`，只取 URL 不读响应体），再按 1 / 3 判定 | `b23.tv/aaa` 与 `b23.tv/bbb` → 同一个 `bvid` |
+| 3 | 兜底：`utils/url.py::normalize_url` 归一化链接（剔 `TRACKING_PARAMS`、排序 query、去尾斜杠/去 fragment） | 无内容 ID 的分享页 |
+
+适配器的扩展点（都不影响解析逻辑）：
+
+- `SHORT_LINK_KEYWORDS`：本平台短链域名片段（bilibili `b23.tv`、douyin `v.douyin.com`、kuaishou `v.kuaishou.com`、小红书 `xhslink.com`）。
+- `IDENTITY_PATTERNS`：`@handle` 正则没有命名分组时的补充规则，形如 `("status", re.compile(r"/status/(?P<id>\d+)"))`（twitter、kuaishou 在用）。
+- `identity_from_match(keyword, groups)`：平台特有归一化（微博把 `mid` 转 bid，与 `wid` 形态合并）。
+- `short_link_headers()`：个别平台跳转需要移动端 UA / Referer（kuaishou、小红书）。
+
+入口侧（`main.py`）：
+
+- `_identity_cache`：原始文本 → 内容标识，避免同一条链接重复跳转；超过 `_IDENTITY_MEMO_MAX`(2048) 整体清空。
+- 缓存键同时用于 `_result_cache` 与 `_render_cache`，因此**卡片文件名也随内容稳定**（换短链不会重复渲染）。
+- 清理点：`initialize()` 的定时清理、`/clear_cache` 都会同时清空 `_result_cache` / `_identity_cache` / `_render_cache`。
+
+**已知边界**（有意不统一，改前先想清楚）：
+
+- B站 `BV` 与 `av` 两种编号是不同键（需要 BV↔av 互转才能真正合并）。
+- 微博 `video.weibo.com/show?fid=1034:xxx` 与 `weibo.com/{uid}/{bid}` 不合并（fid 与 status id 无法可靠互推）。
+- 短链首次出现会多一次跳转请求（仅短链，且被 `_identity_cache` 记忆）。
+- 身份里带上内容相关的维度（如 B站 `page_num` 分P）——新增维度时要在 `identity_from_match` 里体现，否则不同内容会串缓存。
+
 ---
 
 ## 6. 「我要做 X，改哪里」速查表
@@ -242,6 +276,7 @@ ADAPTER = register_adapter(
 | 新增平台解析 | `adapters/<平台>.py` + `constants.PlatformEnum` + `adapters/__init__._ADAPTER_MODULES` + `main.py` 一个 Handler | 见 5.1 |
 | 修某平台解析失效 | `adapters/<平台>.py`（+ `models/platforms/<平台>/`） | 先确认是接口变了还是模型字段变了 |
 | 调整 URL 触发范围 | 对应适配器 `register_adapter(url_pattern=...)` | `main.py` 的 filter 自动跟随，无需改 |
+| 改缓存命中规则 / 加内容标识 | `adapters/base.py` 的 `cache_identity` 阶梯；平台侧声明 `SHORT_LINK_KEYWORDS` / `IDENTITY_PATTERNS` / 覆写 `identity_from_match` | 见 5.7；**别把 token / 时间戳等易变参数带进标识** |
 | 新增 / 修改配置项 | 4 处，见 5.6 | 漏改会导致 WebUI 不显示或旧值丢失 |
 | 新增卡片布局 | `card_render/renderer.py`（`_render_<layout>` + `_render_sync` 分发）+ `card_render/theme.py`（`LAYOUT_NAMES`）+ `_conf_schema.json`（`RENDER_LAYOUT.options` 两处）+ README | 无封面场景必须能回退（参考 `_render_immersive`） |
 | 新增主题 / 平台配色 | `card_render/theme.py`（`THEMES` / `PLATFORM_COLORS`） | 主题名要同步 schema 的 options 与 `ParserConfig.RENDER_THEME` 白名单 |
@@ -328,7 +363,7 @@ print("handlers       :", len(handlers))      # 应为 14
 assert not bad and len(handlers) == 14
 ```
 
-期望基线（2026-09-20 实测）：模块导入 **61/61**、适配器 **8 个**（`adapter_names()` 顺序固定）、Handler **14 个**（`grep -c "@filter\." main.py` 为 17，见铁律 1）、渲染 **96 张**全部成功。
+期望基线（2026-09-20 实测）：模块导入 **62/62**、适配器 **8 个**（`adapter_names()` 顺序固定）、Handler **14 个**（`grep -c "@filter\." main.py` 为 17，见铁律 1）、渲染 **96 张**全部成功。
 
 ---
 
@@ -344,6 +379,7 @@ assert not bad and len(handlers) == 14
 - **超时/重发的双发问题**：OneBot 大文件发送可能 retcode 1200（invoke timeout）但实际已发出，回退重发会导致重复 —— 相关判断在 `exceptions.py` 里已删（原 `is_timeout_exception` 未被使用），如需处理请谨慎。
 - **可选依赖降级**：Pillow 缺失 → 渲染自动关闭回退文本；fontTools 缺失 → 单字体渲染；ffmpeg 缺失 → 相关媒体处理抛 `RuntimeError`；curl_cffi 缺失 → 下载只用 httpx。
 - **B站凭证会在响应头回传新 Cookie 时自动刷新**并写盘，调试时不要依赖「配置文件里就是当前值」。
+- **缓存键是内容标识、不是原始链接**：短链首次出现会多一次跳转请求（一跳优先，失败再跟完整链），之后由 `_identity_cache` 记忆；标识里若混入易变参数（token / 时间戳）会导致同一内容反复重解析，规则见 5.7。
 
 ---
 
@@ -364,6 +400,7 @@ assert not bad and len(handlers) == 14
 9. 数据目录布局变化（→ 第 3 节）
 10. 依赖或运行环境要求变化、新增已知坑（→ 第 8 节、第 9 节）
 11. 验证基线数字变化（→ 第 8 节「期望基线」）
+12. 缓存键（内容标识）规则变化：阶梯、短链声明、平台特有归一化（→ 第 5.7 节、第 4 节）
 
 ### 10.2 更新方式
 
@@ -376,6 +413,8 @@ assert not bad and len(handlers) == 14
 
 | 日期 | 变更 | 影响小节 |
 | :--- | :--- | :--- |
+| 2026-09-20 | 缓存键由「URL 前 64 字符」改为**内容标识**：优先取 `@handle` 命名分组，短链先跟随跳转（一跳优先、失败再跟完整链，`_identity_cache` 记忆），兜底 URL 归一化；新增 `utils/url.py`、`BaseParser.cache_identity` 及 `SHORT_LINK_KEYWORDS` / `IDENTITY_PATTERNS` / `identity_from_match` / `short_link_headers` 扩展点；微博 mid→bid、快手 photo id、Twitter status id 归一 | 2、3、4、5.7、9、10 |
+| 2026-09-20 | 命中解析缓存不再向对话发送「🔄 命中缓存...」，改为写日志（`main._process_url`） | 4 |
 | 2026-09-20 | 移除「本机环境备忘」整节（含本机绝对路径等隐私与环境专属信息），`<PY>` 改为通用占位说明，`PYTHONPATH` 补依赖的做法改写为通用提示；小节重新编号（10 已知约束与坑、11→10 维护要求） | 8、9、10 |
 | 2026-09-20 | 结构重构：`core/` 按职责拆分为 `adapters` / `models` / `services` / `output` / `utils`；`main.py` 从 1541 行瘦身到 532 行（仅保留插件类与 Handler）；新增适配器注册表；渲染拆分为 `card_render/` 子系统；清理死代码 | 全部 |
 | 2026-09-20 | 命名统一：包改名 `rika` → `link_parser`；`models/platform` → `models/platforms` 且每平台一个子包；模块改名 `web_screenshot` / `bilibili_account` / `formatting` / `replies`；日志前缀 `[rika_share]` → `[link_parser]` | 2、4、5.2、7 |

@@ -6,6 +6,11 @@
 
 适配器的平台声明、URL 触发正则与构建方式统一在
 :mod:`link_parser.adapters.registry` 中注册，入口文件只依赖注册表。
+
+缓存键由 :meth:`BaseParser.cache_identity` 生成：优先使用 ``@handle`` 正则里的
+命名分组（如 ``aweme_id`` / ``bvid`` / ``tid``）作为内容标识，短链先跟随跳转再判定，
+因此同一内容的不同链接会落在同一缓存条目上。命名分组不便表达时，可通过
+``IDENTITY_PATTERNS`` 或覆写 ``identity_from_match()`` 补充。
 """
 
 import asyncio
@@ -27,8 +32,12 @@ from ..models import (
     VideoContent,
 )
 from ..services.downloader import StreamDownloader
+from ..utils.url import extract_first_url, normalize_url, stable_key
 
 KeyPatterns = list[tuple[str, Pattern[str]]]
+
+#: 内容标识补充规则：[(类型, 正则以命名分组 id 捕获内容 ID)]
+IdentityPatterns = tuple[tuple[str, Pattern[str]], ...]
 
 _KEY_PATTERNS = "_key_patterns"
 
@@ -96,6 +105,155 @@ class BaseParser:
     @classmethod
     def result(cls, **kwargs: Unpack[ParseResultKwargs]) -> ParseResult:
         return ParseResult(platform=cls.platform, **kwargs)
+
+    # ---------------- 缓存标识（把同一内容的不同链接归一） ----------------
+
+    #: 短链关键词：匹配到的链接含这些片段时，需要先跟随跳转才能拿到内容标识
+    SHORT_LINK_KEYWORDS: ClassVar[tuple[str, ...]] = ()
+    #: 命名分组取不到标识时的补充规则：(类型, 正则)，正则须以命名分组 ``id`` 捕获内容 ID
+    IDENTITY_PATTERNS: ClassVar[IdentityPatterns] = ()
+
+    def short_link_headers(self) -> dict[str, str]:
+        """跟随短链跳转时使用的请求头（个别平台需要 Referer / 移动端 UA）。"""
+        return self.headers
+
+    def identity_from_match(
+        self, keyword: str, groups: dict[str, str | None]
+    ) -> str | None:
+        """由 ``search_url()`` 的匹配结果构造内容标识。
+
+        默认规则：拼接匹配到的命名分组，例如 ``bilibili:bvid=BV1xx411c7mD``；
+        以下分组会被剔除（它们不构成内容身份）：
+
+        - 聚合分组：值里含 URL 分隔符（``?`` ``&`` ``=``），例如小红书把
+          ``id`` 与 ``token`` 一起捕获的 ``query`` 组 —— 带上 token 会让同一
+          内容因分享方不同而分键；
+        - 分P ``page_num=1``（与缺省等价）。
+
+        返回 ``None`` 表示拿不到可靠标识，交由上层继续回退。
+        """
+        items = {
+            key: value
+            for key, value in groups.items()
+            if value and not any(char in value for char in "?&=")
+        }
+        if items.get("page_num") == "1":
+            items.pop("page_num")
+        if not items:
+            return None
+        detail = "&".join(f"{key}={items[key]}" for key in sorted(items))
+        return f"{self.platform.name}:{detail}"
+
+    def identity_from_patterns(self, url: str) -> str | None:
+        """:attr:`IDENTITY_PATTERNS` 兜底：给 handle 未命名分组的平台用。"""
+        for kind, pattern in self.IDENTITY_PATTERNS:
+            if matched := pattern.search(url):
+                return f"{self.platform.name}:{kind}={matched.group('id')}"
+        return None
+
+    def identity_from_text(self, url: str) -> str | None:
+        """不跟随跳转，直接从 URL 文本里取标识；取不到返回 ``None``。"""
+        try:
+            keyword, searched = self.search_url(url)
+        except SilentException:
+            return None
+        return self.identity_from_match(keyword, searched.groupdict()) or (
+            self.identity_from_patterns(searched.group(0))
+        )
+
+    def is_short_link(self, text: str) -> bool:
+        """文本中是否含本平台短链（含则需跟随跳转才能确定内容）。"""
+        return any(keyword in text for keyword in self.SHORT_LINK_KEYWORDS)
+
+    def url_fallback_identity(self, text: str) -> str:
+        """兜底标识：取文本中的链接做归一化（无内容 ID 可用时）。"""
+        target = extract_first_url(text) or text
+        return f"{self.platform.name}:url:{stable_key(normalize_url(target))}"
+
+    @staticmethod
+    async def resolve_url(url: str, headers: dict[str, str] | None = None) -> str:
+        """跟随全部跳转返回最终 URL（不读取响应体，尽量少开销）。"""
+        from httpx import AsyncClient
+
+        async with AsyncClient(
+            headers=headers or COMMON_HEADER.copy(),
+            verify=False,
+            follow_redirects=True,
+            timeout=COMMON_TIMEOUT,
+        ) as client:
+            async with client.stream("GET", url) as stream:
+                if stream.status_code >= 400:
+                    stream.raise_for_status()
+                return str(stream.url)
+
+    async def _expand_short_link(self, fragment: str) -> list[str]:
+        """展开短链，返回候选 URL 列表（可能为空）。
+
+        优先只取一跳（与解析链路的行为一致、开销最小）；只有一跳结果拿不到
+        内容标识时，才跟完整跳转链兜底。
+        """
+        from astrbot.api import logger
+
+        url = fragment if fragment.startswith("http") else f"https://{fragment.lstrip('/')}"
+        headers = self.short_link_headers()
+        candidates: list[str] = []
+
+        try:
+            first_hop = await self.get_redirect_url(url, headers=headers)
+        except Exception as e:
+            logger.debug(f"短链单跳失败: {url[:100]} ({e})")
+            first_hop = ""
+        if first_hop and first_hop != url:
+            candidates.append(first_hop)
+
+        if not candidates or not self.identity_from_text(candidates[-1]):
+            try:
+                final = await self.resolve_url(url, headers=headers)
+            except Exception as e:
+                logger.debug(f"短链完整跳转失败: {url[:100]} ({e})")
+                final = ""
+            if final and final != url and final not in candidates:
+                candidates.append(final)
+
+        return candidates
+
+    @final
+    async def cache_identity(self, text: str) -> str:
+        """取文本中待解析链接的内容标识，用作解析结果缓存键。
+
+        同一内容的不同链接（短链 / 长链 / 不同分享形态）应得到同一标识，阶梯式判定：
+
+        1. ``search_url()`` 匹配到的命名分组（如 ``aweme_id`` / ``bvid`` / ``tid``）；
+        2. 命中短链时先跟随跳转（一跳优先），再按 1 / 3 判定；
+        3. 仍拿不到时退回 URL 归一化（剔跟踪参数、排序 query）。
+
+        永不抛异常：最差情况退化为「按链接字符串缓存」，与改造前行为一致。
+        """
+        from astrbot.api import logger
+
+        try:
+            keyword, searched = self.search_url(text)
+        except SilentException:
+            return self.url_fallback_identity(text)
+
+        matched = searched.group(0)
+        identity = self.identity_from_match(keyword, searched.groupdict()) or (
+            self.identity_from_patterns(matched)
+        )
+        if identity:
+            return identity
+
+        if self.is_short_link(matched) or self.is_short_link(text):
+            candidates = await self._expand_short_link(matched)
+            for candidate in candidates:
+                if identity := self.identity_from_text(candidate):
+                    logger.debug(f"短链已展开: {matched[:80]} -> {identity}")
+                    return identity
+            if candidates:
+                # 跳到落地页但认不出内容 ID：至少按落地页归一化，避免每次跳转
+                return self.url_fallback_identity(candidates[-1])
+
+        return self.url_fallback_identity(matched)
 
     @staticmethod
     async def get_redirect_url(url: str, headers: dict[str, str] | None = None) -> str:

@@ -16,9 +16,23 @@ from .registry import AdapterSpec, register_adapter
 class KuaiShouParser(BaseParser):
     platform: ClassVar[Platform] = Platform(name=PlatformEnum.KUAISHOU, display_name="快手")
 
+    #: 分享短链：需先跟随跳转才能拿到作品 ID
+    SHORT_LINK_KEYWORDS = ("v.kuaishou.com", "chenzhongtech.com")
+    #: handle 正则未命名分组，这里补一条：/fw/photo/{id}、/fw/long-video/{id}、/short-video/{id}
+    IDENTITY_PATTERNS = (
+        (
+            "photo",
+            re.compile(r"/(?:fw/(?:photo|long-video)|short-video)/(?P<id>[A-Za-z0-9_-]+)"),
+        ),
+    )
+
     def __init__(self, downloader):
         super().__init__(downloader)
         self.ios_headers["Referer"] = "https://v.kuaishou.com/"
+
+    def short_link_headers(self) -> dict[str, str]:
+        """短链跳转需带移动端 UA / Referer，与解析时保持一致。"""
+        return self.ios_headers
 
     @handle("v.kuaishou", r"v\.kuaishou\.com/[A-Za-z\d._?%&+\-=/#]+")
     @handle("kuaishou", r"(?:www\.)?kuaishou\.com/[A-Za-z\d._?%&+\-=/#]+")

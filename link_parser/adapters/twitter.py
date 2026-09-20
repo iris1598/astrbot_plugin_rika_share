@@ -89,6 +89,11 @@ vx_decoder = Decoder(VxTwitterResponse)
 class TwitterParser(BaseParser):
     platform: ClassVar[Platform] = Platform(name=PlatformEnum.TWITTER, display_name="小蓝鸟")
 
+    #: handle 正则未命名分组，这里补一条：同一推文的不同分享形式统一按 status_id 归并
+    IDENTITY_PATTERNS = (
+        ("status", re.compile(r"/status(?:es)?/(?P<id>\d+)")),
+    )
+
     @handle("x.com", r"x\.com/[0-9-a-zA-Z_]{1,20}/status/([0-9]+)")
     async def _parse(self, searched: re.Match[str]) -> ParseResult:
         url = f"https://{searched.group(0)}"

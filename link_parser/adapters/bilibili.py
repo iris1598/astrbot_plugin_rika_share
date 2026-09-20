@@ -38,6 +38,9 @@ except Exception:
 class BilibiliParser(BaseParser):
     platform: ClassVar[Platform] = Platform(name=PlatformEnum.BILIBILI, display_name="哔哩哔哩")
 
+    #: b23.tv / bili2233.cn 短链：需先跟随跳转才能拿到 BV 号等内容标识
+    SHORT_LINK_KEYWORDS = ("b23.tv", "bili2233.cn")
+
     @staticmethod
     def _is_transient_api_error(error: Exception) -> bool:
         """判断 B 站接口错误是否适合重试。

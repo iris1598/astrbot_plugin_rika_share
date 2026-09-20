@@ -31,6 +31,14 @@ class WeiBoParser(BaseParser):
         }
         self.headers.update(extra_headers)
 
+    def identity_from_match(
+        self, keyword: str, groups: dict[str, str | None]
+    ) -> str | None:
+        """视频分享链接只带 mid，转成 bid 后与 wid 形态的链接归并到同一缓存键。"""
+        if mid := groups.get("mid"):
+            return f"{self.platform.name}:wid={self._mid2id(mid)}"
+        return super().identity_from_match(keyword, groups)
+
     @handle("weibo.com/tv", r"weibo\.com/tv/show/\d{4}:\d+\?mid=(?P<mid>\d+)")
     async def _parse_weibo_tv(self, searched: re.Match[str]):
         mid = str(searched.group("mid"))

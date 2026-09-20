@@ -72,6 +72,10 @@ def _pattern(name: str) -> str:
     return spec.url_pattern.pattern if spec else r"(?!)"
 
 
+#: 「原始链接 → 内容标识」记忆上限，超过则整体清空（避免长跑无限累积）
+_IDENTITY_MEMO_MAX = 2048
+
+
 @register("链接解析器", "fllesser (ported to AstrBot)",
           "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA", "2.10.0")
 class ParserPlugin(Star):
@@ -119,6 +123,8 @@ class ParserPlugin(Star):
         self.parsers: dict[str, Any] = {}
         self._init_parsers()
         self._result_cache: dict[str, ParseResult] = {}
+        # 原始链接 → 内容标识（含短链跳转结果），避免重复解析/跳转
+        self._identity_cache: dict[str, str] = {}
         self._render_cache: dict[str, Path] = {}
         self._cache_cleanup_task: asyncio.Task | None = None
 
@@ -187,8 +193,9 @@ class ParserPlugin(Star):
                 try:
                     while True:
                         await cleanup_cache_dir(self.cache_dir, ttl_hours=ttl)
-                        # 文件清理后同步清空内存缓存（解析结果 + 渲染图片）
+                        # 文件清理后同步清空内存缓存（解析结果 + 内容标识 + 渲染图片）
                         self._result_cache.clear()
+                        self._identity_cache.clear()
                         self._render_cache.clear()
                         await asyncio.sleep(interval)
                 except asyncio.CancelledError:
@@ -380,13 +387,37 @@ class ParserPlugin(Star):
 
     # ==================== 核心处理流程 ====================
 
+    async def _content_cache_key(self, parser: Any, text: str) -> str:
+        """取解析结果的缓存键。
+
+        由适配器把链接归一为内容标识（见 ``BaseParser.cache_identity``）：
+        同一内容的不同短链 / 长链会得到同一标识，从而共用一条缓存；
+        结果按原始文本记忆，避免同一条链接重复做短链跳转。
+        """
+        cached = self._identity_cache.get(text)
+        if cached is not None:
+            return cached
+
+        try:
+            identity = await parser.cache_identity(text)
+        except Exception:
+            # cache_identity 设计上不抛异常，这里只做兜底，避免缓存键问题影响解析主流程
+            logger.warning("解析内容标识失败，回退按链接缓存", exc_info=True)
+            identity = parser.url_fallback_identity(text)
+
+        if len(self._identity_cache) >= _IDENTITY_MEMO_MAX:
+            self._identity_cache.clear()
+        self._identity_cache[text] = identity
+        return identity
+
     async def _process_url(
         self, event: AstrMessageEvent, parser: Any
     ) -> AsyncGenerator[MessageEventResult, None]:
         url = event.message_str.strip()
 
         try:
-            cache_key = url[:64]
+            # 缓存键 = 内容标识：不同短链 / 长链指向同一内容时命中同一条缓存
+            cache_key = await self._content_cache_key(parser, url)
             result = self._result_cache.get(cache_key)
 
             if result is None:
@@ -394,7 +425,11 @@ class ParserPlugin(Star):
                 result = await parser.parse(keyword, searched)
                 self._result_cache[cache_key] = result
             else:
-                yield event.plain_result("🔄 命中缓存...")
+                # 命中缓存只在日志里提示，不向对话发送消息
+                logger.info(
+                    f"命中解析缓存，跳过重复解析: {result.platform.display_name} "
+                    f"[{cache_key}] {url[:80]}"
+                )
 
             # 根据平台构建：标题头 + 合并转发内容列表
             header, nodes_content = await build_platform_output(
@@ -510,6 +545,7 @@ class ParserPlugin(Star):
         try:
             cleaned = await clear_cache_dir(self.cache_dir)
             self._result_cache.clear()
+            self._identity_cache.clear()
             self._render_cache.clear()
             yield event.plain_result(f"✅ 莉卡解析缓存清理完成，共清理 {cleaned} 个文件")
         except Exception as exc:

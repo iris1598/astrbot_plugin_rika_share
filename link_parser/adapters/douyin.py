@@ -17,6 +17,9 @@ from .registry import AdapterSpec, register_adapter
 class DouyinParser(BaseParser):
     platform: ClassVar[Platform] = Platform(name=PlatformEnum.DOUYIN, display_name="抖音")
 
+    #: v.douyin.com / jx.douyin.com 短链：需先跟随跳转才能拿到 aweme_id
+    SHORT_LINK_KEYWORDS = ("v.douyin.com", "jx.douyin.com")
+
     def __init__(self, downloader):
         super().__init__(downloader)
         self.headers.update(
