@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """探测 Windows 系统字体对颜文字字符的覆盖情况"""
-import sys
 from pathlib import Path
 from fontTools.ttLib import TTFont
 

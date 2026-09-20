@@ -27,9 +27,9 @@ if "astrbot" not in sys.modules:
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from core.data import Author, ImageContent, ParseResult, Platform, VideoContent  # noqa: E402
-from core.render import LAYOUT_NAMES, ShareCardRenderer  # noqa: E402
-from core.task import PathTask  # noqa: E402
+from link_parser.models import Author, ImageContent, ParseResult, Platform, VideoContent  # noqa: E402
+from link_parser.models.task import PathTask  # noqa: E402
+from link_parser.services.card_render import LAYOUT_NAMES, ShareCardRenderer  # noqa: E402
 
 OUT_DIR = PLUGIN_ROOT / "scripts" / "preview_out" / "layouts"
 ASSET_DIR = PLUGIN_ROOT / "scripts" / "preview_out" / "assets"

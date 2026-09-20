@@ -13,3 +13,7 @@ coverage.xml
 *.tmp
 cache/
 config/
+
+# 开发辅助脚本的渲染产物
+scripts/preview_out/
+scripts/previews/

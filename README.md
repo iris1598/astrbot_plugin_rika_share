@@ -26,7 +26,7 @@
   - 支持自定义视窗、清晰度倍率 (deviceScaleFactor)、CSS 元素截取、Cookie/Header 注入及黑名单过滤。
 - 🛰️ **Twitter/X 全链路反代**：
   - 解析接口（`api.vxtwitter.com`）与推文图片、视频、封面、作者头像均可自动改走自建 Cloudflare Worker 反代，解决 X 在国内无法直连的问题。
-  - Worker 代码随插件提供（`cloudflare-worker/`），部署后在 WebUI 开启并填入地址即可；反代不可用时会自动回退直连。
+  - 部署自建 Worker 后在 WebUI 开启并填入地址即可；反代不可用时会自动回退直连。
 - ⚡ **跨平台适配器自动优化**：
   - **OneBot v11**：自动构建优雅的节点合并转发（Nodes），避免消息刷屏。
   - **QQ Official / Telegram 等**：自动拆分兼容量，采用主动发送机制，防止消息被 `@` 回复格式干扰。
@@ -192,38 +192,102 @@
 
 ## 📁 目录结构
 
+> 面向贡献者与 AI 的开发约定（架构契约、常见改动位置、验证清单）见 [`agent.md`](agent.md)。
+
 ```text
 astrbot_plugin_rika_share/
-├── main.py                    # 插件主入口 (事件响应、B站扫码登录/监控、Fallback路由)
-├── metadata.yaml              # 插件元数据定义
-├── _conf_schema.json          # WebUI 配置项分组 Schema 定义
-├── requirements.txt           # Python 依赖清单
-├── cloudflare-worker/         # X 反代 (Cloudflare Worker)
-│   ├── worker.js              # 反代实现 (pbs.twimg.com / video.twimg.com / api.vxtwitter.com)
-│   ├── wrangler.toml          # 部署配置
-│   └── README.md              # 部署与使用说明
-├── docs/
-│   └── previews/              # 卡片渲染与布局预览图
-├── scripts/
-│   └── preview_layouts.py     # 布局渲染测试回归脚本
-└── core/
-    ├── config.py              # 配置读取与旧版配置自动迁移
-    ├── constants.py           # 常量与枚举
-    ├── data.py                # ParseResult 等核心数据模型
-    ├── download.py            # 异步流式下载器 (支持进度与限速)
-    ├── render.py              # Pillow 卡片渲染引擎
-    ├── cloudflare_screenshot.py# Cloudflare Browser Rendering API 客户端
-    ├── bili_models/           # B站各种消息模型解析
-    └── parsers/               # 各平台解析适配器
-        ├── bilibili.py        # B站解析器
-        ├── douyin.py          # 抖音解析器
-        ├── kuaishou.py        # 快手解析器
-        ├── weibo.py           # 微博解析器
-        ├── xiaohongshu.py     # 小红书解析器
-        ├── twitter.py         # Twitter/X 解析器
-        ├── nga.py             # NGA 解析器
-        └── acfun.py           # AcFun 解析器
+├── main.py                       # 插件入口：插件类 + 全部事件 Handler（AstrBot 要求写在此处）
+├── metadata.yaml                 # 插件元数据定义
+├── _conf_schema.json             # WebUI 配置项分组 Schema 定义
+├── requirements.txt              # Python 依赖清单
+├── agent.md                      # AI 开发指南（结构契约 / 改哪里 / 验证清单 / 维护要求）
+├── docs/previews/                # 卡片渲染与布局预览图
+├── scripts/                      # 开发辅助脚本（布局回归、字体覆盖探测等）
+└── link_parser/                  # 插件实现（链接分享解析，按职责分层）
+    ├── adapters/                 # 平台解析适配器（每个平台一个模块，自注册）
+    │   ├── base.py               #   BaseParser 基类 + @handle 装饰器
+    │   ├── registry.py           #   适配器注册表（URL 触发正则 / 构建方式）
+    │   └── bilibili.py · douyin.py · kuaishou.py · weibo.py
+    │       xiaohongshu.py · twitter.py · nga.py · acfun.py
+    ├── models/                   # 数据类型
+    │   ├── content.py            #   媒体内容（图片 / 视频 / 音频）
+    │   ├── result.py             #   ParseResult / Platform / Author
+    │   ├── task.py               #   惰性下载路径包装 PathTask
+    │   └── platforms/            #   各平台接口返回结构（一个平台一个子包）
+    │       ├── acfun/            #     video_info.py
+    │       ├── bilibili/         #     author.py · video_info.py · dynamic.py
+    │       │                     #     opus.py · live_room.py · favorite_list.py
+    │       ├── douyin/           #     aweme.py
+    │       ├── kuaishou/         #     init_state.py
+    │       ├── weibo/            #     status.py · video_show.py · article.py
+    │       └── xiaohongshu/      #     note.py · explore_page.py · discovery_page.py
+    ├── services/                 # 有状态服务（一个服务一个模块）
+    │   ├── downloader.py         #   异步流式媒体下载
+    │   ├── card_render/          #   卡片渲染子系统（theme / fonts / text / renderer）
+    │   ├── web_screenshot.py     #   Cloudflare Browser Rendering 网页截图
+    │   ├── live_photo.py         #   实况照片（主图 + 短视频）单文件合成
+    │   └── bilibili_account.py   #   B站扫码登录 / Cookie 监控与自动应用
+    ├── output/                   # 输出构建
+    │   ├── builder.py            #   解析结果 → 合并转发 / 纯文本消息链
+    │   ├── json_card.py          #   JSON 分享卡片识别与链接提取
+    │   └── replies.py            #   统一的回复构造（错误提示等）
+    ├── utils/                    # 无状态工具（cache / media / formatting / cookie）
+    ├── config.py                 # 配置读取与旧版配置自动迁移
+    ├── constants.py              # 请求头、超时、平台枚举、通用 URL 正则
+    └── exceptions.py             # 异常体系
 ```
+
+**命名与归档约定**
+
+- 模块名一律自描述：`web_screenshot.py`（网页截图）、`bilibili_account.py`（B站账号）、
+  `formatting.py`（文本格式化）、`replies.py`（回复构造），不使用缩写或代号。
+- 一个平台 = `adapters/<平台>.py` + `models/platforms/<平台>/`，两侧一一对应。
+- 多模块子系统才用子包（`models/platforms/<平台>/`、`services/card_render/`），
+  单模块一律保持单文件，避免出现「同一层里既有文件夹又有文件」的歧义。
+- 子包的 `__init__.py` 显式导出对外接口，调用方只从包根导入，
+  这样调整子包内部拆分不会影响调用方。
+
+---
+
+## 🧩 扩展：新增一个平台适配器
+
+适配器层已做自注册，新增平台**无需改动入口的事件注册逻辑**：
+
+1. 在 `link_parser/adapters/` 下新建 `<平台名>.py`：
+
+   ```python
+   from ..constants import PlatformEnum
+   from ..models import Platform
+   from .base import BaseParser, handle
+   from .registry import AdapterSpec, register_adapter
+
+   class FooParser(BaseParser):
+       platform = Platform(name=PlatformEnum.FOO, display_name="Foo")
+
+       @handle("foo.com", r"foo\.com/video/(?P<vid>\d+)")
+       async def _parse(self, searched):
+           return self.result(title="...", url="...")
+
+   ADAPTER = register_adapter(
+       AdapterSpec(
+           name=PlatformEnum.FOO.value,
+           url_pattern=re.compile(r"foo\.com"),
+           parser_cls=FooParser,
+           description="视频",
+       )
+   )
+   ```
+
+2. 在 `link_parser/constants.py` 的 `PlatformEnum` 中加入该平台标识；
+3. 在 `link_parser/adapters/__init__.py` 的 `_ADAPTER_MODULES` 中 import 该模块。
+
+若平台返回结构较复杂，在 `link_parser/models/platforms/<平台名>/` 下新建子包：
+模块名按接口命名（如 `video_info.py`、`status.py`），并在子包 `__init__.py` 中导出
+响应结构与 `decoder`（多个模块都有 `decoder` 时按语义加前缀，如 `status_decoder`），
+适配器只从子包根导入（`from ..models.platforms.<平台> import ...`）。
+
+其余部分自动生效：入口的 URL 过滤器正则、解析器实例化、`DISABLED_PLATFORMS` 开关、
+渲染配色（`link_parser/services/card_render/theme.py` 的 `PLATFORM_COLORS`，可选）。
 
 ---
 
