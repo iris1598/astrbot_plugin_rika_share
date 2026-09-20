@@ -108,7 +108,9 @@ astrbot_plugin_rika_share/
 | `bili_cookie_status.json` | 上次检测状态 / 是否曾失效 | 同上 |
 | `.bili_cookie_key` | Fernet 密钥（权限尽量 0600） | 同上 |
 
-缓存清理：`initialize()` 起定时任务（`CACHE_TTL_HOURS` / `CACHE_CLEANUP_INTERVAL_MINUTES`），清理后**同时清空内存缓存** `_result_cache` / `_identity_cache` / `_render_cache`；`/clear_cache` 做同样的事。**新增任何内存缓存都要挂到这两处清理点。**
+缓存清理：`initialize()` 起定时任务（`CACHE_TTL_HOURS` / `CACHE_CLEANUP_INTERVAL_MINUTES`），清理后**同时清空内存缓存** `_content_cache` / `_identity_cache`；`/clear_cache` 做同样的事。**新增任何内存缓存都要挂到这两处清理点。**
+
+内存缓存的另一层失效机制是**按平台声明的 TTL**（`BaseParser.CACHE_TTL_SECONDS`）：磁盘清理是「按小时回收文件」，TTL 是「按秒判断结果是否还准确」，两者互不替代。
 
 ---
 
@@ -126,9 +128,11 @@ astrbot_plugin_rika_share/
  _process_url(event, parser)   ← 所有解析流量的唯一主干
    1. parser.cache_identity(url)  → 缓存键「内容标识」（规则见 5.7，
                                     短链会先跟随跳转；结果按原始文本记忆在 _identity_cache）
-   2. _result_cache 命中则直接跳到第 4 步（**只写日志、不向对话发消息**）；
+   2. _content_cache 命中则直接跳到第 4 步（**只写日志、不向对话发消息**）；
       未命中：parser.search_url(url) → (keyword, match) → parser.parse(...) → ParseResult
-      （create_* 只提交下载任务，返回 PathTask），再写入 _result_cache[cache_key]
+      （create_* 只提交下载任务，返回 PathTask），再写入 _content_cache[cache_key]
+      缓存条目按需过期：超过 parser.CACHE_TTL_SECONDS（见 5.7）则视为未命中重新解析，
+      并让卡片代次 +1（新卡片另存文件名，不覆盖可能正在发送的旧图）
    3. build_platform_output(result, platform) → (header, nodes_content)
    4. ShareCardRenderer.render(...)           → 卡片 PNG（失败返回 None）
    5. 有卡片：context.send_message(umo, MessageChain().file_image(...)) 主动发送
@@ -257,8 +261,8 @@ ADAPTER = register_adapter(
 入口侧（`main.py`）：
 
 - `_identity_cache`：原始文本 → 内容标识，避免同一条链接重复跳转；超过 `_IDENTITY_MEMO_MAX`(2048) 整体清空。
-- 缓存键同时用于 `_result_cache` 与 `_render_cache`，因此**卡片文件名也随内容稳定**（换短链不会重复渲染）。
-- 清理点：`initialize()` 的定时清理、`/clear_cache` 都会同时清空 `_result_cache` / `_identity_cache` / `_render_cache`。
+- 内容缓存是 `_content_cache: dict[内容标识, _ContentCacheEntry]`，条目同时持有 `result` / `parsed_at` / `render_path` / `generation`；卡片文件名由 `cache_key` 派生，因此**同一内容稳定复用同一张卡片**（换短链不会重复渲染）。
+- 清理点：`initialize()` 的定时清理、`/clear_cache` 都会清空 `_content_cache` / `_identity_cache`。
 
 **已知边界**（有意不统一，改前先想清楚）：
 
@@ -266,6 +270,20 @@ ADAPTER = register_adapter(
 - 微博 `video.weibo.com/show?fid=1034:xxx` 与 `weibo.com/{uid}/{bid}` 不合并（fid 与 status id 无法可靠互推）。
 - 短链首次出现会多一次跳转请求（仅短链，且被 `_identity_cache` 记忆）。
 - 身份里带上内容相关的维度（如 B站 `page_num` 分P）——新增维度时要在 `identity_from_match` 里体现，否则不同内容会串缓存。
+
+### 5.8 缓存有效期（`BaseParser.CACHE_TTL_SECONDS`）
+
+内容标识解决「同一内容 → 同一条缓存」，TTL 解决「**这条缓存还能不能代表现在**」。
+
+- 默认 `None`：进程内长期有效（内容不变的平台不需要设置）。
+- B站设 `300`（5 分钟）：它的解析结果带**实时数据**——视频的「🏄 X 人正在观看」、直播间的场次标题/封面。永久缓存会让同一条链接第二次分享时展示过期数字。
+- 超时后的行为：重新走完整解析（拿到新数据）→ 卡片 `generation + 1` → **新卡片另存文件名**（不覆盖可能正在被发送的旧图，旧文件由 `CACHE_TTL_HOURS` 回收）。
+
+三个容易踩错的点：
+
+1. **TTL 只在「同一内容被重复分享」时才起作用**。首次分享永远是新解析，所以把 TTL 设小不会明显增加请求量。
+2. **必须同时让卡片换代**。`ShareCardRenderer.render` 除了 `existing` 还会检查 `out_path.exists()`，同名文件会让它直接返回旧图——所以重新解析时既要把 `existing` 传 `None`，也要靠 `salt`（代次）改变文件名。
+3. **不要把实时字段从 `extra` 里删掉却又依赖它**：`online` 之类的字段由 `builder.py`（文本）和 `card_render/renderer.py`（卡片）共同消费，两边都做了空值守卫。
 
 ---
 
@@ -277,6 +295,7 @@ ADAPTER = register_adapter(
 | 修某平台解析失效 | `adapters/<平台>.py`（+ `models/platforms/<平台>/`） | 先确认是接口变了还是模型字段变了 |
 | 调整 URL 触发范围 | 对应适配器 `register_adapter(url_pattern=...)` | `main.py` 的 filter 自动跟随，无需改 |
 | 改缓存命中规则 / 加内容标识 | `adapters/base.py` 的 `cache_identity` 阶梯；平台侧声明 `SHORT_LINK_KEYWORDS` / `IDENTITY_PATTERNS` / 覆写 `identity_from_match` | 见 5.7；**别把 token / 时间戳等易变参数带进标识** |
+| 改缓存有效期（某平台出现实时数据过期） | 平台适配器声明 `CACHE_TTL_SECONDS` | 见 5.8；改动时确认卡片也跟着换代 |
 | 新增 / 修改配置项 | 4 处，见 5.6 | 漏改会导致 WebUI 不显示或旧值丢失 |
 | 新增卡片布局 | `card_render/renderer.py`（`_render_<layout>` + `_render_sync` 分发）+ `card_render/theme.py`（`LAYOUT_NAMES`）+ `_conf_schema.json`（`RENDER_LAYOUT.options` 两处）+ README | 无封面场景必须能回退（参考 `_render_immersive`） |
 | 新增主题 / 平台配色 | `card_render/theme.py`（`THEMES` / `PLATFORM_COLORS`） | 主题名要同步 schema 的 options 与 `ParserConfig.RENDER_THEME` 白名单 |
@@ -289,7 +308,7 @@ ADAPTER = register_adapter(
 | 调 B站 Cookie / 登录 / 监控 | `services/bilibili_account.py` | 改存储格式要兼容已有密钥与 Cookie 文件 |
 | 调 Cloudflare 截图参数 | `services/web_screenshot.py` + `_conf_schema.json` | 新增请求体字段要登记到 `CF_KEY_MAP`（snake→camel） |
 | 新增指令 | `main.py`（`@filter.command`）+ 逻辑放 `services/*` | Handler 必须在 `main.py`；管理指令加 `@filter.permission_type(ADMIN)` |
-| 新增内存缓存 | `main.py` 的 `initialize()` 清理回调 + `/clear_cache` | 两处都要清 |
+| 新增内存缓存 | `main.py` 的 `initialize()` 清理回调 + `/clear_cache` | 两处都要清；能挂进 `_ContentCacheEntry` 的优先挂进去，别新开平行字典 |
 | 改 README / 预览图 | `README.md`、`docs/previews/`（图由 `scripts/preview_layouts.py` 产出） | — |
 
 ---
@@ -375,7 +394,9 @@ assert not bad and len(handlers) == 14
 - **OneBot 才支持合并转发**：`Comp.Nodes` 仅 OneBot v11（`aiocqhttp`）可用；其他平台走 `send_plain_output` + 主动发送（避免 AstrBot「回复时 @」污染图片 markdown）。
 - **合并转发的内存风险**：OneBot 会把节点内图片整体 base64，峰值约为原图总量 4 倍 → 用 `FORWARD_MAX_NODES` / `FORWARD_MAX_BATCH_MB` 拆批，不要去掉拆批逻辑。
 - **渲染图与文本重复**：视频类内容在卡片成功时不再发文字摘要；图文仍发图集 —— 调整时要保持「不重复、不丢内容」。
-- **内存缓存 key 是 `url[:64]`**：超长 URL 会碰撞，且缓存不区分发送者；改动缓存键要评估影响。
+- **缓存不区分发送者**：同一内容在同一进程内所有会话共享一条缓存与一张卡片（这是预期行为，别按会话分键）。
+- **实时数据必须靠 TTL 兜底，不能靠渲染缓存**：卡片是 `cache_key` 派生的稳定文件，`render()` 见到同名文件会直接复用。任何「会随时间变」的字段（B站 `extra["online"]`、直播间场次标题）都要通过 `CACHE_TTL_SECONDS` 让结果与卡片一起换代，否则会长期展示过期数字，见 5.8。
+- **卡片换代不删旧图**：重新解析后新卡片另存文件名（避免覆盖正在发送的旧图），旧文件交给 `CACHE_TTL_HOURS` 回收 —— 因此缓存目录会存在同内容的多代卡片，属正常现象。
 - **超时/重发的双发问题**：OneBot 大文件发送可能 retcode 1200（invoke timeout）但实际已发出，回退重发会导致重复 —— 相关判断在 `exceptions.py` 里已删（原 `is_timeout_exception` 未被使用），如需处理请谨慎。
 - **可选依赖降级**：Pillow 缺失 → 渲染自动关闭回退文本；fontTools 缺失 → 单字体渲染；ffmpeg 缺失 → 相关媒体处理抛 `RuntimeError`；curl_cffi 缺失 → 下载只用 httpx。
 - **B站凭证会在响应头回传新 Cookie 时自动刷新**并写盘，调试时不要依赖「配置文件里就是当前值」。
@@ -401,6 +422,7 @@ assert not bad and len(handlers) == 14
 10. 依赖或运行环境要求变化、新增已知坑（→ 第 8 节、第 9 节）
 11. 验证基线数字变化（→ 第 8 节「期望基线」）
 12. 缓存键（内容标识）规则变化：阶梯、短链声明、平台特有归一化（→ 第 5.7 节、第 4 节）
+13. 缓存有效期（`CACHE_TTL_SECONDS`）或卡片换代机制变化（→ 第 5.8 节、第 4 节、第 9 节）
 
 ### 10.2 更新方式
 
@@ -413,6 +435,7 @@ assert not bad and len(handlers) == 14
 
 | 日期 | 变更 | 影响小节 |
 | :--- | :--- | :--- |
+| 2026-09-20 | 内容缓存新增**按平台的有效期**：`BaseParser.CACHE_TTL_SECONDS`，B站设 300s（其解析结果带实时在线人数 / 直播间场次信息，永久缓存会展示过期数据）；超时重新解析并让卡片代次 +1 换代；`_result_cache` / `_render_cache` 合并为 `_content_cache: dict[key, _ContentCacheEntry]` | 3、4、5.7、5.8、6、9、10.1 |
 | 2026-09-20 | 缓存键由「URL 前 64 字符」改为**内容标识**：优先取 `@handle` 命名分组，短链先跟随跳转（一跳优先、失败再跟完整链，`_identity_cache` 记忆），兜底 URL 归一化；新增 `utils/url.py`、`BaseParser.cache_identity` 及 `SHORT_LINK_KEYWORDS` / `IDENTITY_PATTERNS` / `identity_from_match` / `short_link_headers` 扩展点；微博 mid→bid、快手 photo id、Twitter status id 归一 | 2、3、4、5.7、9、10 |
 | 2026-09-20 | 命中解析缓存不再向对话发送「🔄 命中缓存...」，改为写日志（`main._process_url`） | 4 |
 | 2026-09-20 | 移除「本机环境备忘」整节（含本机绝对路径等隐私与环境专属信息），`<PY>` 改为通用占位说明，`PYTHONPATH` 补依赖的做法改写为通用提示；小节重新编号（10 已知约束与坑、11→10 维护要求） | 8、9、10 |

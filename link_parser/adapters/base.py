@@ -11,6 +11,9 @@
 命名分组（如 ``aweme_id`` / ``bvid`` / ``tid``）作为内容标识，短链先跟随跳转再判定，
 因此同一内容的不同链接会落在同一缓存条目上。命名分组不便表达时，可通过
 ``IDENTITY_PATTERNS`` 或覆写 ``identity_from_match()`` 补充。
+
+内容会随时间变化的平台可通过 ``CACHE_TTL_SECONDS`` 声明结果缓存有效期，
+过期后入口会重新解析，避免长期展示过期的实时数据（在线人数、直播场次等）。
 """
 
 import asyncio
@@ -57,6 +60,13 @@ def handle(keyword: str, pattern: str):
 
 class BaseParser:
     platform: ClassVar[Platform]
+
+    #: 解析结果在内存缓存中的有效期（秒）。``None`` 表示进程内长期有效。
+    #:
+    #: 用于「内容本身会随时间变化」的平台：典型是 B站视频的实时在线人数、
+    #: 直播间的场次标题 / 封面。这类内容不适合永久缓存，否则重复分享同一条
+    #: 链接时会展示过期数据。命中过期条目会重新走一遍完整解析（并重画卡片）。
+    CACHE_TTL_SECONDS: ClassVar[int | None] = None
 
     def __init__(self, downloader: StreamDownloader):
         self.headers = COMMON_HEADER.copy()

@@ -447,14 +447,20 @@ class ShareCardRenderer:
         result: ParseResult,
         cache_key: str | None = None,
         existing: Path | None = None,
+        salt: str | None = None,
     ) -> Path | None:
-        """异步渲染卡片，失败时返回 None（由调用方回退到文本输出）。"""
+        """异步渲染卡片，失败时返回 None（由调用方回退到文本输出）。
+
+        ``salt`` 用于内容被重新解析的场景（如结果缓存已过期）：带上它会让输出
+        文件名变化，从而绕开磁盘上的旧卡片；调用方此时还应把 ``existing`` 传
+        ``None``，否则会直接复用内存里记录的旧图。
+        """
         if not self.enabled:
             return None
         try:
             if existing is not None and existing.exists():
                 return existing
-            out_path = self._output_path(cache_key, result)
+            out_path = self._output_path(cache_key, result, salt)
             if out_path.exists():
                 return out_path
             images = await self._collect_images(result)
@@ -463,12 +469,16 @@ class ShareCardRenderer:
             logger.exception("解析卡片渲染失败，已回退到文本输出")
             return None
 
-    def _output_path(self, cache_key: str | None, result: ParseResult) -> Path:
+    def _output_path(
+        self, cache_key: str | None, result: ParseResult, salt: str | None = None
+    ) -> Path:
         warnings_str = "|".join(result.extra.get("limit_warnings") or [])
         payload = (
             cache_key
             or f"{result.platform.name}|{result.title}|{result.timestamp}|{result.url}"
         )
+        if salt:
+            payload = f"{payload}#{salt}"
         digest = hashlib.md5(
             f"{self.theme_name}|{self.width}|{self.layout_name}|{self.cover_full_size}|{payload}|{warnings_str}".encode("utf-8")
         ).hexdigest()[:16]

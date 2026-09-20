@@ -38,6 +38,11 @@ except Exception:
 class BilibiliParser(BaseParser):
     platform: ClassVar[Platform] = Platform(name=PlatformEnum.BILIBILI, display_name="哔哩哔哩")
 
+    #: B站解析结果带「实时数据」——视频的在线观看人数、直播间的场次标题与封面，
+    #: 这些值会随时间变化，永久缓存会导致重复分享时展示过期内容。
+    #: 因此结果缓存只保留 5 分钟：期间重复分享仍走缓存，超过则重新解析拿新数据。
+    CACHE_TTL_SECONDS = 300
+
     #: b23.tv / bili2233.cn 短链：需先跟随跳转才能拿到 BV 号等内容标识
     SHORT_LINK_KEYWORDS = ("b23.tv", "bili2233.cn")
 

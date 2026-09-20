@@ -17,6 +17,8 @@
 
 import asyncio
 import re
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
@@ -76,6 +78,28 @@ def _pattern(name: str) -> str:
 _IDENTITY_MEMO_MAX = 2048
 
 
+@dataclass
+class _ContentCacheEntry:
+    """一条内容缓存：解析结果 + 解析时刻 + 卡片文件。
+
+    以「内容标识」（见 ``BaseParser.cache_identity``）为键，因此同一内容的不同
+    短链 / 长链共用一条。``parsed_at`` 用于按适配器声明的 ``CACHE_TTL_SECONDS``
+    判断是否过期——B站这类带实时数据的平台超时后会重新解析。
+    """
+
+    result: ParseResult
+    parsed_at: float
+    render_path: Path | None = None
+    #: 重新解析的次数：>0 时卡片文件名会带上代次，避免复用（或覆盖）上一代卡片
+    generation: int = 0
+
+    def expired(self, ttl: int | None, now: float | None = None) -> bool:
+        """``ttl`` 为 ``None`` 表示不设有效期。"""
+        if ttl is None:
+            return False
+        return (now if now is not None else time.monotonic()) - self.parsed_at > ttl
+
+
 @register("链接解析器", "fllesser (ported to AstrBot)",
           "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA", "2.10.0")
 class ParserPlugin(Star):
@@ -122,10 +146,10 @@ class ParserPlugin(Star):
 
         self.parsers: dict[str, Any] = {}
         self._init_parsers()
-        self._result_cache: dict[str, ParseResult] = {}
+        # 内容标识 → 解析结果缓存（含卡片路径、解析时刻与代次）
+        self._content_cache: dict[str, _ContentCacheEntry] = {}
         # 原始链接 → 内容标识（含短链跳转结果），避免重复解析/跳转
         self._identity_cache: dict[str, str] = {}
-        self._render_cache: dict[str, Path] = {}
         self._cache_cleanup_task: asyncio.Task | None = None
 
         # ========== 解析图片渲染 ==========
@@ -193,10 +217,9 @@ class ParserPlugin(Star):
                 try:
                     while True:
                         await cleanup_cache_dir(self.cache_dir, ttl_hours=ttl)
-                        # 文件清理后同步清空内存缓存（解析结果 + 内容标识 + 渲染图片）
-                        self._result_cache.clear()
+                        # 文件清理后同步清空内存缓存（解析结果 + 卡片路径 + 内容标识）
+                        self._content_cache.clear()
                         self._identity_cache.clear()
-                        self._render_cache.clear()
                         await asyncio.sleep(interval)
                 except asyncio.CancelledError:
                     logger.info("缓存清理任务已停止")
@@ -418,18 +441,35 @@ class ParserPlugin(Star):
         try:
             # 缓存键 = 内容标识：不同短链 / 长链指向同一内容时命中同一条缓存
             cache_key = await self._content_cache_key(parser, url)
-            result = self._result_cache.get(cache_key)
+            entry = self._content_cache.get(cache_key)
 
-            if result is None:
+            # 结果缓存过期：内容带实时数据（如 B站在线人数），不能继续复用旧结果
+            if entry is not None and entry.expired(parser.CACHE_TTL_SECONDS):
+                logger.info(
+                    f"解析缓存已过期（>{parser.CACHE_TTL_SECONDS}s），重新解析以刷新实时数据: "
+                    f"{entry.result.platform.display_name} [{cache_key}]"
+                )
+                entry = None
+
+            if entry is None:
+                # 若上一代结果仍在（过期场景），代次 +1 让新卡片另存文件，
+                # 避免覆盖可能正在被发送的旧卡片
+                previous = self._content_cache.pop(cache_key, None)
+                generation = previous.generation + 1 if previous else 0
                 keyword, searched = parser.search_url(url)
                 result = await parser.parse(keyword, searched)
-                self._result_cache[cache_key] = result
+                entry = _ContentCacheEntry(
+                    result=result, parsed_at=time.monotonic(), generation=generation
+                )
+                self._content_cache[cache_key] = entry
             else:
                 # 命中缓存只在日志里提示，不向对话发送消息
+                age = time.monotonic() - entry.parsed_at
                 logger.info(
-                    f"命中解析缓存，跳过重复解析: {result.platform.display_name} "
-                    f"[{cache_key}] {url[:80]}"
+                    f"命中解析缓存（{age:.0f}s 前解析），跳过重复解析: "
+                    f"{entry.result.platform.display_name} [{cache_key}] {url[:80]}"
                 )
+                result = entry.result
 
             # 根据平台构建：标题头 + 合并转发内容列表
             header, nodes_content = await build_platform_output(
@@ -442,10 +482,12 @@ class ParserPlugin(Star):
                 render_path = await self._renderer.render(
                     result,
                     cache_key=cache_key,
-                    existing=self._render_cache.get(cache_key),
+                    existing=entry.render_path,
+                    # 代次 >0 表示内容被重新解析过，卡片文件名要跟着换代
+                    salt=str(entry.generation) if entry.generation else None,
                 )
                 if render_path is not None:
-                    self._render_cache[cache_key] = render_path
+                    entry.render_path = render_path
 
             warnings = result.extra.get("limit_warnings") or []
             is_video = any(
@@ -544,9 +586,8 @@ class ParserPlugin(Star):
         """手动清理插件缓存。"""
         try:
             cleaned = await clear_cache_dir(self.cache_dir)
-            self._result_cache.clear()
+            self._content_cache.clear()
             self._identity_cache.clear()
-            self._render_cache.clear()
             yield event.plain_result(f"✅ 莉卡解析缓存清理完成，共清理 {cleaned} 个文件")
         except Exception as exc:
             logger.exception("手动清理莉卡解析缓存失败")
