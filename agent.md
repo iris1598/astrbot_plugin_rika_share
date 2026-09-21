@@ -442,6 +442,7 @@ DedeUserID__ckMd5）、`data.cookie_info.cookies`（部分渠道）、`Set-Cooki
 
 AstrBot 只扫描 `pages/<page_name>/index.html`，页面脚本通过 `window.AstrBotPluginPage`
 bridge 调后端；后端路由必须带插件名前缀，页面侧写去掉前缀的相对路径。
+界面的样式与交互来自 [astrbot_plugin_denia_share](https://github.com/xiaoxi2760/astrbot_plugin_denia_share)（移植；该项目的卡片渲染最初源自本项目，README 已注明）。
 
 | 环节 | 位置 | 说明 |
 | :--- | :--- | :--- |

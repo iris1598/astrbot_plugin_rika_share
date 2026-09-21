@@ -13,6 +13,10 @@
 
 移植自 [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser)，并针对 AstrBot 架构做了分层重构与功能增强。
 
+> **本插件为自用项目**：功能按自己的使用场景取舍，更新随个人节奏，不承诺兼容性与排期。
+>
+> 网页设置页（`pages/rika/`）来自 [astrbot_plugin_denia_share](https://github.com/xiaoxi2760/astrbot_plugin_denia_share)；该项目的卡片渲染最初源自本项目。
+
 ---
 
 ## 📖 目录
@@ -79,7 +83,9 @@
 
 ### 🖥️ 网页设置页
 
-插件自带一个 Dashboard 页面（插件详情页里打开），把 51 项配置按 9 个分组收在一处：
+页面来自 [astrbot_plugin_denia_share](https://github.com/xiaoxi2760/astrbot_plugin_denia_share)。
+
+插件自带一个 Dashboard 页面（插件详情页里打开），把 44 项配置按 8 个分组收在一处：
 
 - 左侧分组导航 + 顶部搜索，长配置表不再靠滚动找；
 - Cookie / Token 默认遮罩，可一键显示核对；
@@ -474,6 +480,7 @@ B站 给出的可用清晰度，是判断登录态是否生效最直接的证据
 ## 🙏 致谢
 
 - [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser) —— 原 NoneBot2 插件的优秀思路与解析逻辑。
+- [astrbot_plugin_denia_share](https://github.com/xiaoxi2760/astrbot_plugin_denia_share) —— 本插件的网页设置页来自该项目；该项目的卡片渲染最初源自本项目。
 - [bilibili-api-python](https://github.com/Nemo2011/bilibili-api) —— B站接口封装与扫码登录实现。
 - [AstrBot](https://github.com/AstrBotDevs/AstrBot) —— 强大的多平台机器人框架。
 
