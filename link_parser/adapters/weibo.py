@@ -182,5 +182,6 @@ ADAPTER = register_adapter(
         ),
         parser_cls=WeiBoParser,
         description="微博动态 / 头条文章 / 视频",
+        priority=40,
     )
 )

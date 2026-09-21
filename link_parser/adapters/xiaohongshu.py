@@ -144,6 +144,7 @@ ADAPTER = register_adapter(
         url_pattern=re.compile(r"(xhslink\.com|xhslink\.cn|xiaohongshu\.com)"),
         parser_cls=XiaoHongShuParser,
         description="图文笔记 / 视频笔记",
+        priority=50,
         build=lambda ctx: XiaoHongShuParser(ctx.downloader, xhs_ck=ctx.config.XHS_CK),
     )
 )

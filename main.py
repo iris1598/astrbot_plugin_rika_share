@@ -5,10 +5,12 @@
 移植自 nonebot-plugin-parser (https://github.com/fllesser/nonebot-plugin-parser)
 内置B站扫码登录、Cookie监控、自动应用Cookie功能
 
-本文件只承载 AstrBot 要求的插件类与事件处理器（Handler 必须定义在插件模块内才能被
-框架注册）。具体实现按职责分层放在 ``link_parser`` 包中：
+本文件承载 AstrBot 要求的插件类与事件处理器（Handler 必须归属在插件模块下才能被
+框架注册）。其中各平台的 Handler 由 ``link_parser.adapters`` 的注册表自动生成
+（见 ``_PLATFORM_HANDLERS``），因此**新增平台不需要改动本文件**。
+具体实现按职责分层放在 ``link_parser`` 包中：
 
-    link_parser/adapters   平台解析适配器（自注册，新增平台无需改动本文件的事件注册）
+    link_parser/adapters   平台解析适配器（自动发现 + 自注册）
     link_parser/models     数据类型
     link_parser/services   下载 / 渲染 / 截图 / 实况照片 / B站账号
     link_parser/output     解析结果到消息链的输出构建
@@ -27,7 +29,7 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult, Mess
 import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star, register, StarTools
 
-from .link_parser.adapters import get_adapter, iter_adapters
+from .link_parser.adapters import iter_adapters
 from .link_parser.adapters.registry import AdapterBuildContext
 from .link_parser.config import get_config, init_config, migrate_grouped_config
 from .link_parser.constants import GENERIC_URL_PATTERN
@@ -66,13 +68,41 @@ def _get_plugin_data_dir() -> Path:
     return Path(get_astrbot_data_path()) / "plugin_data" / "astrbot_plugin_rika_share"
 
 
-def _pattern(name: str) -> str:
-    """取适配器注册的 URL 触发正则。
+def _make_platform_handler(name: str, pattern: str):
+    """按适配器注册表生成一个平台 Handler。
 
-    新增平台时只需在 ``link_parser/adapters`` 中注册，此处无需改动。
+    框架以 ``handler.__module__`` **精确匹配**插件模块路径来归属 Handler
+    （见 agent.md 铁律 1），所以函数必须在本模块内构造，并显式改写
+    ``__module__`` / ``__name__`` 后再套 ``@filter.regex``。
     """
-    spec = get_adapter(name)
-    return spec.url_pattern.pattern if spec else r"(?!)"
+
+    async def _handler(
+        self: "ParserPlugin",
+        event: AstrMessageEvent,
+        matched: re.Match | None = None,
+    ) -> AsyncGenerator[MessageEventResult, None]:
+        async for r in self._dispatch(event, name):
+            yield r
+
+    _handler.__name__ = f"{name}_handler"
+    _handler.__qualname__ = f"ParserPlugin.{name}_handler"
+    _handler.__module__ = __name__
+    _handler.__doc__ = f"解析 {name} 平台链接。"
+    filter.regex(pattern)(_handler)  # 装饰即注册；函数本身仍由下面的 dict 挂到类上
+    return _handler
+
+
+#: 平台 Handler（``平台名 -> 函数``）。
+#:
+#: **必须在插件类定义之前生成**：装饰器求值的先后就是 ``star_handlers_registry``
+#: 里的注册顺序，也就是同一条消息上各 Handler 的执行顺序。改造前平台 Handler
+#: 排在 JSON 卡片 / Cloudflare 兜底 / 指令之前，这里保持不变。
+#:
+#: 新增平台不需要动本文件：注册了适配器就会在这里自动多出一个 Handler。
+_PLATFORM_HANDLERS: dict[str, Any] = {
+    spec.name: _make_platform_handler(spec.name, spec.url_pattern.pattern)
+    for spec in iter_adapters()
+}
 
 
 #: 「原始链接 → 内容标识」记忆上限，超过则整体清空（避免长跑无限累积）
@@ -101,8 +131,8 @@ class _ContentCacheEntry:
         return (now if now is not None else time.monotonic()) - self.parsed_at > ttl
 
 
-@register("链接解析器", "fllesser (ported to AstrBot)",
-          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA", "v3.0.0")
+@register("莉卡解析", "iris1598",
+          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA", "v3.0.1")
 class ParserPlugin(Star):
     # 合并转发（Comp.Nodes）是 OneBot v11 独有特性，其他平台均不支持
     @staticmethod
@@ -351,45 +381,10 @@ class ParserPlugin(Star):
         async for r in self._process_url(event, parser):
             yield r
 
-    @filter.regex(_pattern("bilibili"))
-    async def bilibili_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
-        async for r in self._dispatch(event, "bilibili"):
-            yield r
-
-    @filter.regex(_pattern("douyin"))
-    async def douyin_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
-        async for r in self._dispatch(event, "douyin"):
-            yield r
-
-    @filter.regex(_pattern("kuaishou"))
-    async def kuaishou_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
-        async for r in self._dispatch(event, "kuaishou"):
-            yield r
-
-    @filter.regex(_pattern("weibo"))
-    async def weibo_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
-        async for r in self._dispatch(event, "weibo"):
-            yield r
-
-    @filter.regex(_pattern("xiaohongshu"))
-    async def xiaohongshu_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
-        async for r in self._dispatch(event, "xiaohongshu"):
-            yield r
-
-    @filter.regex(_pattern("twitter"))
-    async def twitter_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
-        async for r in self._dispatch(event, "twitter"):
-            yield r
-
-    @filter.regex(_pattern("nga"))
-    async def nga_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
-        async for r in self._dispatch(event, "nga"):
-            yield r
-
-    @filter.regex(_pattern("acfun"))
-    async def acfun_handler(self, event: AstrMessageEvent, matched: re.Match | None = None):
-        async for r in self._dispatch(event, "acfun"):
-            yield r
+    # ==================== 平台处理器 ====================
+    #
+    # 每个平台一个 ``@filter.regex`` Handler，由文件开头按适配器注册表自动生成并挂到
+    # 类上（``_PLATFORM_HANDLERS``）。新增平台只要注册了适配器就有 Handler，无需改本文件。
 
     # ==================== JSON 卡片处理器 ====================
 
@@ -714,3 +709,17 @@ class ParserPlugin(Star):
 
         # ========== 清理B站监控 / 扫码登录任务 ==========
         await self.bili.aclose()
+
+
+def _attach_platform_handlers(plugin_cls: type) -> None:
+    """把自动生成的平台 Handler 挂到插件类上。
+
+    框架是按 ``star_handlers_registry``（按模块路径归属）调用 Handler 的，
+    并不要求它一定是类的方法；挂载只是为了让 ``ParserPlugin.bilibili_handler``
+    这类按名字引用的写法依旧可用，也方便阅读与测试。
+    """
+    for handler in _PLATFORM_HANDLERS.values():
+        setattr(plugin_cls, handler.__name__, handler)
+
+
+_attach_platform_handlers(ParserPlugin)

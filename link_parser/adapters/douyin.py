@@ -111,5 +111,6 @@ ADAPTER = register_adapter(
         ),
         parser_cls=DouyinParser,
         description="视频 / 图文动态（含实况照片与动图重建）",
+        priority=20,
     )
 )

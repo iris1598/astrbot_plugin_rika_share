@@ -1,0 +1,29 @@
+# 换行符统一：仓库内一律 LF，检出也写 LF（否则 Windows 提交 CRLF、Linux 提交 LF，diff 全是噪声）
+* text=auto eol=lf
+
+# 二进制：禁止换行符转换，也别让 git 去 diff 内容
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.bmp binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.mp4 binary
+*.webm binary
+*.zip binary
+
+# 这些扩展名可能被二进制启发式误判，显式按文本处理
+*.svg text
+*.js text
+*.css text
+*.html text
+*.json text
+*.yaml text
+*.yml text
+*.md text
+*.txt text

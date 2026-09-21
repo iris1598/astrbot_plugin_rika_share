@@ -70,5 +70,6 @@ ADAPTER = register_adapter(
         url_pattern=re.compile(r"acfun\.cn"),
         parser_cls=AcfunParser,
         description="视频",
+        priority=80,
     )
 )

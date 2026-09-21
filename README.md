@@ -1,7 +1,8 @@
 # 莉卡解析 · astrbot_plugin_rika_share
 
 ![AstrBot Plugin](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)
-![Version](https://img.shields.io/badge/Version-v3.0.0-brightgreen?style=flat-square)
+![Version](https://img.shields.io/badge/Version-v3.0.1-brightgreen?style=flat-square)
+![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D3.5.13-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square)
 ![Render](https://img.shields.io/badge/Render-Pillow-orange?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
@@ -312,8 +313,10 @@ WebUI 侧边栏「插件」→ 莉卡解析 → 插件详情页 → 打开页面
 
 ```text
 astrbot_plugin_rika_share/
-├── main.py                       # 插件入口：插件类 + 全部事件 Handler（AstrBot 要求写在此处）
-├── metadata.yaml                 # 插件元数据定义
+├── main.py                       # 插件入口 + 事件 Handler（各平台 Handler 按适配器注册表自动生成）
+├── metadata.yaml                 # 插件元数据定义（name / author / version / astrbot_version）
+├── .gitattributes                # 换行符统一（仓库内 LF）+ 二进制文件清单
+├── .gitignore                    # 忽略缓存与开发脚本产物
 ├── _conf_schema.json             # 配置存储契约（条目全部 invisible，原生面板不展示）
 ├── requirements.txt              # Python 依赖清单
 ├── README.md                     # 本文件
@@ -383,22 +386,22 @@ astrbot_plugin_rika_share/
 
 ## 🧩 扩展：新增一个平台
 
-适配器层已做自注册，新增平台**无需改动入口的事件注册逻辑**。
+适配器层是**自动发现 + 自注册**的：往 `link_parser/adapters/` 里放一个模块，
+它就会变成一个平台——不用改 `main.py`，不用改注册清单，不用改配置。
 
-**1.** 在 `link_parser/adapters/` 下新建 `<平台名>.py`：
+**只需一步**：在 `link_parser/adapters/` 下新建 `<平台名>.py`：
 
 ```python
 import re
-from typing import ClassVar
 
-from ..constants import PlatformEnum
 from ..models import Platform
 from .base import BaseParser, handle
 from .registry import AdapterSpec, register_adapter
 
 
 class FooParser(BaseParser):
-    platform: ClassVar[Platform] = Platform(name=PlatformEnum.FOO, display_name="Foo")
+    # 平台名用小写字母开头的标识符即可，不需要在任何枚举里登记
+    platform = Platform(name="foo", display_name="Foo")
 
     @handle("foo.com", r"foo\.com/video/(?P<vid>\d+)")
     async def _parse(self, searched: re.Match[str]):
@@ -407,25 +410,37 @@ class FooParser(BaseParser):
 
 ADAPTER = register_adapter(
     AdapterSpec(
-        name=PlatformEnum.FOO.value,
+        name="foo",
         url_pattern=re.compile(r"foo\.com"),
         parser_cls=FooParser,
         description="视频",
+        # 需要额外参数时才写 build：
+        # build=lambda ctx: FooParser(ctx.downloader, ck=ctx.config.FOO_CK),
     )
 )
 ```
 
-**2.** 在 `link_parser/constants.py` 的 `PlatformEnum` 中加入平台标识。
+自动生效的部分：
 
-**3.** 在 `link_parser/adapters/__init__.py` 的 `_ADAPTER_MODULES` 中 import 该模块。
+| 环节 | 说明 |
+| :--- | :--- |
+| 导入与注册 | `adapters/__init__.py` 扫描本目录全部模块（`_` 前缀除外） |
+| 事件 Handler 与 URL 过滤器 | `main.py` 按注册表为每个平台生成一个 `@filter.regex` Handler |
+| 解析器实例化 | `_init_parsers()` 遍历注册表，跳过被关掉的平台 |
+| 启停开关 | 网页设置页的「解析器开关」按注册表动态渲染，存进 `DISABLED_PLATFORMS` |
+| 卡片配色 | `PLATFORM_COLORS` 查不到就用默认色（想定制加一行） |
+| 文本输出 | `output/builder.py` 走通用平台分支（想定制加分支） |
+
+平台的**先后顺序**由 `AdapterSpec.priority` 决定（内置平台占 10-80，新平台默认 100 排在末尾）；
+它同时是解析器构建顺序与设置页开关的排列顺序，需要抢占某个位置时才显式声明。
 
 若平台返回结构较复杂，在 `link_parser/models/platforms/<平台名>/` 下新建子包：
 模块名按接口命名（如 `video_info.py`、`status.py`），并在子包 `__init__.py` 中导出
 响应结构与 `decoder`（多个模块都有 `decoder` 时按语义加前缀，如 `status_decoder`），
 适配器只从子包根导入（`from ..models.platforms.<平台> import ...`）。
 
-其余部分自动生效：入口的 URL 过滤器正则、解析器实例化、`DISABLED_PLATFORMS` 开关、
-渲染配色（`link_parser/services/card_render/theme.py` 的 `PLATFORM_COLORS`，可选）。
+这一步只关乎解析代码怎么组织，**与注册无关**：直接解析 HTML 的平台（twitter / nga）就没有模型子包，
+返回结构简单时也可以把 `Struct` 直接写在适配器文件里（twitter 即如此）。
 
 若该平台的解析结果带**会随时间变化的实时数据**（如在线人数、直播场次信息），
 在适配器上声明 `CACHE_TTL_SECONDS`（秒），让结果缓存按时过期，避免长期展示过期数据。

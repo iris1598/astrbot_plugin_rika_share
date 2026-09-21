@@ -143,5 +143,6 @@ ADAPTER = register_adapter(
         url_pattern=re.compile(r"x\.com"),
         parser_cls=TwitterParser,
         description="推文 / 媒体（支持自定义反代）",
+        priority=60,
     )
 )

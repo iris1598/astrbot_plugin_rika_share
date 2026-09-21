@@ -77,5 +77,6 @@ ADAPTER = register_adapter(
         url_pattern=re.compile(r"(v\.kuaishou\.com|kuaishou\.com|chenzhongtech\.com)"),
         parser_cls=KuaiShouParser,
         description="视频 / 图文",
+        priority=30,
     )
 )

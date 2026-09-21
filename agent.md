@@ -11,8 +11,9 @@ AstrBot 插件：自动识别聊天消息里的分享链接 / JSON 分享卡片 
 
 | 项 | 值 |
 | :--- | :--- |
-| 框架 | AstrBot（`requirements.txt` 要求 `astrbot>=3.5.13`），Python 3.10+ |
-| 插件注册名 / 展示名 | `@register("链接解析器", ...)` / `metadata.yaml: display_name: 莉卡解析` |
+| 框架 | AstrBot（`metadata.yaml: astrbot_version: ">=3.5.13"` + `requirements.txt: astrbot>=3.5.13`，两处保持一致），Python 3.10+ |
+| 插件身份 | `metadata.yaml`: `name: astrbot_plugin_rika_share` / `author: iris1598` / `display_name: 莉卡解析` |
+| 版本号 | **三处必须逐字相同**：`metadata.yaml: version`（AstrBot 与市场身份校验的唯一依据）、`main.py` 的 `@register(..., version)`（客户端展示）、README 顶部徽章 |
 | 插件目录名（= 数据目录名） | `astrbot_plugin_rika_share`（**不要改**） |
 | 入口 | `main.py` → 插件类 `ParserPlugin` |
 | 实现包 | `link_parser/`（adapters / models / services / output / utils / webui） |
@@ -25,14 +26,16 @@ AstrBot 插件：自动识别聊天消息里的分享链接 / JSON 分享卡片 
 
 ## 1. 铁律（改代码前必读）
 
-1. **所有 `@filter.*` Handler 必须写在 `main.py` 里。**
-   AstrBot 用 `handler.handler_module_path == 插件模块路径` **精确匹配**来归属 Handler（框架源码 `<AstrBot>/astrbot/core/star/star_handler.py`，不在本仓库）。
-   把 Handler 挪到别的模块 → 框架不会注册它，功能静默失效。业务逻辑可以放 `link_parser/`，只有 Handler 壳子必须留在 `main.py`。
-   数量基线：**14 个 Handler**；因为 3 个指令额外挂了 `@filter.permission_type`，`grep -c "@filter\." main.py` 会得到 **17**，属正常。
+1. **所有 Handler 必须「归属」在 `main.py` 这个模块下。**
+   AstrBot 用 `handler.handler_module_path == 插件模块路径` **精确匹配**来归属 Handler（框架源码 `<AstrBot>/astrbot/core/star/star_handler.py`，不在本仓库；`__module__` 不匹配的 Handler 会在 `only_activated` 过滤里被直接丢掉，功能静默失效）。
+   因此：**各平台 Handler 由 `main._PLATFORM_HANDLERS` 按适配器注册表自动生成**（生成函数在本模块内构造，显式改写 `__module__` / `__name__`，仍满足归属要求），其余 Handler 手写在 `main.py`。业务逻辑一律放 `link_parser/`，Handler 壳子不许离开本模块。
+   数量基线：**14 个 Handler** = 8 平台 + JSON 卡片 + Cloudflare 兜底 + 4 指令；**新增平台会同时多出一个 Handler**，所以 Handler 数随平台数变化，一律以第 8 节的注册表冒烟脚本为准。`grep -c "@filter\." main.py` 只剩静态装饰器（当前 **11**，其中 3 行是注释里提到的 `@filter.regex`），已经不能当基线用。
 2. **插件类名必须以 `Plugin` 结尾（或名为 `Main`）。**
    框架按 `name.lower().endswith("plugin") or name.lower() == "main"` 找插件类（`star_manager._get_classes`）。现用名 `ParserPlugin`。
-3. **不要改插件身份标识**：`metadata.yaml` 的 `name`、目录名、`main.py` 的 `_get_plugin_data_dir()` 中的 `astrbot_plugin_rika_share`、`StarTools.get_data_dir("astrbot_plugin_rika_share")`、`_conf_schema.json` 里的配置键名。
+3. **不要改插件身份标识**：`metadata.yaml` 的 `name`、`author`、目录名、`main.py` 的 `_get_plugin_data_dir()` 中的 `astrbot_plugin_rika_share`、`StarTools.get_data_dir("astrbot_plugin_rika_share")`、`_conf_schema.json` 里的配置键名。
    改了会切断数据目录定位、用户已有配置的读取/迁移。需要改名属于产品决策，先问人。
+   `author` / `name` 还有一层作用：插件市场的 `plugin_id = author + "/" + name`，且市场记录必须与包内 `metadata.yaml` **逐字相等**（规范第 11 节），所以 author 用「稳定的账号名」而不是带说明的长句子。
+   **发版时版本号要一次改全三处**（见第 0 节表格），历史上就出现过 `metadata.yaml` 升到 3.0.1、`@register` 与 README 还停在 3.0.0 的情况。
 4. **不要执行 git 远端操作**（`pull` / `push`）。`status` / `diff` / `show` 可以随意用来比对查看；是否提交由人决定。
 5. **行为敏感点**：错误文案、日志文案、`extra` 里的键名、输出顺序、消息条数、配置默认值都算「可观察行为」，非必要不要改；必须改时在 `CHANGELOG.md` 里写明。
 6. 新增三方依赖要写进 `requirements.txt`；能用可选导入降级的依赖（ffmpeg / Pillow / fontTools / curl_cffi）要保留降级分支。
@@ -43,8 +46,9 @@ AstrBot 插件：自动识别聊天消息里的分享链接 / JSON 分享卡片 
 
 ```text
 astrbot_plugin_rika_share/
-├── main.py                       # 插件入口：插件类 + 全部 Handler（唯一允许写 Handler 的地方）
-├── metadata.yaml                 # 插件元数据（name/display_name/version/repo）
+├── main.py                       # 插件入口：插件类 + 静态 Handler（平台 Handler 按注册表生成）
+├── metadata.yaml                 # 插件元数据（name/author/display_name/version/repo/astrbot_version）
+├── .gitattributes                # 换行符统一（仓库内 LF）+ 二进制清单
 ├── _conf_schema.json             # 存储契约：分组项 + 旧版扁平项，全部 invisible（原生面板不展示）
 ├── requirements.txt
 ├── agent.md                      # ← 本文件（开发指南）
@@ -72,8 +76,8 @@ astrbot_plugin_rika_share/
     ├── exceptions.py             # 异常体系（见 5.4）
     ├── webui.py                  # 页面后端接口（config 读取/保存/恢复默认 + 调试运行/日志下载）
     ├── adapters/                 # 平台解析适配器
-    │   ├── __init__.py           # 导入各适配器触发自注册；_ADAPTER_MODULES 是新平台入口清单
-    │   ├── registry.py           # AdapterSpec / AdapterBuildContext / register_adapter / iter_adapters
+    │   ├── __init__.py           # 自动发现：导入本目录全部适配器模块（新增平台无需在这里登记）
+    │   ├── registry.py           # AdapterSpec(含 priority) / AdapterBuildContext / register_adapter / iter_adapters
     │   ├── base.py               # BaseParser 基类 + @handle 装饰器 + 解析结果构造工具
     │   └── bilibili.py · douyin.py · kuaishou.py · weibo.py
     │       xiaohongshu.py · twitter.py · nga.py · acfun.py
@@ -106,7 +110,7 @@ astrbot_plugin_rika_share/
 **命名与归档约定**（新增文件请遵守）
 
 - 模块名自描述：`web_screenshot.py`、`bilibili_account.py`、`formatting.py`、`replies.py`；不用缩写和代号。
-- 一个平台 = `adapters/<平台>.py` + `models/platforms/<平台>/`，两侧一一对应；`adapters/` 里平铺模块，`models/platforms/` 里一个平台一个子包。
+- 平台**只有 `adapters/<平台>.py` 是必需的**；`models/platforms/<平台>/` 子包按需用（见 5.2）——接口返回 JSON 且结构值得类型化解码时才建，直接解析 HTML 的（twitter / nga）就没有。`adapters/` 里平铺模块，**每个模块都会被自动发现并导入**（`_` 前缀的除外），一个文件就是一个平台，不要往里塞工具模块。
 - 多模块子系统才用子包（`models/platforms/<平台>/`、`services/card_render/`），单模块保持单文件——不要在同一层里混放文件夹和文件。
 - 子包 `__init__.py` 必须显式导出对外接口（`__all__`），调用方只从包根导入。
 
@@ -176,19 +180,20 @@ astrbot_plugin_rika_share/
 
 ## 5. 关键接口契约
 
-### 5.1 适配器（新增平台只需 3 步）
+### 5.1 适配器（新增平台只需 1 个文件）
 
-1. 新建 `link_parser/adapters/<平台名>.py`：
+**新建 `link_parser/adapters/<平台名>.py` 就完事了**，其余环节全部自动：
 
 ```python
-from ..constants import PlatformEnum
+import re
+
 from ..models import Platform
 from .base import BaseParser, handle
 from .registry import AdapterSpec, register_adapter
 
 
 class FooParser(BaseParser):
-    platform = Platform(name=PlatformEnum.FOO, display_name="Foo")
+    platform = Platform(name="foo", display_name="Foo")   # 平台名是小写标识符即可
 
     @handle("foo.com", r"foo\.com/video/(?P<vid>\d+)")   # 关键词越具体越优先匹配
     async def _parse(self, searched):
@@ -197,25 +202,42 @@ class FooParser(BaseParser):
 
 ADAPTER = register_adapter(
     AdapterSpec(
-        name=PlatformEnum.FOO.value,
-        url_pattern=re.compile(r"foo\.com"),     # 给 main.py 的 @filter.regex 用
+        name="foo",
+        url_pattern=re.compile(r"foo\.com"),     # 自动喂给生成的 @filter.regex
         parser_cls=FooParser,
         description="视频",
         # 需要额外参数时才写 build：
         # build=lambda ctx: FooParser(ctx.downloader, ck=ctx.config.FOO_CK),
+        # 需要排在大平台前面时才写 priority（内置平台占 10-80，默认 100 = 排末尾）：
+        # priority=90,
     )
 )
 ```
 
-2. 在 `link_parser/constants.py` 的 `PlatformEnum` 加平台标识（`register_adapter` 会用它校验 `name`）。
-3. 在 `link_parser/adapters/__init__.py` 的 `_ADAPTER_MODULES` 里 import 该模块（**顺序 = `iter_adapters()` 顺序 = 解析器构建顺序**）。
+自动生效的环节（都不需要改代码）：
 
-自动生效的部分：`main.py` 的过滤正则（`_pattern(name)` 从注册表读）、解析器实例化（`_init_parsers` 遍历注册表）、`/clear_cache`。渲染配色可选加 `card_render/theme.py` 的 `PLATFORM_COLORS`。
+| 环节 | 由谁驱动 |
+| :--- | :--- |
+| 导入与自注册 | `adapters/__init__.py::_discover_adapters()` 扫描本目录全部模块（`_` 开头的与 `base`/`registry` 除外） |
+| 事件过滤器正则 + Handler | `main._PLATFORM_HANDLERS` 按注册表为每个平台生成一个 `@filter.regex` Handler（见铁律 1） |
+| 解析器实例化 | `main._init_parsers()` 遍历 `iter_adapters()` |
+| 平台启停开关 | `config.registered_platforms()` → 网页设置页动态渲染，见 5.6 |
+| 渲染配色 | `PLATFORM_COLORS.get(name, default)` 自动回退默认色（想定制再加一行，见第 7 节） |
+| 文本输出 | `output/builder.py` 走「通用平台」分支（要定制才加分支） |
 
-**开关会自动出现**：平台启停读取 `ParserConfig.DISABLED_PLATFORMS`，网页设置页按
-`iter_adapters()` 动态渲染开关，因此新增平台**不需要**在任何地方补开关，见 5.6。
+**不再需要的步骤**（历史上要改，现在改了反而是回归）：
+在 `constants.PlatformEnum` 里登记、在 `adapters/__init__.py` 里 import、
+在 `main.py` 里补 Handler。`PlatformEnum` 只剩「内置平台的名字常量」这一层历史作用。
 
-**注意**：`main.py` 里 8 个平台 Handler 是**静态写死**的（框架要求 Handler 在插件模块内且装饰器在类定义时求值），新增平台时**仍需在 `main.py` 补一个 3 行的 Handler**，只是不需要改过滤正则和实例化逻辑。
+**顺序必须显式声明**：自动发现按**文件名字母序**导入，而注册表顺序 = 解析器构建顺序 =
+JSON 卡片里「哪个平台先认领链接」= 设置页开关排列 = `DISABLED_PLATFORMS` 拼串顺序。
+所以顺序由 `AdapterSpec.priority` 决定（内置平台 10/20/…/80，新平台默认 100 排末尾），
+`iter_adapters()` 按它排序，与文件名无关。要插到某个平台前面就声明 priority。
+
+**单个适配器坏了不拖垮插件**：`_discover_adapters()` 对每个模块单独 try/except，
+导入失败（缺依赖、语法错误）→ 记 `ERROR` 日志并跳过该平台，其余平台照常工作。
+排查口径：日志里「适配器模块 xxx 导入失败」。内置平台的依赖（如 `bilibili_api`）
+在 `requirements.txt` 里，装了就不会走到这条路径。
 
 ### 5.2 平台模型子包约定
 
@@ -504,7 +526,12 @@ bridge 调后端；后端路由必须带插件名前缀，页面侧写去掉前�
 - 提交前自查（第 8 节验证清单里也有）：
 
 ```bash
-grep -rn "import logging\|logging\." --include=*.py .   # 应当没有任何输出
+# 1) 是否引入内置日志模块（注意要连 from logging import … 一起抓）
+grep -rnE "(import|from)[[:space:]]+logging|logging\.[A-Za-z]|getLogger|basicConfig|(File|Stream)Handler" --include=*.py .
+# 2) 是否改动了框架 logger 的状态
+grep -rnE "logger\.(setLevel|addHandler|removeHandler|handlers|propagate|filters)" --include=*.py .
+# 两条都应当没有任何输出。第 1 条刻意不带 Formatter——否则会命中 argparse 的
+# RawDescriptionHelpFormatter（内置日志模块的 Formatter 一定伴随上面几个词出现，不漏检）。
 ```
 
 ---
@@ -513,7 +540,8 @@ grep -rn "import logging\|logging\." --include=*.py .   # 应当没有任何输�
 
 | 任务 | 改动位置 | 注意 |
 | :--- | :--- | :--- |
-| 新增平台解析 | `adapters/<平台>.py` + `constants.PlatformEnum` + `adapters/__init__._ADAPTER_MODULES` + `main.py` 一个 Handler | 见 5.1；网页设置页的开关会自动出现，不用改配置 |
+| 新增平台解析 | **只新建 `adapters/<平台>.py`**（可选：`models/platforms/<平台>/` 子包、`theme.py` 配色、`builder.py` 定制分支） | 见 5.1；不用改 `main.py` / `constants.py` / `adapters/__init__.py`，开关与 Handler 都自动生成 |
+| 调整平台先后顺序 | 对应适配器的 `AdapterSpec(priority=…)` | 见 5.1；`_init_parsers` / 设置页开关 / 拼串顺序都跟着变 |
 | 改哪些平台被启用 | 网页设置页的「解析器开关」→ `DISABLED_PLATFORMS` 逗号串 | 开关由 `iter_adapters()` 动态渲染，见 5.6 |
 | 修某平台解析失效 | `adapters/<平台>.py`（+ `models/platforms/<平台>/`） | 先确认是接口变了还是模型字段变了 |
 | 调整 URL 触发范围 | 对应适配器 `register_adapter(url_pattern=...)` | `main.py` 的 filter 自动跟随，无需改 |
@@ -547,6 +575,7 @@ grep -rn "import logging\|logging\." --include=*.py .   # 应当没有任何输�
 ## 7. 平台适配器清单
 
 每个平台在插件网页设置页都有一个独立的启停开关，**由适配器注册表动态生成**（新增平台自动出现），见 5.6。
+表内顺序即 `AdapterSpec.priority`（10→80）顺序，也就是解析器构建顺序；新平台默认 100，排在全部内置平台之后。
 
 | 平台 | name | 触发正则（注册表） | 构建参数 | 接口与注意点 |
 | :--- | :--- | :--- | :--- | :--- |
@@ -574,8 +603,9 @@ grep -rn "import logging\|logging\." --include=*.py .   # 应当没有任何输�
 # 2) 语法编译
 <PY> -m compileall -q .
 
-# 2.1) 日志器来源自查（审核要求：只能用 astrbot.api 的 logger，见 5.12）
-grep -rn "import logging\|logging\." --include=*.py .    # 应无输出
+# 2.1) 日志器来源自查（审核要求：只能用 astrbot.api 的 logger，见 5.12；两条都应无输出）
+grep -rnE "(import|from)[[:space:]]+logging|logging\.[A-Za-z]|getLogger|basicConfig|(File|Stream)Handler" --include=*.py .
+grep -rnE "logger\.(setLevel|addHandler|removeHandler|handlers|propagate|filters)" --include=*.py .
 
 # 3) 渲染回归：4 布局 × 2 主题 × 全尺寸 = 96 张，必须全部成功
 <PY> scripts/preview_layouts.py        # 末行应为「共渲染 96 张，全部成功」
@@ -630,7 +660,13 @@ print("handlers       :", len(handlers))      # 应为 14
 assert not bad and len(handlers) == 14
 ```
 
-期望基线（2026-09-21 实测）：模块导入 **64/64**（`main.py` + `link_parser/` 下 63 个模块）、适配器 **8 个**（`adapter_names()` 顺序固定）、Handler **14 个**（`grep -c "@filter\." main.py` 为 17，见铁律 1）、配置项 **44 项 / 8 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
+期望基线（2026-09-21 实测）：模块导入 **64/64**（`main.py` + `link_parser/` 下 63 个模块）、适配器 **8 个**（`adapter_names()` 顺序 = priority 10→80）、Handler **14 个**（8 平台 + JSON 卡片 + 兜底 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **44 项 / 8 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
+
+**「新增平台零改动」回归**：往 `link_parser/adapters/` 里临时丢一个最小适配器
+（继承 `BaseParser` + 末尾 `register_adapter(AdapterSpec(name="probe", url_pattern=..., parser_cls=...))`，
+**不改任何其他文件**），跑上面的冒烟脚本，应当看到 `adapter_names()` 多出 `probe`、
+Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复跑回到 8/14。
+这一步是防止自动发现 / 动态 Handler 被人「修回去」的唯一护栏。
 
 **插件页面**没有随仓库的自动化回归（它跑在受限 iframe 里），改完 `pages/rika/` 后两条路一起走：
 
@@ -650,7 +686,10 @@ assert not bad and len(handlers) == 14
 
 ## 9. 已知约束与坑
 
-- **Handler 位置**：见铁律 1，这是最容易踩的坑（放进 `link_parser/` 会静默不生效）。
+- **Handler 归属**：见铁律 1，这是最容易踩的坑（`__module__` 不是插件主模块 → 框架直接丢弃该 Handler，静默不生效）。平台 Handler 由 `main._PLATFORM_HANDLERS` 生成并显式改写 `__module__`，**别把它「重构」进 `link_parser/`**。
+- **平台 Handler 的注册顺序不能靠后**：生成循环必须放在 `ParserPlugin` 定义**之前**（装饰器求值先后 = `star_handlers_registry` 顺序 = 同一条消息上各 Handler 的执行顺序）。挂到类上由文件末尾的 `_attach_platform_handlers()` 做——框架是按注册表调用的（`functools.partial(raw_handler, 实例)`），并不要求它是类的方法，所以「先注册、后挂载」两件事都必要。
+- **自动发现 = 目录里放什么就加载什么**：往 `adapters/` 丢一个坏文件（语法错误、缺依赖）只会记 `ERROR` 并跳过该平台，其余平台照常工作；反过来说，**装错依赖会表现为「某个平台突然不解析」而不是「插件加载失败」**，先看日志里的「适配器模块 xxx 导入失败」。临时文件用 `_` 前缀命名即可被排除。
+- **顺序变了就是行为变了**：`iter_adapters()` 按 `priority` 排序，不反映文件名。改动 priority 会连带改变解析器构建顺序、JSON 卡片的认领顺序、设置页开关排列与 `DISABLED_PLATFORMS` 拼串顺序（页面按注册表顺序拼回，顺序变了用户下次保存会看到「已修改 1 项」）。
 - **`@filter.regex` 不把 match 传进 Handler**：需要 URL 时自己从 `event.message_str` 重新 `search`（`cloudflare_fallback_handler` 就是这么做的）。
 - **`json_card_handler` 使用 `@filter.regex(r".*")`**，所有消息都会进它，第一件事就是 `has_json_component` 早退，别在里面加重活。
 - **OneBot 才支持合并转发**：`Comp.Nodes` 仅 OneBot v11（`aiocqhttp`）可用；其他平台走 `send_plain_output` + 主动发送（避免 AstrBot「回复时 @」污染图片 markdown）。
@@ -696,7 +735,7 @@ assert not bad and len(handlers) == 14
 出现以下任一种「重要改动」时，**在同一次改动里**更新 `agent.md`：
 
 1. 目录 / 文件新增、删除、改名、移动（→ 更新第 2 节结构树 + 第 6 节速查表）
-2. 新增 / 删除平台适配器，或改动 `AdapterSpec`、`BaseParser`、`PlatformEnum`（→ 第 5.1、第 7 节、第 2 节 `_ADAPTER_MODULES` 说明）
+2. 新增 / 删除平台适配器，或改动 `AdapterSpec`（含 `priority`）、`BaseParser`、`PlatformEnum`、自动发现规则（→ 第 5.1、第 7 节、第 2 节 `adapters/` 说明）
 3. `models/platforms/` 子包结构或导出别名规则变化（→ 第 5.2 节）
 4. `ParseResult` / `MediaContent` 字段、`extra` 约定键变化（→ 第 5.3 节）
 5. 异常类型增删或其在 `_process_url` 的表现变化（→ 第 5.4 节）

@@ -36,10 +36,11 @@ GENERIC_URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"https?://[^\s'\"<>]+"
 
 
 class PlatformEnum(str, Enum):
-    """已支持平台的标识。
+    """内置平台的标识（历史常量，新增平台**不需要**在这里登记）。
 
-    取值同时用于：适配器注册表键名、解析器开关 ``PLATFORM_<NAME>_ENABLED``
-    （见 ``config.PLATFORM_SWITCHES``）、渲染配色的 ``PLATFORM_COLORS`` 键名。
+    取值用于：内置适配器的注册表键名、渲染配色 ``PLATFORM_COLORS`` 的键名。
+    新平台直接在适配器里用字面量平台名即可——注册表只校验它是小写标识符
+    （见 ``adapters.registry.register_adapter``），配色缺失会自动回退默认色。
     """
 
     ACFUN = "acfun"

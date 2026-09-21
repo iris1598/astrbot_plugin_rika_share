@@ -621,6 +621,7 @@ ADAPTER = register_adapter(
         ),
         parser_cls=BilibiliParser,
         description="视频 / 动态 / 图文(Opus) / 直播 / 专栏 / 收藏夹",
+        priority=10,
         build=lambda ctx: BilibiliParser(
             ctx.downloader, bili_ck=ctx.config.BILI_CK, config_dir=ctx.config_dir
         ),

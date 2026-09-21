@@ -118,5 +118,6 @@ ADAPTER = register_adapter(
         url_pattern=re.compile(r"nga\.178\.com|ngabbs\.com|bbs\.nga\.cn"),
         parser_cls=NGAParser,
         description="论坛帖子正文与图集",
+        priority=70,
     )
 )
