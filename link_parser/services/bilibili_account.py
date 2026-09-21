@@ -13,9 +13,11 @@
 import asyncio
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Optional
+from urllib.parse import urlsplit
 
 import aiohttp
 import qrcode
@@ -51,6 +53,77 @@ POLL_INTERVAL = 5
 _COOKIE_FILE_NAME = "bili_cookie_encrypted.json"
 _STATUS_FILE_NAME = "bili_cookie_status.json"
 _KEY_FILE_NAME = ".bili_cookie_key"
+
+#: 扫码登录 ``data.url`` 查询串里不是 cookie 的参数（Expires / gourl 等）
+_LOGIN_QUERY_NOISE = {"gourl", "expires", "timestamp", "code", "message", "url"}
+
+#: 可以直接采纳的**会话字段**：决定登录态，必须更新
+_SESSION_COOKIE_KEYS = {
+    "SESSDATA",
+    "bili_jct",
+    "DedeUserID",
+    "DedeUserID__ckMd5",
+    "ac_time_value",
+}
+
+#: 设备指纹类字段：只在原本缺失时补充，且只认官方库自己管理的那两个。
+#: ``b_nut`` / ``buvid_fp`` / ``b_lsid`` 由网页前端生成，拿服务端下发的值去补
+#: 反而更容易与本地指纹不一致，索性不采纳。
+_FILL_ONLY_COOKIE_KEYS = {"buvid3", "buvid4"}
+
+
+def _parse_cookie_pairs(raw: str) -> Dict[str, str]:
+    """把 ``k=v; k=v`` 或 ``k=v&k=v`` 形式的串解析成字典（忽略空值）。"""
+    pairs: Dict[str, str] = {}
+    for part in re.split(r"[;&]", raw or ""):
+        part = part.strip()
+        if "=" not in part:
+            continue
+        name, value = part.split("=", 1)
+        name, value = name.strip(), value.strip()
+        if name and value:
+            pairs[name] = value
+    return pairs
+
+
+def _cookies_from_login_payload(
+    payload: Dict[str, Any], set_cookie_headers: list
+) -> Dict[str, str]:
+    """汇总扫码登录响应中的 cookie。
+
+    B站 web 端扫码成功时凭证分散在三处，**必须合并**：
+
+    - ``data.url`` 的查询串：SESSDATA / bili_jct / DedeUserID / DedeUserID__ckMd5
+    - ``data.cookie_info.cookies``：部分渠道（如 TV 端）从这里下发
+    - ``Set-Cookie`` 响应头：通常只补充 buvid3 / buvid4 等设备指纹
+
+    另外 ``data.refresh_token`` 就是 ``ac_time_value``，**只存在于响应体**。
+    它决定 ``Credential`` 能否自动刷新——早期实现只解析 Set-Cookie，导致
+    ``has_ac_time_value()`` 恒为 False，凭证过期后永远刷新不了。
+    """
+    data = payload.get("data") or {}
+    cookies: Dict[str, str] = {}
+
+    target = data.get("url") or ""
+    if target:
+        for name, value in _parse_cookie_pairs(urlsplit(target).query).items():
+            if name.lower() in _LOGIN_QUERY_NOISE:
+                continue
+            cookies[name] = value
+
+    for item in (data.get("cookie_info") or {}).get("cookies") or []:
+        name, value = item.get("name"), item.get("value")
+        if name and value:
+            cookies[str(name)] = str(value)
+
+    for header in set_cookie_headers or []:
+        # 只取 cookie 段，避免把 Path / Domain / Expires 等属性当成 cookie
+        cookies.update(_parse_cookie_pairs(header.split(";")[0]))
+
+    if refresh_token := data.get("refresh_token"):
+        cookies["ac_time_value"] = str(refresh_token)
+
+    return {k: v for k, v in cookies.items() if v}
 
 
 class BiliAccountService:
@@ -90,11 +163,29 @@ class BiliAccountService:
         await self._load_cookie()
         self._http_session = aiohttp.ClientSession()
 
-        if self._cookie:
+        # Cookie 的唯一真相在 BilibiliParser（config/bilibili_cookies.json）。
+        # 解析器已有 cookie 时以它为准，**不要**用本服务较旧的一份反向覆盖——
+        # 那会把运行期刷新出来的新 cookie 顶掉。只有解析器为空时才迁移过去。
+        current = self._parser_cookie()
+        if current:
+            self._cookie = current
+        elif self._cookie:
             self.apply_cookie_to_parser(self._cookie)
 
         if get_config().BILI_COOKIE_MONITOR_ENABLED and self._cookie:
             self.start_monitor()
+
+    def _parser_cookie(self) -> str:
+        """回读 BilibiliParser 当前生效的 cookie（本服务不自己存权威副本）。"""
+        parser = self.parsers.get("bilibili")
+        export = getattr(parser, "export_cookie", None)
+        if export is None:
+            return ""
+        try:
+            return export() or ""
+        except Exception:
+            logger.warning("读取 BilibiliParser 当前 Cookie 失败", exc_info=True)
+            return ""
 
     async def aclose(self) -> None:
         """停止监控与轮询任务，关闭 HTTP 会话。"""
@@ -266,6 +357,11 @@ class BiliAccountService:
 
     async def check_cookie_valid(self) -> dict:
         """检测B站Cookie是否有效"""
+        # 解析器是 cookie 的唯一真相：检测前先同步，避免监控与解析两条状态线各看各的
+        live = self._parser_cookie()
+        if live:
+            self._cookie = live
+
         if not self._cookie:
             return {"valid": False, "error": "Cookie为空"}
         if not self._http_session:
@@ -314,42 +410,45 @@ class BiliAccountService:
             return {"valid": False, "error": f"未知错误: {e}"}
 
     async def _refresh_cookie_from_headers(self, set_cookie_headers: list) -> bool:
-        """从Set-Cookie响应头中刷新Cookie"""
+        """从 Set-Cookie 响应头刷新 Cookie。
+
+        只做**保守合并**：会话字段（SESSDATA / bili_jct / DedeUserID 等）直接采纳；
+        buvid3 / buvid4 这类设备指纹只在原本缺失时补充。早期实现把响应的所有
+        Set-Cookie 无条件并进凭证，会把发起检测的那个 aiohttp 会话的指纹混进来，
+        与 SESSDATA 不匹配，反而容易被判定为风险会话。
+        """
         if not set_cookie_headers:
             return False
 
-        new_cookies = {}
+        incoming: Dict[str, str] = {}
         for header in set_cookie_headers:
-            cookie_part = header.split(";")[0].strip()
-            if "=" in cookie_part:
-                name, value = cookie_part.split("=", 1)
-                name = name.strip()
-                value = value.strip()
-                if value:
-                    new_cookies[name] = value
-
-        if not new_cookies:
+            incoming.update(_parse_cookie_pairs(header.split(";")[0]))
+        if not incoming:
             return False
 
         async with self._cookie_lock:
-            existing = {}
-            for part in self._cookie.split(";"):
-                part = part.strip()
-                if "=" in part:
-                    k, v = part.split("=", 1)
-                    existing[k.strip()] = v.strip()
+            merged = _parse_cookie_pairs(self._cookie)
+            accepted: list[str] = []
+            for name, value in incoming.items():
+                if name in _SESSION_COOKIE_KEYS:
+                    if merged.get(name) != value:
+                        merged[name] = value
+                        accepted.append(name)
+                elif name in _FILL_ONLY_COOKIE_KEYS and not merged.get(name):
+                    merged[name] = value
+                    accepted.append(name)
 
-            merged = {**existing, **new_cookies}
+            if not accepted:
+                return False
+
             new_cookie_str = "; ".join(f"{k}={v}" for k, v in merged.items())
-
-            if new_cookie_str != self._cookie:
-                self._cookie = new_cookie_str
-                await self._save_cookie(new_cookie_str)
-                self.apply_cookie_to_parser(new_cookie_str)
-                logger.info(f"B站Cookie已自动刷新，更新了 {len(new_cookies)} 个字段")
-                return True
-
-        return False
+            self._cookie = new_cookie_str
+            await self._save_cookie(new_cookie_str)
+            self.apply_cookie_to_parser(new_cookie_str)
+            logger.info(
+                f"B站Cookie已自动刷新，更新字段: {', '.join(accepted)}"
+            )
+            return True
 
     # ==================== 监控循环 ====================
 
@@ -456,7 +555,7 @@ class BiliAccountService:
 
                 elif code == QR_CODE_SUCCESS:
                     logger.info(f"用户 {sender_id} 扫码登录成功")
-                    await self._on_login_success(sender_id, set_cookie_headers)
+                    await self._on_login_success(sender_id, set_cookie_headers, poll_data)
                     break
 
                 else:
@@ -477,15 +576,16 @@ class BiliAccountService:
                 except Exception:
                     pass
 
-    async def _on_login_success(self, sender_id: str, set_cookie_headers: list) -> None:
-        """扫码确认后：保存、应用、验证 Cookie 并通知用户。"""
-        # 从Set-Cookie头提取cookie
-        cookie_dict = {}
-        for header in set_cookie_headers:
-            cookie_part = header.split(";")[0].strip()
-            if "=" in cookie_part:
-                name, value = cookie_part.split("=", 1)
-                cookie_dict[name.strip()] = value.strip()
+    async def _on_login_success(
+        self, sender_id: str, set_cookie_headers: list, payload: Dict[str, Any]
+    ) -> None:
+        """扫码确认后：保存、应用、验证 Cookie 并通知用户。
+
+        ``payload`` 是轮询响应的**响应体**——SESSDATA / bili_jct / DedeUserID 与
+        ``refresh_token``（ac_time_value）都在这里面，只解析 Set-Cookie 会漏掉
+        最关键的续期凭据。
+        """
+        cookie_dict = _cookies_from_login_payload(payload, set_cookie_headers)
 
         if not cookie_dict:
             await self._notify_error_user(
@@ -494,6 +594,7 @@ class BiliAccountService:
             return
 
         cookie_str = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
+        refreshable = bool(cookie_dict.get("ac_time_value"))
 
         # 更新状态
         async with self._cookie_lock:
@@ -522,6 +623,7 @@ class BiliAccountService:
                 f"👤 用户: {result.get('username', '未知')}\n"
                 f"🆔 UID: {result.get('uid', 0)}\n"
                 f"{'👑 大会员' if result.get('vip') else '🐟 普通用户'}\n"
+                f"{'🔄 已取得续期凭据，凭证过期可自动刷新' if refreshable else '⚠️ 未取得 refresh_token，凭证过期后需重新扫码'}\n"
                 f"{'🚀 监控已自动启动' if self._monitor_running else '⚠️ 监控未运行'}",
             )
             self._was_invalid = False

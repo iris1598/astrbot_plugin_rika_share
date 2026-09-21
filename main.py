@@ -101,7 +101,7 @@ class _ContentCacheEntry:
 
 
 @register("链接解析器", "fllesser (ported to AstrBot)",
-          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA", "2.10.0")
+          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA", "v3.0.0")
 class ParserPlugin(Star):
     # 合并转发（Comp.Nodes）是 OneBot v11 独有特性，其他平台均不支持
     @staticmethod

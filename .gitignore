@@ -17,3 +17,6 @@ config/
 # 开发辅助脚本的渲染产物
 scripts/preview_out/
 scripts/previews/
+
+# 独立冒烟测试（dev_smoke_test.py）的日志与隔离数据
+scripts/dev_test_out/

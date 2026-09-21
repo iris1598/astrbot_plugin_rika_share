@@ -2,6 +2,7 @@
 
 import re
 import json
+import time
 import asyncio
 from typing import ClassVar
 
@@ -35,6 +36,22 @@ except Exception:
     select_client("httpx")
 
 
+#: ``Credential.get_cookies()`` 会把自身的**属性名**也一并输出，与规范 cookie 名重复：
+#: ``sessdata`` ↔ ``SESSDATA``、``dedeuserid`` ↔ ``DedeUserID``，另有 ``proxy``。
+#: 它们不是真实 cookie，混进请求头只会让 cookie 串变长（实测 716 → 约 400 字符）并
+#: 徒增被风控注意的机会，因此统一剔除。
+_CREDENTIAL_ALIAS_KEYS = frozenset({"sessdata", "dedeuserid", "proxy"})
+
+
+def _credential_cookie_dict(credential: "Credential") -> dict[str, str]:
+    """把 ``Credential`` 归一化成可直接持久化 / 拼请求头的 cookie 字典（丢弃空值）。"""
+    return {
+        key: value
+        for key, value in credential.get_cookies().items()
+        if value and key not in _CREDENTIAL_ALIAS_KEYS
+    }
+
+
 class BilibiliParser(BaseParser):
     platform: ClassVar[Platform] = Platform(name=PlatformEnum.BILIBILI, display_name="哔哩哔哩")
 
@@ -45,6 +62,11 @@ class BilibiliParser(BaseParser):
 
     #: b23.tv / bili2233.cn 短链：需先跟随跳转才能拿到 BV 号等内容标识
     SHORT_LINK_KEYWORDS = ("b23.tv", "bili2233.cn")
+
+    #: 凭证校验（有效性 + 是否需要刷新）的最小间隔（秒）。
+    #: ``check_valid`` / ``check_refresh`` 都是网络请求，早期实现每条链接都打两次，
+    #: 既浪费又容易触发风控；这里做时间窗缓存，只在窗口过期后才重新校验。
+    VALIDATE_INTERVAL = 600
 
     @staticmethod
     def _is_transient_api_error(error: Exception) -> bool:
@@ -89,6 +111,8 @@ class BilibiliParser(BaseParser):
         self._credential: Credential | None = None
         self._bili_ck = bili_ck
         self._cookies_file = (config_dir / "bilibili_cookies.json") if config_dir else None
+        #: 上次凭证校验的时刻（monotonic），配合 VALIDATE_INTERVAL 做降频
+        self._validated_at: float = 0.0
 
     @handle("b23.tv", r"b23\.tv/[0-9a-zA-Z._?%&+-=/#]+")
     @handle("bili2233", r"bili2233\.cn/[0-9a-zA-Z._?%&+-=/#]+")
@@ -398,84 +422,190 @@ class BilibiliParser(BaseParser):
 
         return video_stream.url, v_backups, audio_stream.url, a_backups
 
+    # ---------- 凭证（Cookie）管理 ----------
+    #
+    # 本解析器是 cookie 的**唯一持有者**：磁盘上写 config/bilibili_cookies.json，
+    # 内存里是 self._credential。BiliAccountService 只做检测与通知，通过
+    # ``export_cookie()`` 回读、通过 ``update_cookie()`` 写入，不再自己存一份权威副本。
+
     def _save_credential(self):
         if self._credential is None or self._cookies_file is None:
             return
-        self._cookies_file.write_text(json.dumps(self._credential.get_cookies()))
-
-    def _load_credential(self):
-        if self._cookies_file is None or not self._cookies_file.exists():
-            return
         try:
-            self._credential = Credential.from_cookies(json.loads(self._cookies_file.read_text()))
-        except Exception as e:
+            self._cookies_file.parent.mkdir(parents=True, exist_ok=True)
+            self._cookies_file.write_text(
+                json.dumps(_credential_cookie_dict(self._credential), ensure_ascii=False)
+            )
+        except (OSError, TypeError) as e:
+            logger.error(f"保存B站凭证失败: {e}")
+
+    def _load_credential(self) -> bool:
+        """从持久化文件加载凭证，返回是否成功。"""
+        if self._cookies_file is None or not self._cookies_file.exists():
+            return False
+        try:
+            data = json.loads(self._cookies_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
             logger.error(f"加载已保存的凭证失败: {e}")
+            return False
+        self._credential = Credential.from_cookies(data)
+        return True
 
     def _save_cookie_str(self, cookie_str: str):
         """将cookie字符串持久化保存，供下次启动时自动加载"""
         if self._cookies_file is None:
             return
         try:
-            ck_dict = ck2dict(cookie_str)
             self._cookies_file.parent.mkdir(parents=True, exist_ok=True)
-            self._cookies_file.write_text(json.dumps(ck_dict))
+            self._cookies_file.write_text(
+                json.dumps(ck2dict(cookie_str), ensure_ascii=False)
+            )
             logger.info("B站 Cookie 已持久化保存")
-        except Exception as e:
+        except (OSError, TypeError) as e:
             logger.error(f"保存 Cookie 失败: {e}")
 
-    async def _init_credential(self):
-        # 优先从已持久化的cookie文件加载
-        self._load_credential()
-        if self._credential is not None:
-            if await self._credential.check_valid():
-                logger.info("从持久化文件加载的B站 Cookie 有效")
-                return
-            logger.info("持久化文件中的 Cookie 已过期")
+    def export_cookie(self) -> str | None:
+        """导出当前生效的 cookie 串，供账号服务回读（保证 cookie 只有一份真相）。
 
-        # 其次从配置中的 BILI_CK 加载
-        if self._bili_ck:
-            credential = Credential.from_cookies(ck2dict(self._bili_ck))
-            if await credential.check_valid():
-                logger.info("B站配置中的 Cookie 有效, 已持久化保存")
-                self._credential = credential
-                self._save_credential()
-                self._save_cookie_str(self._bili_ck)
-                return
-            logger.info("B站配置中的 Cookie 已过期")
+        ``_credential`` 尚未初始化时回退到磁盘文件，再回退到配置项。
+        """
+        if self._credential is not None:
+            items = _credential_cookie_dict(self._credential)
+            if items:
+                return "; ".join(f"{k}={v}" for k, v in items.items())
+        if self._cookies_file is not None and self._cookies_file.exists():
+            try:
+                data = json.loads(self._cookies_file.read_text(encoding="utf-8"))
+                items = {k: v for k, v in data.items() if v}
+                if items:
+                    return "; ".join(f"{k}={v}" for k, v in items.items())
+            except (OSError, json.JSONDecodeError):
+                pass
+        return self._bili_ck or None
 
     def update_cookie(self, cookie_str: str):
-        """运行时更新B站Cookie，立即生效"""
+        """运行时更新B站Cookie，立即生效。
+
+        这里**刻意不写回 ``_bili_ck``**：配置项是只读的静态回退来源，早期实现把它
+        也覆盖掉之后，运行期一旦合并出不可用的 cookie，连最后的干净回退都没了，
+        只能靠重载插件重新读配置来恢复。
+        """
         if not cookie_str:
             return
-        self._bili_ck = cookie_str
-        self._credential = None
-        # 持久化保存，重启后自动生效
         self._save_cookie_str(cookie_str)
+        self._credential = None
+        self._validated_at = 0.0
         logger.info("B站 Cookie 已更新，将在下次请求时重新初始化凭证")
+
+    async def _safe_check_valid(self) -> bool:
+        """``check_valid`` 的网络异常按「校验不通过」处理，不让它冒泡打断解析。"""
+        if self._credential is None:
+            return False
+        try:
+            return bool(await self._credential.check_valid())
+        except Exception as e:
+            logger.warning(f"B站凭证有效性校验失败: {e}")
+            return False
+
+    async def _ensure_buvid(self) -> None:
+        """补齐设备指纹 ``buvid3`` / ``buvid4``。
+
+        扫码登录的响应里通常不带这两个（Set-Cookie 里也没有，实测为空），而它们是
+        B站 的设备标识。缺失时 bilibili-api 会在**每次请求**临时生成，等于每次换一个
+        指纹，反而更容易被判定为异常流量。这里一次性取回并落盘，之后所有请求都用同一个。
+        """
+        if self._credential is None:
+            return
+        if self._credential.has_buvid3() and self._credential.has_buvid4():
+            return
+        try:
+            from bilibili_api.utils.network import get_buvid
+
+            buvid3, buvid4 = await get_buvid()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"获取设备指纹 buvid3/buvid4 失败（不影响登录态）：{e}")
+            return
+        if not self._credential.has_buvid3():
+            self._credential.buvid3 = buvid3
+        if not self._credential.has_buvid4():
+            self._credential.buvid4 = buvid4
+        logger.info("已补齐设备指纹 buvid3 / buvid4")
+        self._save_credential()
+
+    async def _init_credential(self) -> None:
+        """确定当前凭证：持久化文件优先，其次配置项。
+
+        校验不通过的来源会被**显式丢弃**（置 None）。早期实现保留了这个已判定失效的
+        ``Credential``，属性又看到「非 None」就直接返回，于是解析器拿着失效凭证去请求
+        ``playurl``，被 B站 当成未登录，只能拿到 540P 流（而标题/封面等公开接口仍正常，
+        所以表面上看解析是成功的）。
+        """
+        if self._load_credential():
+            if await self._safe_check_valid():
+                logger.info("从持久化文件加载的B站 Cookie 有效")
+                await self._ensure_buvid()
+                return
+            logger.info("持久化文件中的 Cookie 已失效，丢弃")
+            self._credential = None
+
+        if self._bili_ck:
+            try:
+                self._credential = Credential.from_cookies(ck2dict(self._bili_ck))
+            except Exception as e:
+                logger.error(f"配置中的B站 Cookie 解析失败: {e}")
+                self._credential = None
+                return
+            if await self._safe_check_valid():
+                logger.info("B站配置中的 Cookie 有效, 已持久化保存")
+                await self._ensure_buvid()
+                self._save_credential()
+                return
+            logger.info("B站配置中的 Cookie 已失效，丢弃")
+            self._credential = None
+
+    async def _revalidate(self) -> None:
+        """低频重校验：失效则重载，需要则刷新。任何失败都保留当前凭证继续使用。"""
+        if not await self._safe_check_valid():
+            logger.info("B站凭证已失效，尝试重新加载")
+            self._credential = None
+            await self._init_credential()
+            return
+
+        try:
+            if not await self._credential.check_refresh():
+                return
+            if not (
+                self._credential.has_ac_time_value() and self._credential.has_bili_jct()
+            ):
+                # ac_time_value 只在扫码登录的响应体（data.refresh_token）里下发，
+                # 旧实现只解析 Set-Cookie 导致它恒为空 —— 于是「一直提示需要刷新，
+                # 却永远刷新不了」。这里明确把原因打出来，避免再次误判。
+                logger.warning(
+                    "B站凭证提示需要刷新，但缺少 ac_time_value（扫码登录未保存 "
+                    "refresh_token）或 bili_jct，无法自动刷新，请重新扫码登录"
+                )
+                return
+            logger.info("B站凭证需要刷新，正在刷新")
+            await self._credential.refresh()
+            self._save_credential()
+            logger.info("B站凭证已刷新并保存")
+        except Exception as e:
+            logger.warning(f"B站凭证刷新失败（保留当前凭证继续使用）: {e}")
 
     @property
     async def credential(self) -> Credential | None:
-        if self._credential is None:
-            await self._init_credential()
+        """取当前凭证，按 ``VALIDATE_INTERVAL`` 降频校验。
+
+        未拿到凭证时也会遵守时间窗：避免在「cookie 确实失效」期间每条链接都发起
+        两次校验请求，反而更容易被风控。
+        """
+        now = time.monotonic()
+        if now - self._validated_at >= self.VALIDATE_INTERVAL:
+            self._validated_at = now
             if self._credential is None:
-                return None
-            return self._credential
-
-        # 已过期时尝试重新初始化
-        if not await self._credential.check_valid():
-            logger.warning("哔哩哔哩凭证已过期, 尝试重新初始化")
-            self._credential = None
-            await self._init_credential()
-            if self._credential is None:
-                return None
-
-        # 尝试刷新
-        if self._credential and await self._credential.check_refresh():
-            logger.info("哔哩哔哩凭证需要刷新")
-            if self._credential.has_ac_time_value() and self._credential.has_bili_jct():
-                await self._credential.refresh()
-                self._save_credential()
-
+                await self._init_credential()
+            else:
+                await self._revalidate()
         return self._credential
 
 

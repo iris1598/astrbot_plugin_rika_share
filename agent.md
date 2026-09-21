@@ -48,6 +48,10 @@ astrbot_plugin_rika_share/
 ├── agent.md                      # ← 本文件
 ├── docs/previews/                # README 用的渲染预览图
 ├── scripts/                      # 开发辅助脚本（见第 8 节）
+│   ├── dev_smoke_test.py         #   独立冒烟测试：B站扫码登录 + 链接解析（自带 astrbot 桩）
+│   ├── preview_layouts.py        #   卡片布局回归（4 布局 × 2 主题 × 全尺寸）
+│   ├── kaomoji_render_test.py    #   颜文字字体回退回归
+│   └── font_coverage_probe.py    #   字体覆盖探测
 └── link_parser/                  # 实现主体
     ├── __init__.py               # 分层说明（本文件第 2 节的简短版）
     ├── config.py                 # ParserConfig + 分组配置读取 + 旧版扁平配置迁移
@@ -233,6 +237,11 @@ ADAPTER = register_adapter(
 解析阶段只**提交下载任务**，不阻塞；`await path_task.get()` 才真正取路径，`safe_get()` 捕获异常返回 `None`（是否打日志由 `DEBUG_LOG_ENABLED` 控制）。
 渲染/输出阶段拿到的一律是 `Path`，失败就跳过该媒体而不是整体失败。改下载相关代码时保持这个语义。
 
+**异常分级**：`safe_get()` 把 `IgnoreException` / `SilentException` 当**控制流**处理——打 DEBUG、不打 traceback。
+因为下载任务由 `create_task` 创建，异常只能在这里被取回，早期实现一律 `logger.exception`，
+于是「视频时长超限、主动跳过下载」这个**正常分支**也会刷一整段 ERROR + traceback
+（`DEBUG_LOG_ENABLED` 默认 True，必现）。新增「按设计跳过」的路径沿用这两个异常即可。
+
 ### 5.6 配置读取
 
 - 统一入口：`link_parser.config.get_config()`（未初始化会抛 `RuntimeError`），由 `main.py` 在 `__init__` 里 `init_config(config, cache_dir, config_dir)`。
@@ -285,6 +294,34 @@ ADAPTER = register_adapter(
 2. **必须同时让卡片换代**。`ShareCardRenderer.render` 除了 `existing` 还会检查 `out_path.exists()`，同名文件会让它直接返回旧图——所以重新解析时既要把 `existing` 传 `None`，也要靠 `salt`（代次）改变文件名。
 3. **不要把实时字段从 `extra` 里删掉却又依赖它**：`online` 之类的字段由 `builder.py`（文本）和 `card_render/renderer.py`（卡片）共同消费，两边都做了空值守卫。
 
+### 5.9 B站 Cookie 生命周期（单一真相 + 低频校验）
+
+cookie **只由 `BilibiliParser` 持有**：内存 `_credential`，磁盘 `config/bilibili_cookies.json`，构造参数 `_bili_ck`（即配置项 `BILI_CK`，**只读回退**）。
+`BiliAccountService` 只做检测与通知，通过 `parser.export_cookie()` 回读、`parser.update_cookie()` 写入。
+
+| 环节 | 行为 |
+| :--- | :--- |
+| `await parser.credential` | 按 `VALIDATE_INTERVAL`（600s）降频。窗口外：无凭证 → `_init_credential()`；有凭证 → `_revalidate()` |
+| `_init_credential()` | **磁盘文件优先，其次配置项**；来源校验失败会被**显式置 None**；成功后调 `_ensure_buvid()` 补齐设备指纹 |
+| `_ensure_buvid()` | 补齐 `buvid3` / `buvid4`（扫码登录响应里没有，实测为空）；缺失时 bilibili-api 会**每次请求临时生成**，等于一直换指纹，反而更易被风控 |
+| `_credential_cookie_dict()` | 归一化：剔除 `sessdata` / `dedeuserid` / `proxy`（库的**属性名**，不是 cookie 名）与空值，持久化与 `export_cookie()` 共用 |
+| `_revalidate()` | 校验不通过 → 重载；`check_refresh()` 为真且 `has_ac_time_value() and has_bili_jct()` → `refresh()` 并落盘；**任何异常只记日志并保留当前凭证** |
+| `update_cookie()` | 写文件 + 清空内存凭证 + 重置校验窗口；**刻意不写回 `_bili_ck`** |
+| `BiliAccountService.initialize()` | 解析器已有 cookie 就以解析器为准；只有解析器为空才把服务加载到的 cookie **迁移**过去 |
+| `check_cookie_valid()` | 检测前先从解析器同步 cookie，保证监控与解析看到同一份 |
+| `_refresh_cookie_from_headers()` | **保守合并**：只采纳 `_SESSION_COOKIE_KEYS` 会话字段；`buvid3/buvid4` 仅在原本缺失时补；其余一律不入库 |
+
+**`ac_time_value` 只在扫码登录的响应体里**（`data.refresh_token`），不在 Set-Cookie 中。web 端扫码的凭证分散在
+三处，必须由 `_cookies_from_login_payload()` 合并：`data.url` 查询串（SESSDATA / bili_jct / DedeUserID /
+DedeUserID__ckMd5）、`data.cookie_info.cookies`（部分渠道）、`Set-Cookie` 头（通常只补 buvid3/buvid4）。
+**漏掉 `refresh_token` → `has_ac_time_value()` 恒 False → 日志一直提示「需要刷新」但永远刷新不了。**
+
+排查口径：
+- 日志出现「缺少 ac_time_value…无法自动刷新」→ 登录时没拿到续期凭据，重新扫码即可。
+- 解析成功但清晰度只有 540P、且日志有「Cookie 已失效，丢弃」→ 凭证确实失效了（不是解析失败，公开接口不需要登录）。
+- 改这块时不要引入第二条 cookie 状态线，也不要让配置项的运行时副本被覆盖——历史上正是因为
+  `update_cookie` 覆盖了 `_bili_ck`，导致运行期一旦出问题就只能靠重载插件恢复。
+
 ---
 
 ## 6. 「我要做 X，改哪里」速查表
@@ -305,7 +342,7 @@ ADAPTER = register_adapter(
 | 调媒体下载 / 重试 / 分片 | `services/downloader.py` | httpx 优先 → 失败回退 curl_cffi；空响应视作失败 |
 | 调 ffmpeg（合流 / 抽帧 / 转 GIF） | `utils/media.py` | ffmpeg 缺失要能降级，别让它抛到用户面前 |
 | 调实况照片合成 | `services/live_photo.py` | **不要改 XMP 字段名**，相册靠它定位尾部视频 |
-| 调 B站 Cookie / 登录 / 监控 | `services/bilibili_account.py` | 改存储格式要兼容已有密钥与 Cookie 文件 |
+| 调 B站 Cookie / 登录 / 监控 | `adapters/bilibili.py`（凭证持有者）+ `services/bilibili_account.py`（检测与通知） | 见 5.9；cookie 只能有一份真相，别新增第二条状态线 |
 | 调 Cloudflare 截图参数 | `services/web_screenshot.py` + `_conf_schema.json` | 新增请求体字段要登记到 `CF_KEY_MAP`（snake→camel） |
 | 新增指令 | `main.py`（`@filter.command`）+ 逻辑放 `services/*` | Handler 必须在 `main.py`；管理指令加 `@filter.permission_type(ADMIN)` |
 | 新增内存缓存 | `main.py` 的 `initialize()` 清理回调 + `/clear_cache` | 两处都要清；能挂进 `_ContentCacheEntry` 的优先挂进去，别新开平行字典 |
@@ -346,11 +383,23 @@ ADAPTER = register_adapter(
 <PY> scripts/kaomoji_render_test.py    # 颜文字字体回退
 
 # 4) 导入 + 注册表冒烟（见下方脚本）
+
+# 5) 真机功能冒烟（需要外网；自带 astrbot 桩，不需要 AstrBot 运行环境）
+<PY> scripts/dev_smoke_test.py --login <url>       # 扫码登录 + 解析，日志落 scripts/dev_test_out/
+<PY> scripts/dev_smoke_test.py --no-download <url> # 只跑解析，不下载媒体
 ```
 
 > 若当前解释器缺少 `bilibili_api` / `msgspec` / `curl_cffi` / `fontTools`，**不要改动 AstrBot 自身环境的依赖**，
 > 用 `pip install --quiet --target <临时目录> …` 安装到临时目录，再以 `PYTHONPATH=<临时目录>` 运行验证脚本即可。
-> `scripts/` 下的两个渲染脚本会自行 stub `astrbot.api.logger`，可脱离 AstrBot 直接运行（依赖 Pillow / fontTools）。
+> `scripts/` 下的渲染脚本会自行 stub `astrbot.api.logger`，`dev_smoke_test.py` 还会额外 stub
+> `astrbot.api.event` / `astrbot.api.star` / `astrbot.api.message_components`，因此都能脱离 AstrBot 直接跑。
+
+**`scripts/dev_smoke_test.py` 的定位**：唯一能一条命令验证「B站凭证 + 解析 + 下载清晰度」的脚本。
+它建一个**与真实插件隔离**的数据目录（`scripts/dev_test_out/`，已 gitignore），
+因此不会污染 AstrBot 里的登录态；要复用真实 cookie，把
+`<插件数据目录>/config/bilibili_cookies.json` 拷进 `scripts/dev_test_out/config/` 即可。
+输出里的「清晰度探测」段落直接列出 B站 给出的 `accept_quality` / `support_formats`，
+是判断「凭证到底有没有生效」最直接的证据。
 
 **导入冒烟脚本**（放临时目录，不提交；在 AstrBot 仓库根目录执行）：
 
@@ -400,6 +449,12 @@ assert not bad and len(handlers) == 14
 - **超时/重发的双发问题**：OneBot 大文件发送可能 retcode 1200（invoke timeout）但实际已发出，回退重发会导致重复 —— 相关判断在 `exceptions.py` 里已删（原 `is_timeout_exception` 未被使用），如需处理请谨慎。
 - **可选依赖降级**：Pillow 缺失 → 渲染自动关闭回退文本；fontTools 缺失 → 单字体渲染；ffmpeg 缺失 → 相关媒体处理抛 `RuntimeError`；curl_cffi 缺失 → 下载只用 httpx。
 - **B站凭证会在响应头回传新 Cookie 时自动刷新**并写盘，调试时不要依赖「配置文件里就是当前值」。
+- **B站 cookie 有「唯一真相」约束**：权威副本在 `BilibiliParser`（`config/bilibili_cookies.json`）。
+  `BiliAccountService` 只回读与转发；`initialize()` 不得无条件覆盖解析器已有的（更新的）cookie。
+  另外 `_SESSION_COOKIE_KEYS` / `FILL_ONLY_COOKIE_KEYS` 定义了响应头合并的白名单，
+  新增字段前先想清楚「它是不是设备指纹」——把别的设备的指纹混进凭证会被 B站 判为风险会话。
+- **B站 `ac_time_value` 只能从扫码登录响应体拿**（`data.refresh_token`），丢了就无法自动续期；
+  见 5.9。
 - **缓存键是内容标识、不是原始链接**：短链首次出现会多一次跳转请求（一跳优先，失败再跟完整链），之后由 `_identity_cache` 记忆；标识里若混入易变参数（token / 时间戳）会导致同一内容反复重解析，规则见 5.7。
 
 ---
@@ -423,6 +478,7 @@ assert not bad and len(handlers) == 14
 11. 验证基线数字变化（→ 第 8 节「期望基线」）
 12. 缓存键（内容标识）规则变化：阶梯、短链声明、平台特有归一化（→ 第 5.7 节、第 4 节）
 13. 缓存有效期（`CACHE_TTL_SECONDS`）或卡片换代机制变化（→ 第 5.8 节、第 4 节、第 9 节）
+14. B站凭证生命周期变化：取值来源、校验频率、持有者、响应头合并白名单（→ 第 5.9 节、第 6 节、第 9 节）
 
 ### 10.2 更新方式
 
@@ -435,6 +491,11 @@ assert not bad and len(handlers) == 14
 
 | 日期 | 变更 | 影响小节 |
 | :--- | :--- | :--- |
+| 2026-09-21 | 发布准备：版本号统一为 **v3.0.0**（`metadata.yaml` / `main.py` 的 `@register` / README 徽章）；新增 `LICENSE`（MIT）；README 补上 Twitter 反代 Worker 的独立仓库地址 | 6 |
+| 2026-09-21 | 发布前整理：README 重排（新增目录导航、按 `_conf_schema.json` 的 8 组重写配置表、补全 9 个漏文档的配置项、统一版本号为 `v2.4.0`）；清理仓库内测试产物（含 cookie / 账号信息的 `scripts/dev_test_out/`） | 6、10.1 |
+| 2026-09-21 | 真机冒烟发现并修复两处：① `PathTask.safe_get` 把 `IgnoreException`/`SilentException` 当控制流（DEBUG、无 traceback），此前「视频时长超限跳过下载」会刷一整段 ERROR；② B站凭证补齐 `buvid3`/`buvid4`（`_ensure_buvid`）并归一化 cookie 字典（`_credential_cookie_dict` 剔除库属性别名，cookie 串 716→642 字符） | 5.5、5.9 |
+| 2026-09-21 | 新增 `scripts/dev_smoke_test.py`：不依赖 AstrBot 的独立冒烟测试（B站扫码登录 + 链接解析 + 下载清晰度探测，日志落 `scripts/dev_test_out/`）；同步 `.gitignore` | 2、8 |
+| 2026-09-20 | 修复 B站 Cookie 链路：① 扫码登录改从**响应体**取凭证（`data.url` / `data.cookie_info` / `Set-Cookie` 三处合并），并把 `data.refresh_token` 存为 `ac_time_value`——此前只解析 Set-Cookie，导致自动刷新永远无法执行；② `_init_credential` 校验失败显式置 None（此前会把失效凭证交给解析器，被 B站 当未登录 → 只给 540P）；③ 新增 `VALIDATE_INTERVAL`（600s）给 `check_valid`/`check_refresh` 降频，`refresh` 包异常保护；④ cookie 收敛为「解析器唯一持有」：新增 `export_cookie()`、`update_cookie` 不再覆盖 `_bili_ck`、`initialize` 不再反向覆盖、检测前先同步；⑤ 响应头刷新改为保守合并（会话字段采纳 / buvid3·buvid4 仅补缺）；⑥ `ck2dict` 容忍无 `=` 的脏段 | 5.9（新增）、6、9、10.1 |
 | 2026-09-20 | 内容缓存新增**按平台的有效期**：`BaseParser.CACHE_TTL_SECONDS`，B站设 300s（其解析结果带实时在线人数 / 直播间场次信息，永久缓存会展示过期数据）；超时重新解析并让卡片代次 +1 换代；`_result_cache` / `_render_cache` 合并为 `_content_cache: dict[key, _ContentCacheEntry]` | 3、4、5.7、5.8、6、9、10.1 |
 | 2026-09-20 | 缓存键由「URL 前 64 字符」改为**内容标识**：优先取 `@handle` 命名分组，短链先跟随跳转（一跳优先、失败再跟完整链，`_identity_cache` 记忆），兜底 URL 归一化；新增 `utils/url.py`、`BaseParser.cache_identity` 及 `SHORT_LINK_KEYWORDS` / `IDENTITY_PATTERNS` / `identity_from_match` / `short_link_headers` 扩展点；微博 mid→bid、快手 photo id、Twitter status id 归一 | 2、3、4、5.7、9、10 |
 | 2026-09-20 | 命中解析缓存不再向对话发送「🔄 命中缓存...」，改为写日志（`main._process_url`） | 4 |

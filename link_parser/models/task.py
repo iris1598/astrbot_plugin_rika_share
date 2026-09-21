@@ -7,6 +7,8 @@ from typing import Any
 
 from astrbot.api import logger
 
+from ..exceptions import IgnoreException, SilentException
+
 
 class PathTask:
     __slots__ = ("_path", "_task")
@@ -33,6 +35,14 @@ class PathTask:
     ) -> Path | None:
         try:
             return await self.get()
+        except (IgnoreException, SilentException) as e:
+            # 控制流异常：例如视频时长超过限制时主动跳过下载。这不是错误，
+            # 却会走到这里（任务由 create_task 创建，异常在此处才被取回）。
+            # 打成 DEBUG，否则每遇到一个超长视频就刷一段 ERROR + traceback。
+            logger.debug(f"PathTask 按设计跳过 | task={self._task.get_name()}: {e}")
+            if on_error is not None:
+                on_error(e)
+            return None
         except Exception as e:
             from ..config import get_config
 
