@@ -53,7 +53,8 @@ astrbot_plugin_rika_share/
 │   ├── style.css                 #   设计系统：CSS 变量 + 玻璃拟态卡片 + 明暗两套主题
 │   ├── ui.js                     #   零依赖 DOM/表单小工具（h / card / toast / switch …）
 │   ├── app.js                    #   框架层：bridge 就绪 → 取配置元数据 → 建导航 → 挂载视图
-│   └── views/settings.js         #   设置视图：按分组渲染全部配置项 + 脏值跟踪 + 保存/恢复
+│   ├── views/settings.js         #   设置视图：按分组渲染全部配置项 + 脏值跟踪 + 保存/恢复
+│   └── views/debug.js            #   链接调试视图：输入链接 → 跑流程 → 导出日志
 ├── docs/previews/                # README 用的渲染预览图
 ├── scripts/                      # 开发辅助脚本（见第 8 节）
 │   ├── dev_smoke_test.py         #   独立冒烟测试：B站扫码登录 + 链接解析（自带 astrbot 桩）
@@ -86,6 +87,7 @@ astrbot_plugin_rika_share/
     │   │   ├── theme.py          #   L / THEMES / PLATFORM_COLORS / LAYOUT_NAMES / Pillow 探测
     │   │   ├── fonts.py          #   中文字体探测 + 符号回退字体链（fontTools / fc-list）
     │   │   └── text.py           #   文本清洗、统计行解析、链接与时间格式化
+    │   ├── debug_probe.py        # 链接调试探针（逐步跑主流程 + 收集日志 + 打码出报告）
     │   ├── web_screenshot.py     # Cloudflare Browser Rendering 网页截图客户端
     │   ├── live_photo.py         # 实况照片合成（主图 JPEG + XMP 索引 + 尾部 MP4）
     │   └── bilibili_account.py   # B站扫码登录 / Cookie 加密持久化 / 定时监控 / 自动应用
@@ -422,6 +424,53 @@ bridge 调后端；后端路由必须带插件名前缀，页面侧写去掉前�
 
 ---
 
+### 5.11 链接调试页（`views/debug.js` + `services/debug_probe.py`）
+
+设置页之外的第二个视图：输入链接 → 后端把解析主流程逐步跑一遍 → 产出**可下载的报告**。
+典型用途是「这条链接为什么没解析出来 / 视频为什么没发出去」。
+
+| 环节 | 位置 | 说明 |
+| :--- | :--- | :--- |
+| 流程 | `services/debug_probe.run_debug_probe` | 识别平台 → 缓存标识 → 解析 → 下载 → 渲染 → 输出构建 → CF 兜底判断 |
+| 路由 | `webui.py` | `POST /debug/run`、`GET /debug/log?token=`（token 只收十六进制，防目录穿越） |
+| 报告 | `<缓存目录>/debug/debug_<时间>_<token>.log` | 落在缓存目录下，随 `CACHE_TTL_HOURS` 一起被回收 |
+| 视图切换 | `app.js` 的 `VIEW_FACTORIES` / `ensureView` | 每个视图一个 holder，切换只切 `hidden` |
+
+与主流程的**有意差异**（改这块时别「对齐」回去）：
+
+1. **不读不写解析缓存**，每次都是全新解析——否则命中缓存会把要看的过程掩盖掉。
+2. **不向任何会话发消息**，也不改运行时状态。
+3. 卡片用 `cache_key=f"debug_{token}"` 渲染，**不会覆盖真正发出去的那张卡片**。
+4. 测试期间把插件 logger **临时降到 DEBUG**（`_LogCapture` 退出时恢复原级别），否则看不到细节。
+   注意 AstrBot 的插件 logger 设了 `propagate = False`，handler 必须挂在它自己身上。
+5. **报告必须打码**：Cookie / Token 只报长度，并对 `SESSDATA=` / `bili_jct=` / `Bearer …`
+   做正则兜底替换——这份文件是拿来贴给别人的。改动报告内容时先想一遍会不会带出凭据。
+
+排查口径：步骤里 `[FAIL]` 的那一步就是要查的地方，后面「插件日志」段落里有对应的堆栈；
+`[SKIP]` 是**按设计跳过**（如视频时长超限、渲染未启用），不是故障。
+
+**「跳过」和「失败」必须分开**（这里是踩过的坑）：`PathTask.safe_get()` 把
+「按设计跳过」（`IgnoreException` / `SilentException`）和真正的下载失败**一起吞成 `None`**，
+只看返回值分不出来。所以 `_download_all` 用它的 `on_error` 回调把异常捞回来再按类型分类：
+
+| 情况 | 判据 | 步骤状态 | 媒体明细行 |
+| :--- | :--- | :--- | :--- |
+| 拿到文件 | 有路径 | — | 文件路径 + 大小 |
+| 按设计跳过 | `IgnoreException` / `SilentException` | 全跳过且无成功项 → `skip`，否则 `ok` | `[跳过] 原因` |
+| 真失败 | 其他异常（或异常都没拿到） | `fail` | `[失败] 异常: 消息` |
+
+明细逐条带原因（如 `#1 视频: [跳过] 视频时长(12:34)超过限制(08:00)，跳过下载`），
+所以不用翻日志也能看出是哪种。**新增异常类型时想一遍它属于哪一类**，
+把「按设计跳过」错记成失败会让人去查根本没坏的东西。
+
+顺带两条相关的：
+- 适配器里光秃秃的 `raise IgnoreException`（不带消息）在报告里会退回一句通用说明；
+  顺手补上消息（如 `bilibili` / `acfun` / `downloader`）能直接看出是时长超限还是媒体为空。
+- `PathTask.safe_get()` 里读 `get_config()` 要包一层：配置尚未初始化时它会抛，
+  把真正的失败原因顶掉（`[失败] RuntimeError: ParserConfig not initialized yet` 就是这么来的）。
+
+---
+
 ## 6. 「我要做 X，改哪里」速查表
 
 | 任务 | 改动位置 | 注意 |
@@ -437,6 +486,9 @@ bridge 调后端；后端路由必须带插件名前缀，页面侧写去掉前�
 | 调设置页表单与保存逻辑 | `pages/rika/views/settings.js`（+ `ui.js` 的通用控件） | 字段由 `CONFIG_META` 下发，不要在页面里硬编码配置键 |
 | 调页面骨架 / 分组导航 | `pages/rika/index.html` + `app.js` | 导航项由后端分组生成，新增分组不用改 HTML |
 | 调设置页后端接口 | `link_parser/webui.py` | 只做「取参 → 校验 → 转发 config 读写 → 拼 JSON」 |
+| 调链接调试的流程 / 报告格式 | `link_parser/services/debug_probe.py` | 报告要打码；别读缓存、别发消息，见 5.11 |
+| 调链接调试页界面 | `pages/rika/views/debug.js` | 流程全在后端，页面只摆结果 |
+| 新增一个插件页面视图 | `pages/rika/views/<名字>.js` + `app.js` 的 `VIEW_FACTORIES` 与 `navEntries` | 每个视图一个 holder，切换只切 `hidden` |
 | 新增卡片布局 | `card_render/renderer.py`（`_render_<layout>` + `_render_sync` 分发）+ `card_render/theme.py`（`LAYOUT_NAMES`）+ `_conf_schema.json`（`RENDER_LAYOUT.options` 两处）+ README | 无封面场景必须能回退（参考 `_render_immersive`） |
 | 新增主题 / 平台配色 | `card_render/theme.py`（`THEMES` / `PLATFORM_COLORS`） | 主题名要同步 schema 的 options 与 `ParserConfig.RENDER_THEME` 白名单 |
 | 调字体 / 颜文字回退 | `card_render/fonts.py` | 用 `scripts/kaomoji_render_test.py` 验证 |
@@ -536,7 +588,7 @@ print("handlers       :", len(handlers))      # 应为 14
 assert not bad and len(handlers) == 14
 ```
 
-期望基线（2026-09-21 实测）：模块导入 **63/63**（`main.py` + `link_parser/` 下 62 个模块）、适配器 **8 个**（`adapter_names()` 顺序固定）、Handler **14 个**（`grep -c "@filter\." main.py` 为 17，见铁律 1）、配置项 **44 项 / 8 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
+期望基线（2026-09-21 实测）：模块导入 **64/64**（`main.py` + `link_parser/` 下 63 个模块）、适配器 **8 个**（`adapter_names()` 顺序固定）、Handler **14 个**（`grep -c "@filter\." main.py` 为 17，见铁律 1）、配置项 **44 项 / 8 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
 
 **网页设置页**没有随仓库的自动化回归（它跑在受限 iframe 里），改完 `pages/rika/` 后两条路一起走：
 
@@ -579,6 +631,10 @@ assert not bad and len(handlers) == 14
   新增字段前先想清楚「它是不是设备指纹」——把别的设备的指纹混进凭证会被 B站 判为风险会话。
 - **B站 `ac_time_value` 只能从扫码登录响应体拿**（`data.refresh_token`），丢了就无法自动续期；
   见 5.9。
+- **`PathTask.safe_get()` 不区分「按设计跳过」与「下载失败」**：两者都返回 `None`，
+  异常只在 logger 里。要分辨必须传 `on_error` 回调把异常捞回来，见 5.11。
+  同理，它内部读 `get_config()` 得包 `try`——配置没初始化时那个 RuntimeError
+  会把真正的失败原因盖掉。
 - **缓存键是内容标识、不是原始链接**：短链首次出现会多一次跳转请求（一跳优先，失败再跟完整链），之后由 `_identity_cache` 记忆；标识里若混入易变参数（token / 时间戳）会导致同一内容反复重解析，规则见 5.7。
 
 ---
@@ -615,6 +671,8 @@ assert not bad and len(handlers) == 14
 
 | 日期 | 变更 | 影响小节 |
 | :--- | :--- | :--- |
+| 2026-09-21 | 修正链接调试页把「按设计跳过」记成失败：`_download_all` 改用 `PathTask.safe_get(on_error=…)` 捞回异常后分类（跳过 / 失败 / 成功），逐条明细标注原因；同时修掉「无媒体时重复追加一条 `媒体下载` 步骤」、报告结论补记跳过的步骤、`.detail-grid dd` 加 `white-space: pre-line` 让多行明细不再挤成一行；顺带给 `bilibili` / `acfun` / `downloader` 里没带消息的 `raise IgnoreException` 补上原因，并让 `PathTask.safe_get()` 不再因配置未初始化而顶掉真实异常 | 5.11、9 |
+| 2026-09-21 | 新增**链接调试页**：`services/debug_probe.py`（逐步跑 识别平台 → 缓存标识 → 解析 → 下载 → 渲染 → 输出构建 → CF 兜底判断，收集插件 logger 输出并临时降到 DEBUG，Cookie/Token 打码后落成可下载报告）+ `webui.py` 的 `POST /debug/run` 与 `GET /debug/log`；页面侧新增 `views/debug.js` 与导航项，并把 `app.js` 改为多视图（每视图一个 holder，切换只切 `hidden`，设置页未保存的草稿不会丢）。顺带修掉 `ui.js` 的 `append()` 不展开嵌套数组的问题——`h("dl", {}, [[dt, dd], …])` 会把子数组 `String()` 成 `"[object HTMLxxxElement]"` 文本节点 | 2、5.11（新增）、6、8 |
 | 2026-09-21 | 原生配置面板**清空**：`_conf_schema.json` 里全部条目与全部 8 个分组都标 `invisible`（连同上一版保留的 `CLOUDFLARE_FALLBACK_ENABLED`），schema 退化为纯存储契约，44 项配置一律在插件页面维护。这是有意为之的终态，见 5.6 | 5.6、8 |
 | 2026-09-21 | 解析器开关改为**页面动态渲染**：原来写死的 `PLATFORM_<NAME>_ENABLED`（含 `PLATFORM_SWITCHES` / `platform_switch_key` / `migrate_platform_switches`）破坏了「新增平台只需注册适配器」的契约，已全部移除，改为 `config.registered_platforms()` / `platform_options()` 从 `iter_adapters()` 动态出清单、`webui.get_config` 下发 `platforms`、页面渲染开关网格；状态仍存在静态键 `DISABLED_PLATFORMS`（**动态配置键在 AstrBot 存不住**：`check_config_integrity` 在插件实例化之前用文件 schema 剔除未知键，`__init__` 里注入 schema 下次重载就丢，故 `/b/` 方案不可行）；`CONFIG_META` 新增 `control: "platforms"` 渲染钩子；`_conf_schema.json` 移除「解析器开关」组，原生面板只剩 `CLOUDFLARE_FALLBACK_ENABLED`；配置项 51→**44 项**、分组 9→**8 组**。同时修掉开关点击回调闭包捕获旧状态导致「同一个开关点第二次无效」的 bug | 2、5.1、5.6、6、7、8 |
 | 2026-09-21 | 网页设置页全量功能验证（jsdom + 假 bridge，114 项断言）并修掉一个**数据丢失级 bug**：`pages/rika/ui.js` 的 `h()` 把 `value` 写成 `setAttribute`，而 `<textarea value="…">` 无效（textarea 的值来自子文本）→ `CLOUDFLARE_BLACKLIST` / `CLOUDFLARE_EXTRA_HEADERS` / `CLOUDFLARE_COOKIES` 在页面上恒为空框，用户照着编辑保存会清掉原内容。改为对 `value` 走 `node.value = …`（`option` 的 value 会反射回 attribute，两种元素都正确） | 9（新增两条坑）、8 |

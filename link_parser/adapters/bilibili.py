@@ -241,7 +241,11 @@ class BilibiliParser(BaseParser):
                 return output_path
             v_url, v_backups, a_url, a_backups = await self.extract_download_urls(video=video, page_index=page_info.index)
             if page_info.duration > pconfig.VIDEO_DURATION_MAXIMUM:
-                raise IgnoreException
+                # 带上原因：这句会出现在链接调试页的报告里，光秃秃的可忽略异常没法定位
+                raise IgnoreException(
+                    f"视频时长({duration_str})超过限制"
+                    f"({fmt_duration(pconfig.VIDEO_DURATION_MAXIMUM)})，跳过下载"
+                )
 
             url_pairs = [(v_url, a_url)]
             for i, v_bu in enumerate(v_backups):

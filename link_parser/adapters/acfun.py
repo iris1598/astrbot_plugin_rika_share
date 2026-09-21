@@ -46,8 +46,15 @@ class AcfunParser(BaseParser):
 
         author = self.create_author(video_info.name, video_info.avatar_url)
         if (duration := video_info.duration) >= pconfig.VIDEO_DURATION_MAXIMUM:
-            logger.warning(f"视频时长 {duration} 超过最大限制 {pconfig.VIDEO_DURATION_MAXIMUM}")
-            raise IgnoreException
+            from ..utils.formatting import fmt_duration
+
+            # 这条消息会作为「ℹ️ …」发给用户，也会出现在链接调试页的报告里，要说清楚原因
+            message = (
+                f"视频时长({fmt_duration(duration)})超过限制"
+                f"({fmt_duration(pconfig.VIDEO_DURATION_MAXIMUM)})，跳过解析"
+            )
+            logger.warning(message)
+            raise IgnoreException(message)
 
         video_task = self.downloader.download_m3u8(
             video_info.m3u8_url, video_name=f"acfun_{acid}.mp4",

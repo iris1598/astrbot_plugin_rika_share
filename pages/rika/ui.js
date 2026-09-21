@@ -32,16 +32,22 @@ export function h(tag, props = null, children = null) {
   return node;
 }
 
-/** 追加子节点，自动跳过 null / false，字符串转文本节点。 */
+/**
+ * 追加子节点，自动跳过 null / false，字符串转文本节点。
+ *
+ * **数组会递归展开**：`h("dl", {}, [[dt, dd], [dt, dd]])` 这种「成对节点」写法很自然，
+ * 不展开的话整个子数组会被 `String()` 成一个 `"[object HTMLxxxElement]"` 文本节点
+ * —— 页面不报错，但内容变成乱码。
+ */
 export function append(parent, children) {
   if (children === null || children === undefined || children === false) return parent;
-  const list = Array.isArray(children) ? children : [children];
-  for (const child of list) {
-    if (child === null || child === undefined || child === false) continue;
-    parent.appendChild(
-      child instanceof Node ? child : document.createTextNode(String(child)),
-    );
+  if (Array.isArray(children)) {
+    for (const child of children) append(parent, child);
+    return parent;
   }
+  parent.appendChild(
+    children instanceof Node ? children : document.createTextNode(String(children)),
+  );
   return parent;
 }
 

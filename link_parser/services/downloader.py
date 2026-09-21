@@ -39,7 +39,7 @@ class StreamDownloader:
         content_length = int(content_length)
         if content_length == 0:
             logger.warning(f"媒体 url: {response.url}, 大小为 0, 取消下载")
-            raise IgnoreException
+            raise IgnoreException("媒体大小为 0，已取消下载")
         return content_length
 
     @staticmethod
@@ -49,7 +49,7 @@ class StreamDownloader:
             return
         await safe_unlink(file_path)
         logger.warning(f"媒体 url: {url}, 大小为 0, 取消下载")
-        raise IgnoreException
+        raise IgnoreException("媒体大小为 0，已取消下载")
 
     async def _download_file_with_httpx(
         self,

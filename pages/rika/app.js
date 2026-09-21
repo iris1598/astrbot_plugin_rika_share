@@ -1,11 +1,12 @@
 /* 莉卡解析 · 插件页面入口
  *
- * 职责：等 bridge 就绪 → 取配置元数据 → 渲染左侧分组导航 → 挂载设置视图。
- * 表单与保存逻辑都在 views/settings.js，本文件保持「框架层」的轻量。
+ * 职责：等 bridge 就绪 → 取配置元数据 → 渲染左侧导航 → 按导航切换视图。
+ * 业务都在 views/ 下（设置 / 链接调试），本文件保持「框架层」的轻量。
  */
 
 import { h, clear } from "./ui.js";
 import { PLATFORM_VIEW, createSettingsView } from "./views/settings.js";
+import { createDebugView } from "./views/debug.js";
 
 const bridge = window.AstrBotPluginPage;
 
@@ -17,6 +18,15 @@ export const api = {
   post(endpoint, body) {
     return bridge.apiPost(endpoint, body);
   },
+  download(endpoint, params, filename) {
+    return bridge.download(endpoint, params, filename);
+  },
+};
+
+/** 视图工厂：导航项的 view 字段对应这里的键。 */
+const VIEW_FACTORIES = {
+  settings: createSettingsView,
+  debug: createDebugView,
 };
 
 const ALL = "__all__";
@@ -32,6 +42,12 @@ const ICON_ALL = svg(
   '<rect x="3" y="3" width="8" height="10" rx="2"/><rect x="13" y="3" width="8" height="6" rx="2"/>' +
     '<rect x="13" y="11" width="8" height="10" rx="2"/><rect x="3" y="15" width="8" height="6" rx="2"/>',
 );
+/** 链接调试：输入链接跑一遍完整流程并导出日志。 */
+const ICON_DEBUG = svg(
+  '<path d="M8 6h8l-1 4 4 9a1 1 0 0 1-.9 1.4H5.9A1 1 0 0 1 5 19l4-9z"/>' +
+    '<path d="M9.5 14h5"/>',
+);
+
 /** 解析器开关：平台清单来自适配器注册表，新增平台会自动出现在这一页。 */
 const ICON_PLATFORMS = svg(
   '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/>' +
@@ -79,8 +95,10 @@ const GROUP_ICONS = {
 /* ---------------- 界面状态 ---------------- */
 
 const state = {
-  view: null,
-  group: ALL,
+  /** 当前导航项 {view, key, label, title, sub} */
+  current: null,
+  /** view 名 -> { instance, holder }，挂载后一直留着（切走不丢未保存的草稿） */
+  views: new Map(),
   title: document.getElementById("view-title"),
   sub: document.getElementById("view-sub"),
   body: document.getElementById("stage-body"),
@@ -113,39 +131,59 @@ const ctx = {
   },
 };
 
-/** 非分组视图的标题与副标题；其余分组直接用分组名。 */
-const VIEW_LABELS = {
-  [ALL]: { title: "设置", sub: "全部配置项，保存后立即生效" },
-  [PLATFORM_VIEW]: { title: "解析器开关", sub: "一键启用 / 关闭各平台解析器" },
-};
-
 /* ---------------- 导航 ---------------- */
 
-function buildNav(groups, hasPlatforms) {
+/** 导航项 = 设置视图的若干入口 + 链接调试。 */
+function navEntries(settingsView) {
+  const entries = [
+    { view: "settings", key: ALL, label: "全部设置", title: "设置", sub: "全部配置项，保存后立即生效", icon: ICON_ALL },
+  ];
+  // 解析器开关固定排在分组前面（平台清单动态，没有平台时不显示这一项）
+  if (settingsView.hasPlatforms()) {
+    entries.push({
+      view: "settings",
+      key: PLATFORM_VIEW,
+      label: "解析器开关",
+      title: "解析器开关",
+      sub: "一键启用 / 关闭各平台解析器",
+      icon: ICON_PLATFORMS,
+    });
+  }
+  for (const name of settingsView.groupNames()) {
+    entries.push({
+      view: "settings",
+      key: name,
+      label: name,
+      title: name,
+      sub: "该分组的配置项，保存后立即生效",
+      icon: GROUP_ICONS[name] || ICON_DEFAULT,
+    });
+  }
+  entries.push({
+    view: "debug",
+    key: "debug",
+    label: "链接调试",
+    title: "链接调试",
+    sub: "输入链接跑一遍完整解析流程，导出可下载的日志",
+    icon: ICON_DEBUG,
+  });
+  return entries;
+}
+
+function buildNav(entries) {
   const nav = document.getElementById("rail-nav");
   clear(nav);
-
-  const entries = [{ name: ALL, label: "全部设置", icon: ICON_ALL }];
-  // 解析器开关固定排在分组前面（平台清单动态，没有平台时不显示这一项）
-  if (hasPlatforms) {
-    entries.push({ name: PLATFORM_VIEW, label: "解析器开关", icon: ICON_PLATFORMS });
-  }
-  entries.push(
-    ...groups.map((name) => ({
-      name,
-      label: name,
-      icon: GROUP_ICONS[name] || ICON_DEFAULT,
-    })),
-  );
+  state.entries = entries;
 
   for (const entry of entries) {
     nav.appendChild(
       h(
         "button",
         {
-          class: `rail-item${entry.name === state.group ? " is-active" : ""}`,
+          class: "rail-item",
           type: "button",
-          dataset: { group: entry.name },
+          dataset: { index: String(entries.indexOf(entry)) },
+          title: entry.label,
         },
         [
           h("span", { class: "rail-icon", html: entry.icon, "aria-hidden": "true" }),
@@ -157,23 +195,61 @@ function buildNav(groups, hasPlatforms) {
 
   nav.onclick = (event) => {
     const button = event.target.closest(".rail-item");
-    if (!button || button.dataset.group === state.group) return;
-    selectGroup(button.dataset.group);
+    if (!button) return;
+    const entry = entries[Number(button.dataset.index)];
+    if (!entry || entry === state.current) return;
+    selectEntry(entry);
   };
 }
 
-function selectGroup(name) {
-  state.group = name;
-  for (const item of document.querySelectorAll(".rail-item")) {
-    item.classList.toggle("is-active", item.dataset.group === name);
+function markActive(entry) {
+  const items = document.querySelectorAll(".rail-item");
+  items.forEach((item) => {
+    item.classList.toggle("is-active", state.entries[Number(item.dataset.index)] === entry);
+  });
+}
+
+/** 取出（必要时创建并挂载）某个视图；每个视图一个 holder，切换靠 hidden。 */
+async function ensureView(name) {
+  const existing = state.views.get(name);
+  if (existing) return existing;
+
+  const holder = h("div", { class: "view" });
+  state.body.appendChild(holder);
+  const instance = VIEW_FACTORIES[name](ctx);
+  const slot = { instance, holder };
+  state.views.set(name, slot);
+  try {
+    await instance.mount(holder);
+  } catch (error) {
+    console.error(`视图 ${name} 渲染失败`, error);
+    clear(holder);
+    holder.appendChild(h("div", { class: "empty", text: `页面渲染失败：${error.message || error}` }));
+    throw error;
   }
-  const labels = VIEW_LABELS[name] || {
-    title: name,
-    sub: "该分组的配置项，保存后立即生效",
-  };
-  state.title.textContent = labels.title;
-  state.sub.textContent = labels.sub;
-  if (state.view) state.view.showGroup(name);
+  return slot;
+}
+
+async function selectEntry(entry) {
+  let slot;
+  try {
+    slot = await ensureView(entry.view);
+  } catch {
+    return; // 已渲染失败提示，不再切标题
+  }
+  for (const [name, item] of state.views) {
+    item.holder.hidden = name !== entry.view;
+  }
+  state.current = entry;
+  markActive(entry);
+  state.title.textContent = entry.title;
+  state.sub.textContent = entry.sub;
+  ctx.setHead("");
+
+  // 设置视图还要切到具体的分组 / 解析器开关
+  if (entry.view === "settings" && typeof slot.instance.showGroup === "function") {
+    slot.instance.showGroup(entry.key);
+  }
 }
 
 function bindReload() {
@@ -181,7 +257,8 @@ function bindReload() {
     state.reloadButton.disabled = true;
     state.reloadButton.textContent = "刷新中…";
     try {
-      if (state.view) await state.view.refresh();
+      const slot = state.current && state.views.get(state.current.view);
+      if (slot && typeof slot.instance.refresh === "function") await slot.instance.refresh();
     } finally {
       state.reloadButton.disabled = false;
       state.reloadButton.textContent = "刷新";
@@ -213,31 +290,31 @@ async function boot() {
     console.error("等待 bridge 上下文失败", error);
   }
 
-  const view = createSettingsView(ctx);
-  state.view = view;
-
+  // 导航项要按后端的分组 / 平台清单生成，所以设置视图先实例化并 adopt，
+  // 再建导航；调试视图等第一次点进去时再懒挂载。
+  const settings = createSettingsView(ctx);
   try {
-    view.adopt(await api.get("config"));
+    settings.adopt(await api.get("config"));
   } catch (error) {
     console.error("读取配置失败", error);
     fail(`读取配置失败：${error.message || error}`);
     return;
   }
 
-  buildNav(view.groupNames(), view.hasPlatforms());
-  ctx.setConnection(true, "已连接");
-
-  const holder = h("div", { class: "view" });
+  const holder = h("div", { class: "view", hidden: true });
   state.body.appendChild(holder);
+  state.views.set("settings", { instance: settings, holder });
   try {
-    await view.mount(holder);
+    await settings.mount(holder);
   } catch (error) {
     console.error("设置页渲染失败", error);
     fail(`页面渲染失败：${error.message || error}`);
     return;
   }
 
-  selectGroup(ALL);
+  buildNav(navEntries(settings));
+  ctx.setConnection(true, "已连接");
+  await selectEntry(state.entries[0]);
 }
 
 boot();

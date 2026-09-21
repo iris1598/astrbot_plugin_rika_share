@@ -46,7 +46,12 @@ class PathTask:
         except Exception as e:
             from ..config import get_config
 
-            if get_config().DEBUG_LOG_ENABLED:
+            # 配置还没初始化时 get_config() 自己会抛，别让它把真正的失败原因顶掉
+            try:
+                verbose = get_config().DEBUG_LOG_ENABLED
+            except Exception:  # noqa: BLE001 - 只影响日志详细程度
+                verbose = False
+            if verbose:
                 logger.exception(f"PathTask 获取失败 | task={self._task.get_name()}")
             if on_error is not None:
                 on_error(e)

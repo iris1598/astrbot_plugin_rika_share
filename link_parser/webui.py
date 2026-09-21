@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -29,6 +30,12 @@ from .config import (
 )
 
 PLUGIN_NAME = "astrbot_plugin_rika_share"
+
+#: 调试接口接受的链接长度上限
+MAX_URL_LENGTH = 2048
+
+#: 调试日志标识的合法形态（纯十六进制，防目录穿越）
+_DEBUG_TOKEN_RE = re.compile(r"[0-9a-f]{12}")
 
 
 def _json_response(data: Any, status_code: int = 200):
@@ -85,6 +92,8 @@ class WebUIApi:
             ("/config", self.get_config, ("GET",), "读取全部配置项"),
             ("/config", self.save_config, ("POST",), "保存配置项"),
             ("/config/reset", self.reset_config, ("POST",), "恢复默认配置"),
+            ("/debug/run", self.debug_run, ("POST",), "对链接跑一遍解析流程并生成日志"),
+            ("/debug/log", self.debug_log, ("GET",), "下载调试日志"),
         )
         for suffix, handler, methods, desc in routes:
             context.register_web_api(f"/{PLUGIN_NAME}{suffix}", handler, list(methods), desc)
@@ -128,6 +137,61 @@ class WebUIApi:
                 "runtime": runtime,
                 "values": pconfig.current_values(),
             }
+        )
+
+    # ==================== 链接调试 ==================== #
+
+    async def debug_run(self):
+        """对提交的链接跑一遍完整解析流程，返回步骤结果 + 日志正文。"""
+        from astrbot.api.web import request
+
+        from .services.debug_probe import run_debug_probe
+
+        body = await request.json(default={}) or {}
+        url = str(body.get("url") or "").strip()
+        if not url:
+            return _error("请填写要测试的链接")
+        if len(url) > MAX_URL_LENGTH:
+            return _error(f"链接过长（上限 {MAX_URL_LENGTH} 字符）")
+        if not url.lower().startswith(("http://", "https://")):
+            return _error("链接需要以 http:// 或 https:// 开头")
+
+        # 页面给的是「是否执行」的开关，缺省都执行
+        download_media = body.get("download_media", True) is not False
+        render_card = body.get("render_card", True) is not False
+
+        try:
+            report = await run_debug_probe(
+                self.plugin,
+                url,
+                download_media=download_media,
+                render_card=render_card,
+            )
+        except Exception as exc:  # noqa: BLE001 - 调试接口本身也不能把栈抛给页面
+            logger.exception("[link_parser] 调试流程异常")
+            return _error(f"调试流程异常：{str(exc)[:200]}", status_code=500)
+        return _json_response(report.payload())
+
+    async def debug_log(self):
+        """下载调试日志文本。``token`` 只允许十六进制，防止目录穿越。"""
+        from astrbot.api.web import file_response, request
+
+        from .services.debug_probe import debug_dir
+
+        token = str(request.query.get("token") or "").strip().lower()
+        if not _DEBUG_TOKEN_RE.fullmatch(token):
+            return _error("无效的日志标识")
+
+        directory = debug_dir(self.plugin)
+        # 不记内存状态：按 token 后缀找（重载插件后依然能下载）
+        matches = sorted(directory.glob(f"debug_*_{token}.log"), reverse=True)
+        if not matches:
+            return _error("日志已不存在（可能已被缓存清理），请重新测试")
+        path = matches[0]
+        return file_response(
+            path,
+            filename=f"rika_debug_{token}.log",
+            content_type="text/plain; charset=utf-8",
         )
 
     async def reset_config(self):
