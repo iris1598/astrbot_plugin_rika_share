@@ -8,6 +8,7 @@
 
 import {
   h,
+  append,
   clear,
   card,
   toast,
@@ -20,6 +21,12 @@ import {
 
 const ALL = "__all__";
 
+/** 导航里「解析器开关」视图的 id（app.js 也用它）。 */
+export const PLATFORM_VIEW = "__platforms__";
+
+/** 解析器开关对应的存储键：一个逗号串，页面按注册表渲染成开关。 */
+const PLATFORM_KEY = "DISABLED_PLATFORMS";
+
 export function createSettingsView(ctx) {
   let container = null;
   let meta = { groups: [], items: [], problems: [], version: "" };
@@ -31,6 +38,10 @@ export function createSettingsView(ctx) {
   let savebar = null;
   // 分组名 -> 组内配置键，供「N 项待保存」角标复用（不用每次遍历 items）
   let keysByGroup = new Map();
+  // 解析器开关：平台清单由后端从适配器注册表下发，这里不写死
+  let platforms = [];
+  let platformChips = new Map();
+  let platformMeta = null;
 
   /* ---------------- 数据 ---------------- */
 
@@ -44,8 +55,37 @@ export function createSettingsView(ctx) {
     };
     values = payload.values || {};
     draft = {};
-    keysByGroup = new Map(meta.groups.map((group) => [group.name, group.keys || []]));
+    // control 项（解析器开关）由专门的卡片渲染，不计入普通分组的字段与角标
+    keysByGroup = new Map(
+      meta.groups.map((group) => [
+        group.name,
+        (group.keys || []).filter((key) => !itemOf(key)?.control),
+      ]),
+    );
+    platforms = payload.platforms || [];
+    // 解析器开关的文案与说明沿用 CONFIG_META 里 DISABLED_PLATFORMS 那一项
+    platformMeta = meta.items.find((item) => item.key === PLATFORM_KEY) || null;
     if (meta.version) ctx.setVersion(`v${meta.version}`);
+  }
+
+  /** 当前被禁用（开关为关）的平台名集合，读的是草稿优先的当前值。 */
+  function disabledSet() {
+    const raw = currentValue(PLATFORM_KEY);
+    return new Set(
+      String(raw || "")
+        .split(",")
+        .map((name) => name.trim().toLowerCase())
+        .filter(Boolean),
+    );
+  }
+
+  function matchPlatform(platform) {
+    if (!filter) return true;
+    const haystack = [platform.name, platform.label, platformMeta?.label, platformMeta?.hint]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(filter);
   }
 
   async function load() {
@@ -99,12 +139,20 @@ export function createSettingsView(ctx) {
     return haystack.includes(filter);
   }
 
-  /** 当前分组（导航）下要显示的组；ALL 表示全部。搜索时忽略分组限制。 */
+  /** 当前导航下要显示的组；ALL 表示全部。搜索时忽略分组限制。 */
   function visibleGroups() {
     if (!filter && groupName !== ALL) {
+      if (groupName === PLATFORM_VIEW) return [];
       return meta.groups.filter((group) => group.name === groupName);
     }
     return meta.groups;
+  }
+
+  /** 当前导航下是否显示解析器开关卡（搜索时跨视图显示，命中由 matchPlatform 过滤）。 */
+  function platformCardVisible() {
+    if (!platforms.length) return false;
+    if (filter) return true;
+    return groupName === ALL || groupName === PLATFORM_VIEW;
   }
 
   /* ---------------- 渲染 ---------------- */
@@ -126,8 +174,17 @@ export function createSettingsView(ctx) {
     container.appendChild(renderToolbar());
 
     let rendered = 0;
+    if (platformCardVisible()) {
+      const card = renderPlatformCard();
+      if (card) {
+        rendered += platformChips.size;
+        container.appendChild(card);
+      }
+    }
     for (const group of visibleGroups()) {
-      const items = group.keys.map(itemOf).filter((item) => item && matchesFilter(item));
+      const items = group.keys
+        .map(itemOf)
+        .filter((item) => item && !item.control && matchesFilter(item));
       if (!items.length) continue;
       rendered += items.length;
       container.appendChild(renderGroup(group, items));
@@ -190,6 +247,89 @@ export function createSettingsView(ctx) {
       input.setSelectionRange(end, end);
     } catch {
       /* search 类型部分浏览器不支持 setSelectionRange，忽略 */
+    }
+  }
+
+  /**
+   * 解析器开关卡：平台清单由后端从适配器注册表下发，**页面不写死任何平台**。
+   * 开关结果写回 `DISABLED_PLATFORMS` 逗号串（AstrBot 的配置完整性检查只认
+   * schema 里的静态键，动态的 `PLATFORM_*_ENABLED` 键存不住）。
+   */
+  function renderPlatformCard() {
+    platformChips = new Map();
+    const shown = platforms.filter(matchPlatform);
+    if (!shown.length) return null;
+
+    const grid = h("div", { class: "platform-grid" }, shown.map(renderPlatformChip));
+    const dirty = dirtyKeys().includes(PLATFORM_KEY);
+    return h("section", { class: "card", dataset: { platform: "1" } }, [
+      h("div", { class: "card-head" }, [
+        h("h2", { text: platformMeta?.label || "解析器开关" }),
+        dirty ? h("span", { class: "pill primary", text: "待保存" }) : null,
+        h("span", {
+          class: "sub",
+          text: platformMeta?.hint || `共 ${shown.length} 个平台，关闭后不再解析对应链接`,
+        }),
+      ]),
+      h("div", {}, [grid]),
+    ]);
+  }
+
+  function renderPlatformChip(platform) {
+    const enabled = !disabledSet().has(platform.name);
+    const chip = h("div", {
+      class: `platform-chip${enabled ? " is-on" : ""}`,
+      role: "switch",
+      tabindex: "0",
+      title: `${platform.name} · ${enabled ? "点击关闭" : "点击启用"}`,
+      "aria-checked": enabled ? "true" : "false",
+      "aria-label": platform.label,
+    });
+    // 开关只作状态显示：点击由整块 chip 处理（CSS 里给 .switch 关了 pointer-events），
+    // 这样鼠标点标签、点开关、键盘回车都是同一个入口
+    const toggleText = { on: "启用", off: "关闭" };
+    append(chip, [
+      h("span", { class: "platform-chip-label", text: platform.label }),
+      switchControl(enabled, () => {}, toggleText.on, toggleText.off),
+    ]);
+    // 必须按「点击那一刻」的状态翻转，不能闭包捕获这里的 enabled：
+    // 切完只做就地刷新（不整页重渲染），闭包里的值会一直是首次渲染时的旧值，
+    // 表现为同一个开关点第二次没反应。
+    const toggle = () => flipPlatform(platform.name);
+    chip.addEventListener("click", toggle);
+    chip.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        toggle();
+      }
+    });
+    platformChips.set(platform.name, chip);
+    return chip;
+  }
+
+  /** 切换单个平台的启用状态（按当前草稿翻转）。 */
+  function flipPlatform(name) {
+    const disabled = disabledSet();
+    if (disabled.has(name)) disabled.delete(name);
+    else disabled.add(name);
+    // 按注册表顺序拼回去，保证「关掉再打开」能回到原字符串，脏值判断才准
+    const ordered = platforms.map((p) => p.name).filter((n) => disabled.has(n));
+    onChange(PLATFORM_KEY, ordered.join(","));
+    refreshPlatformChips();
+  }
+
+  /** 就地更新 chip，不整页重渲染（否则正在输入搜索框的光标会被打断）。 */
+  function refreshPlatformChips() {
+    const disabled = disabledSet();
+    for (const [name, chip] of platformChips) {
+      const enabled = !disabled.has(name);
+      chip.classList.toggle("is-on", enabled);
+      chip.setAttribute("aria-checked", enabled ? "true" : "false");
+      chip.title = `${name} · ${enabled ? "点击关闭" : "点击启用"}`;
+      const input = chip.querySelector('input[type="checkbox"]');
+      if (input) input.checked = enabled;
+      const text = chip.querySelector(".switch-text");
+      if (text) text.textContent = enabled ? "启用" : "关闭";
     }
   }
 
@@ -353,26 +493,38 @@ export function createSettingsView(ctx) {
     const next = buildSaveBar();
     savebar.replaceWith(next);
     savebar = next;
-    refreshGroupBadges();
+    refreshBadges();
   }
 
-  /** 只更新分组标题上的角标，不重建整张卡（避免输入框失焦）。 */
-  function refreshGroupBadges() {
+  /** 只更新分组标题上的「N 项待保存」角标，不重建整张卡（避免输入框失焦）。 */
+  function refreshBadges() {
     if (!container) return;
     for (const section of container.querySelectorAll("section.card[data-group]")) {
-      const head = section.querySelector(".card-head");
-      if (!head) continue;
-      const sub = head.querySelector(".sub");
-      const badge = head.querySelector(".pill.primary");
-      const next = dirtyBadge(section.dataset.group);
-      if (!next) {
-        if (badge) badge.remove();
-        continue;
-      }
-      if (badge) badge.replaceWith(next);
-      else if (sub) head.insertBefore(next, sub);
-      else head.appendChild(next);
+      syncBadge(section, dirtyBadge(section.dataset.group));
     }
+    const platformCard = container.querySelector('section.card[data-platform]');
+    if (platformCard) {
+      syncBadge(
+        platformCard,
+        dirtyKeys().includes(PLATFORM_KEY)
+          ? h("span", { class: "pill primary", text: "待保存" })
+          : null,
+      );
+    }
+  }
+
+  function syncBadge(section, next) {
+    const head = section.querySelector(".card-head");
+    if (!head) return;
+    const sub = head.querySelector(".sub");
+    const badge = head.querySelector(".pill.primary");
+    if (!next) {
+      if (badge) badge.remove();
+      return;
+    }
+    if (badge) badge.replaceWith(next);
+    else if (sub) head.insertBefore(next, sub);
+    else head.appendChild(next);
   }
 
   function buildSaveBar() {
@@ -523,6 +675,10 @@ export function createSettingsView(ctx) {
     },
     groupNames() {
       return meta.groups.map((group) => group.name);
+    },
+    /** 注册表里有平台时才显示「解析器开关」导航项。 */
+    hasPlatforms() {
+      return platforms.length > 0;
     },
     dirtyCount() {
       return dirtyKeys().length;

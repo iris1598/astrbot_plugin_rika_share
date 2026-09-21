@@ -355,6 +355,29 @@ textarea.input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--
 .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .grow { flex: 1; min-width: 0; }
 
+/* 解析器开关：整块 chip 可点（含键盘），里面的开关只作状态显示。
+   平台清单来自适配器注册表，新增平台会自动多出一块。 */
+.platform-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 9px; }
+.platform-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel-solid);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.platform-chip:hover { border-color: var(--border-2); transform: translateY(-1px); }
+.platform-chip:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.platform-chip.is-on { border-color: var(--accent); }
+.platform-chip.is-on .platform-chip-label { color: var(--accent); font-weight: 500; }
+.platform-chip-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 点击穿透到 chip，避免「点开关」和「点 chip」各触发一次 */
+.platform-chip .switch { margin-left: auto; pointer-events: none; }
+
 .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
 .switch input { display: none; }
 .switch .track {

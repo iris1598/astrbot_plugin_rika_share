@@ -1,74 +1,4 @@
 {
-  "解析器开关": {
-    "type": "object",
-    "description": "各平台解析器的启用开关",
-    "items": {
-      "PLATFORM_BILIBILI_ENABLED": {
-        "description": "解析 B站 链接",
-        "type": "bool",
-        "default": true,
-        "hint": "关闭后不再解析B站链接，其余平台不受影响",
-        "obvious_hint": true,
-        "invisible": false
-      },
-      "PLATFORM_DOUYIN_ENABLED": {
-        "description": "解析 抖音 链接",
-        "type": "bool",
-        "default": true,
-        "hint": "关闭后不再解析抖音链接，其余平台不受影响",
-        "obvious_hint": true,
-        "invisible": false
-      },
-      "PLATFORM_KUAISHOU_ENABLED": {
-        "description": "解析 快手 链接",
-        "type": "bool",
-        "default": true,
-        "hint": "关闭后不再解析快手链接，其余平台不受影响",
-        "obvious_hint": true,
-        "invisible": false
-      },
-      "PLATFORM_WEIBO_ENABLED": {
-        "description": "解析 微博 链接",
-        "type": "bool",
-        "default": true,
-        "hint": "关闭后不再解析微博链接，其余平台不受影响",
-        "obvious_hint": true,
-        "invisible": false
-      },
-      "PLATFORM_XIAOHONGSHU_ENABLED": {
-        "description": "解析 小红书 链接",
-        "type": "bool",
-        "default": true,
-        "hint": "关闭后不再解析小红书链接，其余平台不受影响",
-        "obvious_hint": true,
-        "invisible": false
-      },
-      "PLATFORM_TWITTER_ENABLED": {
-        "description": "解析 Twitter/X 链接",
-        "type": "bool",
-        "default": true,
-        "hint": "关闭后不再解析Twitter/X链接，其余平台不受影响",
-        "obvious_hint": true,
-        "invisible": false
-      },
-      "PLATFORM_NGA_ENABLED": {
-        "description": "解析 NGA 链接",
-        "type": "bool",
-        "default": true,
-        "hint": "关闭后不再解析NGA链接，其余平台不受影响",
-        "obvious_hint": true,
-        "invisible": false
-      },
-      "PLATFORM_ACFUN_ENABLED": {
-        "description": "解析 AcFun 链接",
-        "type": "bool",
-        "default": true,
-        "hint": "关闭后不再解析AcFun链接，其余平台不受影响",
-        "obvious_hint": true,
-        "invisible": false
-      }
-    }
-  },
   "平台设置": {
     "type": "object",
     "description": "各平台的解析与下载设置",
@@ -288,6 +218,7 @@
   "Cloudflare 基础设置": {
     "type": "object",
     "description": "Cloudflare 网页截图兜底的开关、凭据与缓存",
+    "invisible": true,
     "items": {
       "CLOUDFLARE_FALLBACK_ENABLED": {
         "description": "启用 Cloudflare 网页截图 Fallback",
@@ -295,7 +226,7 @@
         "default": false,
         "hint": "开启后，链接不匹配任何已适配平台时，自动使用 Cloudflare Browser Rendering 渲染网页截图为图片发送",
         "obvious_hint": true,
-        "invisible": false
+        "invisible": true
       },
       "CLOUDFLARE_ACCOUNT_ID": {
         "description": "Cloudflare 账号 ID",

@@ -21,7 +21,12 @@ from typing import Any, Callable
 
 from astrbot.api import logger
 
-from .config import config_meta_payload, get_config, verify_schema_alignment
+from .config import (
+    config_meta_payload,
+    get_config,
+    platform_options,
+    verify_schema_alignment,
+)
 
 PLUGIN_NAME = "astrbot_plugin_rika_share"
 
@@ -92,6 +97,8 @@ class WebUIApi:
         payload["values"] = pconfig.current_values()
         payload["problems"] = read_schema_problems()
         payload["version"] = _plugin_version()
+        # 解析器开关的平台清单来自适配器注册表，新增平台自动出现
+        payload["platforms"] = platform_options(pconfig)
         return _json_response(payload)
 
     async def save_config(self):

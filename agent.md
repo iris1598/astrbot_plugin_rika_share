@@ -63,7 +63,7 @@ astrbot_plugin_rika_share/
 └── link_parser/                  # 实现主体
     ├── __init__.py               # 分层说明（本文件第 2 节的简短版）
     ├── config.py                 # CONFIG_META（配置项唯一来源）+ ParserConfig + 配置读写/迁移
-    │                             #   └─ PLATFORM_SWITCHES：一个平台一个开关，取代 DISABLED_PLATFORMS
+    │                             #   └─ registered_platforms()：平台清单从适配器注册表动态读
     ├── constants.py              # 请求头/超时常量、PlatformEnum、GENERIC_URL_PATTERN
     ├── exceptions.py             # 异常体系（见 5.4）
     ├── webui.py                  # 网页设置页后端接口（config 读取 / 保存 / 恢复默认）
@@ -205,8 +205,8 @@ ADAPTER = register_adapter(
 
 自动生效的部分：`main.py` 的过滤正则（`_pattern(name)` 从注册表读）、解析器实例化（`_init_parsers` 遍历注册表）、`/clear_cache`。渲染配色可选加 `card_render/theme.py` 的 `PLATFORM_COLORS`。
 
-**开关要手动补一行**：平台启停读取 `ParserConfig.DISABLED_PLATFORMS`，它由 `config.PLATFORM_SWITCHES`
-里的开关推导；新平台不在那张表里时默认启用（不会报错，但用户关不掉），见 5.6。
+**开关会自动出现**：平台启停读取 `ParserConfig.DISABLED_PLATFORMS`，网页设置页按
+`iter_adapters()` 动态渲染开关，因此新增平台**不需要**在任何地方补开关，见 5.6。
 
 **注意**：`main.py` 里 8 个平台 Handler 是**静态写死**的（框架要求 Handler 在插件模块内且装饰器在类定义时求值），新增平台时**仍需在 `main.py` 补一个 3 行的 Handler**，只是不需要改过滤正则和实例化逻辑。
 
@@ -270,8 +270,10 @@ ADAPTER = register_adapter(
      若该组因此没有任何可见条目，**组对象本身也要加 `invisible: true`**，见下文）
   4. `_conf_schema.json` 底部的旧版扁平条目（`invisible: true`，迁移用；历史上存在的键才需要）
   5. README 配置表
-- **维护入口分工**：`_conf_schema.json` 里**只有「解析器开关」组和 `CLOUDFLARE_FALLBACK_ENABLED`
-  可见**，其余条目全部 `invisible`（只作存储契约），细节都在插件网页设置页里维护。
+- **维护入口分工**：`_conf_schema.json` 里**所有条目与所有分组都标 `invisible`**，
+  原生配置面板不展示任何配置项——它只作**存储契约**（AstrBot 按它保留配置键），
+  维护入口统一是插件网页设置页。这是**有意为之的终态**，别把 `invisible` 去掉「修好」它；
+  解析器开关更是由页面动态渲染，完全不进 schema（见下）。
   页面保存后由 `main.apply_runtime_config()` 把新值热应用到渲染器 / 解析器 / 截图客户端，
   不需要重载插件；其余配置（时长、Cookie 等）本来就是每次读取时现取，自动生效。
 - **组标题必须跟着藏**：AstrBot 渲染插件配置用的是 `AstrBotConfig.vue`，
@@ -287,27 +289,41 @@ ADAPTER = register_adapter(
   `LEGACY_ONLY_KEYS`（当前只有 `DISABLED_PLATFORMS`）是例外：它们只存在于 schema 中供迁移读取，
   不参与键集合比对，但**必须留在 schema 里**（被剔掉就再也读不到老用户的旧值了）。
 
-#### 解析器开关（取代 `DISABLED_PLATFORMS`）
+#### 解析器开关（平台清单动态，页面渲染）
 
-平台启停是**一个平台一个 bool 开关**（`PLATFORM_<NAME>_ENABLED`），不再让用户手填平台名。
+平台启停是**一个平台一个开关**，但开关**不在 `_conf_schema.json` 里**——它由网页设置页
+从适配器注册表动态渲染。这样新增平台只要注册适配器，页面上就自动多出一个开关，
+不需要在任何地方补一行。
 
 | 环节 | 位置 | 说明 |
 | :--- | :--- | :--- |
-| 开关清单 | `config.PLATFORM_SWITCHES` | `(平台名, 展示名)` 元组，顺序同 `_ADAPTER_MODULES` |
-| 键名生成 | `config.platform_switch_key(name)` | `bilibili` → `PLATFORM_BILIBILI_ENABLED` |
-| 消费方 | `ParserConfig.DISABLED_PLATFORMS` | 由开关推导，注册表里有开关的新平台默认启用 |
-| 旧值迁移 | `config.migrate_platform_switches` | 把旧逗号串搬进开关并**清空旧串**，幂等 |
+| 平台清单 | `config.registered_platforms()` | 从 `iter_adapters()` 读 `(平台名, 展示名)` |
+| 下发 | `webui.get_config` 的 `platforms` 字段 | `config.platform_options()` 附上当前启用状态 |
+| 渲染 | `pages/rika/views/settings.js` | 开关网格 + 「解析器开关」导航项，页面不认识任何平台名 |
+| 存储 | `DISABLED_PLATFORMS` 逗号串 | `ParserConfig.DISABLED_PLATFORMS` 读取；页面保存时按注册表顺序拼回去 |
+| 渲染钩子 | `CONFIG_META` 的 `control: "platforms"` | 标记该项不由通用控件渲染（见 `CONTROL_PLATFORMS`） |
 
-四条改这块时要注意的：
+**为什么不给每个平台一个配置键**（这是踩过的坑，别再试）：
 
-1. **新增平台适配器要顺手加一个开关**：`PLATFORM_SWITCHES` 加一行 + `_conf_schema.json`
-   的「解析器开关」组加同名 bool。漏了不会报错（`_known_platform_names()` 兜底为默认启用），
-   但用户就没法在面板/页面里关掉它。
-2. **旧串必须清空**。如果只搬不清，用户把开关拨回「启用」时，`_cfg_get` 读到的旧串
-   又会把它按回去，表现为「开关拨不动」——迁移函数里同时清了分组与顶层两处。
-3. **`DISABLED_PLATFORMS` 不能从 schema 里删**（见 `LEGACY_ONLY_KEYS`）：AstrBot 会剔除
-   schema 之外的键，删了就永远读不到老用户的旧值，静默把用户禁用的平台放出来。
-4. **开关是唯一真相**，别再加第二条「禁用平台」状态线（比如又保留一份运行时副本）。
+AstrBot 加载插件时先 `AstrBotConfig(schema=_conf_schema.json)`——它内部的
+`check_config_integrity` 会用**文件里的 schema** 剔除所有 schema 之外的键，
+**之后**才实例化插件类（`star_manager` 的加载顺序）。所以：
+
+- 在 `__init__` 里往 `config.schema` 注入 `PLATFORM_<NAME>_ENABLED` 是能显示出来的，
+- 但下次重载时完整性检查会把这些键连同用户设置一起剔掉，**静默丢失**。
+
+结论：动态数量的配置项在 AstrBot 里存不住，只能收在一个静态键里，把「数量」放到运行时。
+
+改这块时要注意的：
+
+1. **别把平台名写进页面或 `CONFIG_META`**。页面只认 `payload.platforms`，
+   写死平台名就等于让新增平台在页面上消失。
+2. **`DISABLED_PLATFORMS` 必须留在 `_conf_schema.json` 里**（分组内 + 底部扁平两条都要），
+   删掉它 AstrBot 会把用户的值一起剔掉。
+3. **拼串要按注册表顺序**：页面把结果按 `platforms` 顺序拼回逗号串，
+   这样「关掉再打开」能逐字回到原字符串，脏值判断才不会误报。
+4. **开关的点击回调不能闭包捕获渲染时的状态**。切换只做就地刷新（不整页重渲染），
+   旧值会一直留在闭包里，表现为「同一个开关点第二次没反应」。按当前值翻转即可。
 
 ### 5.7 缓存键 =「内容标识」（`BaseParser.cache_identity`）
 
@@ -410,8 +426,8 @@ bridge 调后端；后端路由必须带插件名前缀，页面侧写去掉前�
 
 | 任务 | 改动位置 | 注意 |
 | :--- | :--- | :--- |
-| 新增平台解析 | `adapters/<平台>.py` + `constants.PlatformEnum` + `adapters/__init__._ADAPTER_MODULES` + `main.py` 一个 Handler + `config.PLATFORM_SWITCHES` 一个开关 | 见 5.1、5.6；漏了开关只会「默认启用且关不掉」 |
-| 改哪些平台被启用 | `config.PLATFORM_SWITCHES` / `PLATFORM_<NAME>_ENABLED` 开关 | 别回头去写 `DISABLED_PLATFORMS` 逗号串，那是被取代的旧写法 |
+| 新增平台解析 | `adapters/<平台>.py` + `constants.PlatformEnum` + `adapters/__init__._ADAPTER_MODULES` + `main.py` 一个 Handler | 见 5.1；网页设置页的开关会自动出现，不用改配置 |
+| 改哪些平台被启用 | 网页设置页的「解析器开关」→ `DISABLED_PLATFORMS` 逗号串 | 开关由 `iter_adapters()` 动态渲染，见 5.6 |
 | 修某平台解析失效 | `adapters/<平台>.py`（+ `models/platforms/<平台>/`） | 先确认是接口变了还是模型字段变了 |
 | 调整 URL 触发范围 | 对应适配器 `register_adapter(url_pattern=...)` | `main.py` 的 filter 自动跟随，无需改 |
 | 改缓存命中规则 / 加内容标识 | `adapters/base.py` 的 `cache_identity` 阶梯；平台侧声明 `SHORT_LINK_KEYWORDS` / `IDENTITY_PATTERNS` / 覆写 `identity_from_match` | 见 5.7；**别把 token / 时间戳等易变参数带进标识** |
@@ -439,7 +455,7 @@ bridge 调后端；后端路由必须带插件名前缀，页面侧写去掉前�
 
 ## 7. 平台适配器清单
 
-每个平台都有一个独立的启停开关（`PLATFORM_<NAME>_ENABLED`），在原生配置面板与插件网页设置页都能开关，见 5.6。
+每个平台在插件网页设置页都有一个独立的启停开关，**由适配器注册表动态生成**（新增平台自动出现），见 5.6。
 
 | 平台 | name | 触发正则（注册表） | 构建参数 | 接口与注意点 |
 | :--- | :--- | :--- | :--- | :--- |
@@ -520,7 +536,7 @@ print("handlers       :", len(handlers))      # 应为 14
 assert not bad and len(handlers) == 14
 ```
 
-期望基线（2026-09-21 实测）：模块导入 **63/63**（`main.py` + `link_parser/` 下 62 个模块）、适配器 **8 个**（`adapter_names()` 顺序固定）、Handler **14 个**（`grep -c "@filter\." main.py` 为 17，见铁律 1）、配置项 **51 项 / 9 组**（`len(CONFIG_META)`）、原生面板只显示 **2 个分组 / 9 个开关**（「解析器开关」8 个 + 「Cloudflare 基础设置」的 `CLOUDFLARE_FALLBACK_ENABLED`，其余 7 组整组 `invisible`）、渲染 **96 张**全部成功。
+期望基线（2026-09-21 实测）：模块导入 **63/63**（`main.py` + `link_parser/` 下 62 个模块）、适配器 **8 个**（`adapter_names()` 顺序固定）、Handler **14 个**（`grep -c "@filter\." main.py` 为 17，见铁律 1）、配置项 **44 项 / 8 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
 
 **网页设置页**没有随仓库的自动化回归（它跑在受限 iframe 里），改完 `pages/rika/` 后两条路一起走：
 
@@ -599,6 +615,8 @@ assert not bad and len(handlers) == 14
 
 | 日期 | 变更 | 影响小节 |
 | :--- | :--- | :--- |
+| 2026-09-21 | 原生配置面板**清空**：`_conf_schema.json` 里全部条目与全部 8 个分组都标 `invisible`（连同上一版保留的 `CLOUDFLARE_FALLBACK_ENABLED`），schema 退化为纯存储契约，44 项配置一律在插件页面维护。这是有意为之的终态，见 5.6 | 5.6、8 |
+| 2026-09-21 | 解析器开关改为**页面动态渲染**：原来写死的 `PLATFORM_<NAME>_ENABLED`（含 `PLATFORM_SWITCHES` / `platform_switch_key` / `migrate_platform_switches`）破坏了「新增平台只需注册适配器」的契约，已全部移除，改为 `config.registered_platforms()` / `platform_options()` 从 `iter_adapters()` 动态出清单、`webui.get_config` 下发 `platforms`、页面渲染开关网格；状态仍存在静态键 `DISABLED_PLATFORMS`（**动态配置键在 AstrBot 存不住**：`check_config_integrity` 在插件实例化之前用文件 schema 剔除未知键，`__init__` 里注入 schema 下次重载就丢，故 `/b/` 方案不可行）；`CONFIG_META` 新增 `control: "platforms"` 渲染钩子；`_conf_schema.json` 移除「解析器开关」组，原生面板只剩 `CLOUDFLARE_FALLBACK_ENABLED`；配置项 51→**44 项**、分组 9→**8 组**。同时修掉开关点击回调闭包捕获旧状态导致「同一个开关点第二次无效」的 bug | 2、5.1、5.6、6、7、8 |
 | 2026-09-21 | 网页设置页全量功能验证（jsdom + 假 bridge，114 项断言）并修掉一个**数据丢失级 bug**：`pages/rika/ui.js` 的 `h()` 把 `value` 写成 `setAttribute`，而 `<textarea value="…">` 无效（textarea 的值来自子文本）→ `CLOUDFLARE_BLACKLIST` / `CLOUDFLARE_EXTRA_HEADERS` / `CLOUDFLARE_COOKIES` 在页面上恒为空框，用户照着编辑保存会清掉原内容。改为对 `value` 走 `node.value = …`（`option` 的 value 会反射回 attribute，两种元素都正确） | 9（新增两条坑）、8 |
 | 2026-09-21 | 修复原生配置面板残留空分组标题：`_conf_schema.json` 中「组内条目全被标 `invisible`」的分组，把**组对象本身**也标 `invisible: true`（AstrBot 的 `AstrBotConfig.vue` 渲染组标题时不检查组内是否还有可见项）；`verify_schema_alignment()` 新增「分组可见性与组内条目一致性」校验，并同步修订 `main.py` 里 `_register_webui` 的注释；改后原生面板只剩「解析器开关」与「Cloudflare 基础设置」两张卡 | 5.6、8 |
 | 2026-09-21 | 平台启停改为**一个平台一个开关**：新增 `config.PLATFORM_SWITCHES` / `platform_switch_key` / `migrate_platform_switches`，`ParserConfig.DISABLED_PLATFORMS` 改为由开关推导；旧版 `DISABLED_PLATFORMS` 逗号串在启动时迁移进开关并清空（列进 `LEGACY_ONLY_KEYS`，继续留在 schema 里供迁移读取）；`_conf_schema.json` 可见项收敛为 **8 个解析器开关 + `CLOUDFLARE_FALLBACK_ENABLED`**；配置项 44 → 51 项、分组 8 → 9 组（新增「解析器开关」） | 0、2、5.1、5.6、6、7、8 |

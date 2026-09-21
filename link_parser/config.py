@@ -6,8 +6,9 @@
 - ``_conf_schema.json`` 是同一次定义的**存储契约**——AstrBot 加载插件配置时会剔除
   schema 之外的键，两者不一致会让用户保存的值在重载时静默丢失，
   因此启动时用 :func:`verify_schema_alignment` 自检；
-- 原生配置面板只保留**功能开关**（bool），其余条目在 schema 里标 ``invisible``，
-  维护入口统一收敛到插件页面。
+- 原生配置面板**不展示任何配置项**：schema 里所有条目与所有分组都标了 ``invisible``，
+  维护入口统一收敛到插件页面。``invisible`` 只影响渲染，AstrBot 的默认值生成与
+  完整性检查都不读它，所以存储契约不受影响。
 
 为保证旧版本已保存的扁平配置不丢失，读取时优先使用分组值，
 分组值为默认值时回退到扁平旧值；插件启动时会将旧值迁移到分组中。
@@ -19,33 +20,9 @@ from typing import Any
 
 _config = None
 
-# 解析器开关：平台名 -> 展示名。顺序与 ``adapters/__init__._ADAPTER_MODULES`` 一致。
-# 一个平台一个 bool 开关，取代旧版「DISABLED_PLATFORMS 逗号填名字」的写法。
-# 新增平台适配器时在这里补一行，并在 _conf_schema.json 的「解析器开关」组加同名条目。
-PLATFORM_SWITCHES: tuple[tuple[str, str], ...] = (
-    ("bilibili", "B站"),
-    ("douyin", "抖音"),
-    ("kuaishou", "快手"),
-    ("weibo", "微博"),
-    ("xiaohongshu", "小红书"),
-    ("twitter", "Twitter/X"),
-    ("nga", "NGA"),
-    ("acfun", "AcFun"),
-)
-
-#: 旧版 DISABLED_PLATFORMS 所在的分组（迁移时要从这儿读旧值）
-_LEGACY_DISABLED_GROUP = "平台设置"
-
-
-def platform_switch_key(name: str) -> str:
-    """平台名 -> 开关配置键，如 ``bilibili`` → ``PLATFORM_BILIBILI_ENABLED``。"""
-    return f"PLATFORM_{name.upper()}_ENABLED"
-
-
 # 分组展示顺序即此处的顺序（常用在前、折腾在后）。
 # 组名同时是 _conf_schema.json 里的 object 键与配置文件的分组键，**不要改**。
 CONFIG_GROUPS: tuple[tuple[str, str], ...] = (
-    ("解析器开关", "各平台解析器的启用开关"),
     ("平台设置", "各平台的解析与下载设置"),
     ("Twitter 设置", "Twitter/X 反代（媒体与解析接口改走自定义反代，绕过 twimg.com / api.vxtwitter.com 无法直连）"),
     ("B站设置", "B站 Cookie、下载清晰度与 Cookie 监控"),
@@ -63,19 +40,17 @@ CONFIG_GROUPS: tuple[tuple[str, str], ...] = (
 #   options/labels 仅 select 使用；min/max/unit 仅 int / float 使用
 #   placeholder 仅输入框使用；max_length 限制文本长度
 CONFIG_META: tuple[dict[str, Any], ...] = (
-    # ---------------- 解析器开关 ---------------- #
-    *(
-        {
-            "key": platform_switch_key(name),
-            "group": "解析器开关",
-            "label": f"解析 {label} 链接",
-            "type": "bool",
-            "default": True,
-            "hint": f"关闭后不再解析{label}链接，其余平台不受影响",
-        }
-        for name, label in PLATFORM_SWITCHES
-    ),
     # ---------------- 平台设置 ---------------- #
+    {
+        "key": "DISABLED_PLATFORMS",
+        "group": "平台设置",
+        "label": "解析器开关",
+        "type": "string",
+        "default": "",
+        "control": "platforms",
+        # 页面上不由通用控件渲染，而是展开成一组开关（见 CONTROL_PLATFORMS）
+        "hint": "点一下即可启用 / 关闭对应平台的解析。平台清单来自适配器注册表，新增平台会自动出现",
+    },
     {
         "key": "VIDEO_DURATION_MAXIMUM",
         "group": "平台设置",
@@ -510,12 +485,16 @@ _LEGACY_DEFAULTS: dict[str, Any] = {item["key"]: item["default"] for item in CON
 #: 文本类配置项的长度上限（Cookie / JSON 字段可能很长，但不能无限长）
 _MAX_TEXT_LENGTH = 8000
 
-#: 只留在 ``_conf_schema.json`` 里、不再对外暴露的旧键。
-#
-# ``DISABLED_PLATFORMS`` 被「解析器开关」取代后不再是配置项，但它必须继续留在
-# schema 中：AstrBot 加载插件配置时会剔除 schema 之外的键，一旦剔掉，
-# 老用户填过的禁用平台名就没机会被 :func:`migrate_platform_switches` 读到。
-LEGACY_ONLY_KEYS: frozenset[str] = frozenset({"DISABLED_PLATFORMS"})
+#: ``CONFIG_META`` 里 ``control`` 字段的取值，含义是「这一项不由通用控件渲染」：
+#:
+#: - ``platforms``：由网页设置页顶部的解析器开关网格渲染（见 :func:`platform_options`）。
+#:   值本身仍是 ``DISABLED_PLATFORMS`` 逗号串——**这是刻意的**：AstrBot 加载插件配置时
+#:   会用 ``_conf_schema.json`` 做完整性检查并剔除 schema 之外的键（``AstrBotConfig.__init__``
+#:   里的 ``check_config_integrity``，发生在插件类实例化**之前**），所以
+#:   「一个平台一个 bool 键」这种动态配置项根本存不住：``__init__`` 里再怎么往
+#:   ``config.schema`` 注入，下次重载也会被剔掉。把状态收在一个静态键里，
+#:   平台清单改为运行时从适配器注册表读取，才能让新增平台自动出现在页面上。
+CONTROL_PLATFORMS = "platforms"
 
 
 def config_meta_payload() -> dict[str, Any]:
@@ -620,8 +599,7 @@ def verify_schema_alignment(schema: dict[str, Any]) -> list[str]:
     会在下次重载时静默丢失，因此必须显式比对。
 
     schema 底部的旧版扁平条目（``invisible`` 且不在任何分组里）是迁移契约，
-    不参与本校验。:data:`LEGACY_ONLY_KEYS` 同理——它们只为迁移而存在，
-    但**必须**在 schema 里出现，否则老配置会被 AstrBot 直接剔除。
+    不参与本校验。
 
     还会校验**分组可见性**：AstrBot 渲染插件配置时（``AstrBotConfig.vue``）组标题
     只看 ``type === 'object'``，不检查组内是否还有可见项，所以组内条目全被隐藏时
@@ -638,8 +616,6 @@ def verify_schema_alignment(schema: dict[str, Any]) -> list[str]:
         if not isinstance(node, dict) or not isinstance(node.get("items"), dict):
             continue  # 旧版扁平条目：不是分组，跳过
         for key in node["items"]:
-            if key in LEGACY_ONLY_KEYS:
-                continue
             schema_keys.add(key)
             schema_group_of[key] = group
         if group not in CONFIG_GROUP_KEYS:
@@ -660,17 +636,6 @@ def verify_schema_alignment(schema: dict[str, Any]) -> list[str]:
                     "原生配置面板会残留一个空标题"
                 )
 
-    for key in sorted(LEGACY_ONLY_KEYS):
-        if key not in schema and not any(
-            isinstance(node, dict)
-            and isinstance(node.get("items"), dict)
-            and key in node["items"]
-            for node in schema.values()
-        ):
-            problems.append(
-                f"迁移用的旧键 {key} 不在 schema 里，老配置会被 AstrBot 剔除"
-            )
-
     meta_keys = set(_ITEM_BY_KEY)
     for key in sorted(schema_keys - meta_keys):
         problems.append(f"schema 有而 CONFIG_META 缺失的键：{key}")
@@ -685,67 +650,38 @@ def verify_schema_alignment(schema: dict[str, Any]) -> list[str]:
     return problems
 
 
-def _known_platform_names() -> list[str]:
-    """当前注册的全部平台名（含 CONFIG_META 里没写开关的新平台）。
+def registered_platforms() -> list[tuple[str, str]]:
+    """从适配器注册表读取 ``(平台名, 展示名)`` 列表。
 
-    运行时才从注册表读，避免 config 与 adapters 形成模块级循环导入。
+    平台清单**只来自注册表**，因此新增适配器后页面上的开关会自动出现，
+    不需要在任何地方补一行。运行期才 import，避免 config 与 adapters
+    形成模块级循环导入；注册表不可用时返回空列表（页面就只剩其它配置组）。
     """
     try:
-        from .adapters import adapter_names
+        from .adapters import iter_adapters
+    except Exception:  # noqa: BLE001 - 注册表不可用不该拖垮整个页面
+        from astrbot.api import logger
 
-        names = list(adapter_names())
-        if names:
-            return names
-    except Exception:  # noqa: BLE001 - 注册表不可用时退回静态清单
-        pass
-    return [name for name, _ in PLATFORM_SWITCHES]
+        logger.warning("[link_parser] 读取适配器注册表失败，解析器开关不可用", exc_info=True)
+        return []
 
-
-def _read_legacy_disabled(config: Any) -> str:
-    """读旧版 DISABLED_PLATFORMS 逗号串（可能存在分组里，也可能在顶层）。"""
-    for source in (config.get(_LEGACY_DISABLED_GROUP), config):
-        if isinstance(source, dict):
-            raw = source.get("DISABLED_PLATFORMS")
-            if raw:
-                return str(raw)
-    return ""
+    pairs: list[tuple[str, str]] = []
+    for spec in iter_adapters():
+        try:
+            label = spec.display_name
+        except Exception:  # noqa: BLE001 - 展示名取不到就退回平台名
+            label = spec.name
+        pairs.append((spec.name, label or spec.name))
+    return pairs
 
 
-def migrate_platform_switches(config: Any) -> bool:
-    """把旧版 ``DISABLED_PLATFORMS`` 逗号串迁移成各解析器的独立开关。
-
-    迁移后清空旧串，让「开关」成为平台启停的唯一真相——否则旧串里残留的名字
-    会在用户把开关拨回「启用」时把它按回去，表现为开关拨不动。
-
-    重复调用是幂等的（旧串为空时直接返回 False）。
-    """
-    legacy = _read_legacy_disabled(config)
-    names = [item.strip().lower() for item in legacy.split(",") if item.strip()]
-    if not names:
-        return False
-
-    group = _KEY_GROUP_MAP[platform_switch_key(PLATFORM_SWITCHES[0][0])]
-    group_cfg = config.get(group)
-    if not isinstance(group_cfg, dict):
-        group_cfg = {}
-        config[group] = group_cfg
-
-    changed = False
-    for name in names:
-        key = platform_switch_key(name)
-        if key not in _ITEM_BY_KEY:
-            continue  # 平台已下线或改名，忽略
-        if group_cfg.get(key, True) is False:
-            continue
-        group_cfg[key] = False
-        changed = True
-
-    # 旧串已搬完，清空（分组里和顶层都要清，两处都会被读到）
-    config["DISABLED_PLATFORMS"] = ""
-    legacy_group = config.get(_LEGACY_DISABLED_GROUP)
-    if isinstance(legacy_group, dict):
-        legacy_group["DISABLED_PLATFORMS"] = ""
-    return changed
+def platform_options(pconfig: "ParserConfig") -> list[dict[str, Any]]:
+    """给网页设置页用的解析器开关数据（含当前启用状态）。"""
+    disabled = set(pconfig.DISABLED_PLATFORMS)
+    return [
+        {"name": name, "label": label, "enabled": name not in disabled}
+        for name, label in registered_platforms()
+    ]
 
 
 def migrate_grouped_config(config: Any) -> bool:
@@ -920,17 +856,16 @@ class ParserConfig:
 
     @property
     def DISABLED_PLATFORMS(self) -> list[str]:
-        """被关闭的平台名列表，由「解析器开关」推导。
+        """被关闭的平台名列表（逗号串，留空表示全部启用）。
 
-        开关是唯一真相；旧版 ``DISABLED_PLATFORMS`` 逗号串在启动时由
-        :func:`migrate_platform_switches` 搬进开关后即被清空，不再参与判断。
-        注册表里有、但没写开关的新平台默认启用。
+        网页设置页的「解析器开关」编辑的就是这一项：页面按注册表渲染开关，
+        保存时把结果拼回逗号串（见 :func:`platform_options`）。
+        单键存储是刻意的——动态配置键存不住，原因见 :data:`CONTROL_PLATFORMS`。
         """
-        return [
-            name
-            for name in _known_platform_names()
-            if not bool(self._cfg_get(platform_switch_key(name), True))
-        ]
+        raw = self._cfg_get("DISABLED_PLATFORMS", "")
+        if not raw:
+            return []
+        return [p.strip().lower() for p in str(raw).split(",") if p.strip()]
 
     @property
     def FORWARD_MAX_NODES(self) -> int:

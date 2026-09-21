@@ -5,7 +5,7 @@
  */
 
 import { h, clear } from "./ui.js";
-import { createSettingsView } from "./views/settings.js";
+import { PLATFORM_VIEW, createSettingsView } from "./views/settings.js";
 
 const bridge = window.AstrBotPluginPage;
 
@@ -32,6 +32,11 @@ const ICON_ALL = svg(
   '<rect x="3" y="3" width="8" height="10" rx="2"/><rect x="13" y="3" width="8" height="6" rx="2"/>' +
     '<rect x="13" y="11" width="8" height="10" rx="2"/><rect x="3" y="15" width="8" height="6" rx="2"/>',
 );
+/** 解析器开关：平台清单来自适配器注册表，新增平台会自动出现在这一页。 */
+const ICON_PLATFORMS = svg(
+  '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/>' +
+    '<path d="M7 7.5h.01"/><path d="M7 16.5h.01"/>',
+);
 const ICON_DEFAULT = svg(
   '<circle cx="12" cy="12" r="3"/>' +
     '<path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-.3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8 2.8l.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1h.1a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
@@ -39,10 +44,6 @@ const ICON_DEFAULT = svg(
 
 /** 分组名 -> 图标。分组由后端 CONFIG_META 决定，这里只做展示层的点缀。 */
 const GROUP_ICONS = {
-  "解析器开关": svg(
-    '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/>' +
-      '<path d="M7 7.5h.01"/><path d="M7 16.5h.01"/>',
-  ),
   "平台设置": svg(
     '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/>' +
       '<path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
@@ -112,18 +113,25 @@ const ctx = {
   },
 };
 
-const SUB_TEXT = {
-  [ALL]: "全部配置项，保存后立即生效",
+/** 非分组视图的标题与副标题；其余分组直接用分组名。 */
+const VIEW_LABELS = {
+  [ALL]: { title: "设置", sub: "全部配置项，保存后立即生效" },
+  [PLATFORM_VIEW]: { title: "解析器开关", sub: "一键启用 / 关闭各平台解析器" },
 };
 
 /* ---------------- 导航 ---------------- */
 
-function buildNav(groups) {
+function buildNav(groups, hasPlatforms) {
   const nav = document.getElementById("rail-nav");
   clear(nav);
 
-  const entries = [{ name: ALL, label: "全部设置", icon: ICON_ALL }].concat(
-    groups.map((name) => ({
+  const entries = [{ name: ALL, label: "全部设置", icon: ICON_ALL }];
+  // 解析器开关固定排在分组前面（平台清单动态，没有平台时不显示这一项）
+  if (hasPlatforms) {
+    entries.push({ name: PLATFORM_VIEW, label: "解析器开关", icon: ICON_PLATFORMS });
+  }
+  entries.push(
+    ...groups.map((name) => ({
       name,
       label: name,
       icon: GROUP_ICONS[name] || ICON_DEFAULT,
@@ -159,9 +167,12 @@ function selectGroup(name) {
   for (const item of document.querySelectorAll(".rail-item")) {
     item.classList.toggle("is-active", item.dataset.group === name);
   }
-  state.title.textContent = name === ALL ? "设置" : name;
-  state.sub.textContent =
-    SUB_TEXT[name] || "该分组的配置项，保存后立即生效";
+  const labels = VIEW_LABELS[name] || {
+    title: name,
+    sub: "该分组的配置项，保存后立即生效",
+  };
+  state.title.textContent = labels.title;
+  state.sub.textContent = labels.sub;
   if (state.view) state.view.showGroup(name);
 }
 
@@ -213,7 +224,7 @@ async function boot() {
     return;
   }
 
-  buildNav(view.groupNames());
+  buildNav(view.groupNames(), view.hasPlatforms());
   ctx.setConnection(true, "已连接");
 
   const holder = h("div", { class: "view" });

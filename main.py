@@ -29,12 +29,7 @@ from astrbot.api.star import Context, Star, register, StarTools
 
 from .link_parser.adapters import get_adapter, iter_adapters
 from .link_parser.adapters.registry import AdapterBuildContext
-from .link_parser.config import (
-    get_config,
-    init_config,
-    migrate_grouped_config,
-    migrate_platform_switches,
-)
+from .link_parser.config import get_config, init_config, migrate_grouped_config
 from .link_parser.constants import GENERIC_URL_PATTERN
 from .link_parser.exceptions import (
     DownloadException,
@@ -137,18 +132,13 @@ class ParserPlugin(Star):
 
         pconfig = init_config(config, self.cache_dir, self.config_dir)
 
-        # 迁移：① 旧版扁平配置 → 分组配置；② 旧版 DISABLED_PLATFORMS 逗号串 → 各解析器开关
-        # 两者都只搬「用户改过、而新位置还是默认值」的项，因此重复调用是幂等的
+        # 将旧版扁平配置迁移到分组配置，避免设置页整理后已有设置丢失
         try:
-            # 两个都要跑，不能用 or 短路掉后者
-            grouped_changed = migrate_grouped_config(config)
-            switch_changed = migrate_platform_switches(config)
-            changed = grouped_changed or switch_changed
-            if changed:
+            if migrate_grouped_config(config):
                 save = getattr(config, "save_config", None)
                 if callable(save):
                     save()
-                logger.info("已迁移旧版配置（扁平项 → 分组、禁用平台 → 解析器开关）")
+                logger.info("已迁移旧版扁平配置到分组配置")
         except Exception:
             logger.warning("旧版配置迁移失败，将使用兼容回退读取", exc_info=True)
 

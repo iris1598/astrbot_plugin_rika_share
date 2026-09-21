@@ -73,8 +73,9 @@
 - 底部保存条实时显示「已修改 N 项」，支持放弃更改、恢复默认与批量保存；
 - 保存后即时生效，卡片渲染、解析器开关、截图凭据都会自动热更新。
 
-原生插件配置面板精简到 **8 个解析器开关 + Cloudflare 网页截图开关**，
-打开就能一键关掉不想解析的平台；其余细节都在页面里维护。
+全部 44 项配置都在页面里维护，原生插件配置面板不再展示配置项；
+页面顶部的「解析器开关」按适配器注册表动态生成，**新增平台会自动多出一个开关**，
+不用改配置也不用改代码。
 
 ---
 
@@ -131,35 +132,33 @@
 
 ## ⚙️ 配置说明
 
-配置按逻辑划分为 **9 个分组**，共 51 项。维护入口有两个，分工如下：
+配置按逻辑划分为 **8 个分组**，共 44 项，**全部在插件网页设置页里维护**：
+WebUI 侧边栏「插件」→ 莉卡解析 → 插件详情页 → 打开页面。
+页面支持搜索、分组折叠、Cookie 遮罩、批量保存与恢复默认。
 
-| 入口 | 打开方式 | 内容 |
-| :--- | :--- | :--- |
-| **插件网页设置页**（推荐） | WebUI 侧边栏「插件」→ 莉卡解析 → 插件详情页 → 打开页面 | **全部 51 项**（9 个分组）：支持搜索、分组折叠、Cookie 遮罩、批量保存与恢复默认 |
-| AstrBot 原生配置面板 | WebUI 插件配置 | 只有 **2 张卡 / 9 个开关**：「解析器开关」8 个 + 「Cloudflare 基础设置」里的网页截图开关 |
+> AstrBot 原生的插件配置面板**不再展示任何配置项**（`_conf_schema.json` 里全部标了
+> `invisible`）。它只作为配置的存储契约存在——AstrBot 加载插件时会按 schema 保留这些键，
+> 页面保存的值才能落盘。
+>
+> 顶部的「解析器开关」由适配器注册表实时生成：**新写一个平台适配器，页面上就自动多出一个
+> 开关**，不需要改任何配置或代码。
 
 在网页设置页里保存后立即生效：卡片渲染、解析器开关、Cloudflare 截图凭据会自动热更新，
 **不需要重载插件**。原生面板里改开关后需要按 AstrBot 的常规流程重载插件。
 
-### 1. 解析器开关
+### 解析器开关（不在配置分组内）
 
-每个平台一个开关，默认全部启用：
+在网页设置页顶部的「解析器开关」里，一个平台一块，点一下即开关。
+**平台清单由适配器注册表实时生成**，支持哪些平台就列出哪些，新增平台会自动出现。
 
-| 配置项 | 类型 | 默认值 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `PLATFORM_BILIBILI_ENABLED` | bool | `true` | 解析 B站 链接 |
-| `PLATFORM_DOUYIN_ENABLED` | bool | `true` | 解析 抖音 链接 |
-| `PLATFORM_KUAISHOU_ENABLED` | bool | `true` | 解析 快手 链接 |
-| `PLATFORM_WEIBO_ENABLED` | bool | `true` | 解析 微博 链接 |
-| `PLATFORM_XIAOHONGSHU_ENABLED` | bool | `true` | 解析 小红书 链接 |
-| `PLATFORM_TWITTER_ENABLED` | bool | `true` | 解析 Twitter/X 链接 |
-| `PLATFORM_NGA_ENABLED` | bool | `true` | 解析 NGA 链接 |
-| `PLATFORM_ACFUN_ENABLED` | bool | `true` | 解析 AcFun 链接 |
+| 平台 | 说明 |
+| :--- | :--- |
+| 哔哩哔哩 / 抖音 / 快手 / 微博 / 小红书 / 小蓝鸟 / NGA / 猴山 | 关闭后不再解析对应平台的链接，其余平台不受影响 |
 
-> 旧版本用 `DISABLED_PLATFORMS=bilibili,douyin` 之类的写法禁用平台；升级后首次启动会
-> **自动搬进对应开关并清空旧值**，不需要手动改。
+关闭的平台以 `DISABLED_PLATFORMS`（逗号分隔的平台名）存在插件配置里；
+旧版本手写 `DISABLED_PLATFORMS=acfun,nga` 的写法依然有效，两者是同一个键。
 
-### 2. 平台设置
+### 1. 平台设置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -169,14 +168,14 @@
 | `FORWARD_MAX_NODES` | int | `10` | 单条合并转发的最大节点数（超出则拆成多条） |
 | `FORWARD_MAX_BATCH_MB` | int | `30` | 单条合并转发的图片体积上限（MB），调小更省内存但消息更多 |
 
-### 3. Twitter 设置
+### 2. Twitter 设置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `TWITTER_MEDIA_PROXY_ENABLED` | bool | `false` | 媒体与解析接口是否改走自定义反代 |
 | `TWITTER_MEDIA_PROXY_BASE` | string | `""` | 自建反代根地址，如 `https://xxx.workers.dev`（结尾不要带斜杠）<br>Worker 见 [cloudflare-worker](https://github.com/iris1598/cloudflare-worker) |
 
-### 4. B站设置
+### 3. B站设置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -186,14 +185,14 @@
 | `BILI_COOKIE_CHECK_INTERVAL` | int | `3600` | 检测间隔（秒，最小 60） |
 | `BILI_NOTIFY_USER_ID` | string | `""` | Cookie 失效 / 恢复时接收通知的 QQ 号或 UserID（留空仅记日志） |
 
-### 5. 缓存设置
+### 4. 缓存设置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `CACHE_TTL_HOURS` | int | `24` | 缓存文件过期时间（小时），设为 `0` 禁用自动清理 |
 | `CACHE_CLEANUP_INTERVAL_MINUTES` | int | `60` | 清理检查间隔（分钟） |
 
-### 6. 解析图片渲染
+### 5. 解析图片渲染
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -204,7 +203,7 @@
 | `RENDER_COVER_FULL_SIZE` | bool | `false` | 封面按原始宽高比完整展示，不做中心裁剪 |
 | `RENDER_FONT_PATH` | string | `""` | 自定义字体文件或目录（`.ttf/.ttc/.otf`），留空自动探测系统字体 |
 
-### 7. Cloudflare 基础设置
+### 6. Cloudflare 基础设置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -215,7 +214,7 @@
 | `CLOUDFLARE_CACHE_TTL` | int | `0` | 截图缓存时长（秒），`0` 表示不缓存、每次重新渲染 |
 | `CLOUDFLARE_BLACKLIST` | list | `[]` | 截图黑名单，支持完整域名、`*.example.com` 通配符、路径前缀或无点关键词 |
 
-### 8. Cloudflare 截图设置
+### 7. Cloudflare 截图设置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -235,7 +234,7 @@
 | `CLOUDFLARE_EXTRA_HEADERS` | text | `""` | 加载页面时附加的 HTTP 头（JSON），如 `{"Authorization":"..."}` |
 | `CLOUDFLARE_COOKIES` | text | `""` | 页面附加 Cookie（JSON 数组），如 `[{"name":"session","value":"..."}]` |
 
-### 9. 调试设置
+### 8. 调试设置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
