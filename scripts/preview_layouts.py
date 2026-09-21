@@ -14,12 +14,12 @@ from datetime import datetime
 from pathlib import Path
 
 if "astrbot" not in sys.modules:
-    import logging
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from dev_logger import StubLogger
 
-    logging.basicConfig(level=logging.WARNING)
     astrbot = types.ModuleType("astrbot")
     api = types.ModuleType("astrbot.api")
-    api.logger = logging.getLogger("layouts")
+    api.logger = StubLogger("layouts", level="WARNING")
     astrbot.api = api
     sys.modules["astrbot"] = astrbot
     sys.modules["astrbot.api"] = api

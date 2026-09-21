@@ -2,15 +2,17 @@
 """本地验证：颜文字字体回退渲染效果（无需安装 astrbot，stub 掉其 logger）"""
 
 import asyncio
-import logging
 import sys
 import types
 from pathlib import Path
 
 # ---- stub astrbot.api.logger，使渲染模块可独立导入 ----
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from dev_logger import StubLogger  # noqa: E402
+
 astrbot = types.ModuleType("astrbot")
 api = types.ModuleType("astrbot.api")
-api.logger = logging.getLogger("astrbot")
+api.logger = StubLogger("astrbot", level="DEBUG")
 astrbot.api = api
 sys.modules["astrbot"] = astrbot
 sys.modules["astrbot.api"] = api
@@ -21,7 +23,6 @@ sys.path.insert(0, str(PLUGIN_DIR.parent))
 from astrbot_plugin_rika_share.link_parser.models import Author, ParseResult, Platform  # noqa: E402
 from astrbot_plugin_rika_share.link_parser.services.card_render import ShareCardRenderer  # noqa: E402
 
-logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(message)s")
 
 
 def make_result(title: str, text: str) -> ParseResult:

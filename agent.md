@@ -59,6 +59,7 @@ astrbot_plugin_rika_share/
 │   └── views/debug.js            #   链接调试视图：输入链接 → 跑流程 → 导出日志
 ├── docs/previews/                # README 用的渲染预览图
 ├── scripts/                      # 开发辅助脚本（见第 8 节）
+│   ├── dev_logger.py             #   开发脚本用的最小日志桩（不依赖内置日志模块）
 │   ├── dev_smoke_test.py         #   独立冒烟测试：B站扫码登录 + 链接解析（自带 astrbot 桩）
 │   ├── preview_layouts.py        #   卡片布局回归（4 布局 × 2 主题 × 全尺寸）
 │   ├── kaomoji_render_test.py    #   颜文字字体回退回归
@@ -89,7 +90,7 @@ astrbot_plugin_rika_share/
     │   │   ├── theme.py          #   L / THEMES / PLATFORM_COLORS / LAYOUT_NAMES / Pillow 探测
     │   │   ├── fonts.py          #   中文字体探测 + 符号回退字体链（fontTools / fc-list）
     │   │   └── text.py           #   文本清洗、统计行解析、链接与时间格式化
-    │   ├── debug_probe.py        # 链接调试探针（逐步跑主流程 + 收集日志 + 打码出报告）
+    │   ├── debug_probe.py        # 链接调试探针（逐步跑主流程 + 记事件 + 打码出报告）
     │   ├── web_screenshot.py     # Cloudflare Browser Rendering 网页截图客户端
     │   ├── live_photo.py         # 实况照片合成（主图 JPEG + XMP 索引 + 尾部 MP4）
     │   └── bilibili_account.py   # B站扫码登录 / Cookie 加密持久化 / 定时监控 / 自动应用
@@ -453,8 +454,10 @@ bridge 调后端；后端路由必须带插件名前缀，页面侧写去掉前�
 1. **不读不写解析缓存**，每次都是全新解析——否则命中缓存会把要看的过程掩盖掉。
 2. **不向任何会话发消息**，也不改运行时状态。
 3. 卡片用 `cache_key=f"debug_{token}"` 渲染，**不会覆盖真正发出去的那张卡片**。
-4. 测试期间把插件 logger **临时降到 DEBUG**（`_LogCapture` 退出时恢复原级别），否则看不到细节。
-   注意 AstrBot 的插件 logger 设了 `propagate = False`，handler 必须挂在它自己身上。
+4. **不拦截、也不改动框架 logger 的任何状态**（不改级别、不挂处理器）。报告里的「流程日志」
+   由 `EventLog` 自己记录。**这是审核要求**：日志器必须且只能从 `astrbot.api` 导入
+   （`from astrbot.api import logger`），不得使用 Python 内置的日志模块，所以早先那套
+   「挂 handler 收框架日志」的实现不能用（见 5.12）。
 5. **报告必须打码**：Cookie / Token 只报长度，并对 `SESSDATA=` / `bili_jct=` / `Bearer …`
    做正则兜底替换——这份文件是拿来贴给别人的。改动报告内容时先想一遍会不会带出凭据。
 
@@ -483,6 +486,29 @@ bridge 调后端；后端路由必须带插件名前缀，页面侧写去掉前�
 
 ---
 
+### 5.12 日志规范（审核要求）
+
+**日志器必须且只能从 `astrbot.api` 导入**：`from astrbot.api import logger`。
+插件里一律用它，**不得** `import logging`，也不得使用内置日志模块的
+`Logger` / `Handler` / `Formatter` / `getLogger`——这是上架审核的硬性规则。
+
+- `astrbot.api.logger` 是 `_PluginContextLogger` 代理：**按调用方模块**解析出本插件的
+  专用日志器（`astrbot.plugin.<插件名>`，与 `from astrbot.api import logger` 写在哪无关）。
+  所以直接用 `logger.info(...)` / `logger.exception(...)` 就行，**不要自己去取 logger 对象**。
+- **不要往 logger 上挂处理器、也不要改它的级别**：既越过审核规则，又会波及全局日志。
+  需要「事后回看过程」，就自己记事件——`services/debug_probe.py` 的 `EventLog` 是范例，
+  它把每一步的结果、媒体逐项结果、异常堆栈记下来渲染进报告，一行都不碰框架日志。
+- **开发脚本**（`scripts/`）要在没有 AstrBot 的环境下独立运行，用 `scripts/dev_logger.py`
+  的 `StubLogger` 顶替 `astrbot.api.logger`（接口与插件用到的那几个方法一致），
+  同样不引入内置日志模块。
+- 提交前自查（第 8 节验证清单里也有）：
+
+```bash
+grep -rn "import logging\|logging\." --include=*.py .   # 应当没有任何输出
+```
+
+---
+
 ## 6. 「我要做 X，改哪里」速查表
 
 | 任务 | 改动位置 | 注意 |
@@ -499,6 +525,7 @@ bridge 调后端；后端路由必须带插件名前缀，页面侧写去掉前�
 | 调页面骨架 / 分组导航 | `pages/rika/index.html` + `app.js` | 导航项由后端分组生成，新增分组不用改 HTML |
 | 调设置页后端接口 | `link_parser/webui.py` | 只做「取参 → 校验 → 转发 config 读写 → 拼 JSON」 |
 | 调链接调试的流程 / 报告格式 | `link_parser/services/debug_probe.py` | 报告要打码；别读缓存、别发消息，见 5.11 |
+| 加日志 / 改日志方式 | 只用 `from astrbot.api import logger`；开发脚本用 `scripts/dev_logger.py::StubLogger` | **不得引入内置日志模块**，见 5.12 |
 | 调链接调试页界面 | `pages/rika/views/debug.js` | 流程全在后端，页面只摆结果 |
 | 新增一个插件页面视图 | `pages/rika/views/<名字>.js` + `app.js` 的 `VIEW_FACTORIES` 与 `navEntries` | 每个视图一个 holder，切换只切 `hidden` |
 | 新增卡片布局 | `card_render/renderer.py`（`_render_<layout>` + `_render_sync` 分发）+ `card_render/theme.py`（`LAYOUT_NAMES`）+ `_conf_schema.json`（`RENDER_LAYOUT.options` 两处）+ README | 无封面场景必须能回退（参考 `_render_immersive`） |
@@ -546,6 +573,9 @@ bridge 调后端；后端路由必须带插件名前缀，页面侧写去掉前�
 
 # 2) 语法编译
 <PY> -m compileall -q .
+
+# 2.1) 日志器来源自查（审核要求：只能用 astrbot.api 的 logger，见 5.12）
+grep -rn "import logging\|logging\." --include=*.py .    # 应无输出
 
 # 3) 渲染回归：4 布局 × 2 主题 × 全尺寸 = 96 张，必须全部成功
 <PY> scripts/preview_layouts.py        # 末行应为「共渲染 96 张，全部成功」
@@ -649,6 +679,8 @@ assert not bad and len(handlers) == 14
   新增字段前先想清楚「它是不是设备指纹」——把别的设备的指纹混进凭证会被 B站 判为风险会话。
 - **B站 `ac_time_value` 只能从扫码登录响应体拿**（`data.refresh_token`），丢了就无法自动续期；
   见 5.9。
+- **不得使用 Python 内置日志模块**：日志器只能来自 `astrbot.api`（见 5.12）。
+  想在调试报告里回看过程，别去挂处理器收框架日志——自己记事件即可。
 - **`PathTask.safe_get()` 不区分「按设计跳过」与「下载失败」**：两者都返回 `None`，
   异常只在 logger 里。要分辨必须传 `on_error` 回调把异常捞回来，见 5.11。
   同理，它内部读 `get_config()` 得包 `try`——配置没初始化时那个 RuntimeError
@@ -679,6 +711,7 @@ assert not bad and len(handlers) == 14
 14. B站凭证生命周期变化：取值来源、校验频率、持有者、响应头合并白名单（→ 第 5.9 节、第 6 节、第 9 节）
 15. 插件页面新增视图 / 后端路由，或链接调试的步骤、报告格式变化（→ 第 5.10、5.11 节、第 2 节）
 16. 「按设计跳过」与「失败」的判定口径变化（→ 第 5.4、5.11 节）
+17. 日志的实现方式变化：日志器来源、是否拦截/改动框架日志（→ 第 5.12 节、第 8 节、第 9 节）
 
 ### 10.2 更新方式
 

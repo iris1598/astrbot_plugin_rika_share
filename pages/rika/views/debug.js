@@ -173,8 +173,8 @@ export function createDebugView(ctx) {
       "下载日志",
     );
     return card(
-      "日志",
-      `${report.log_name} · 已打码 Cookie / Token，可直接贴出`,
+      "完整报告",
+      `${report.log_name} · 含运行环境、流程步骤、解析结果与流程日志 · 已打码 Cookie / Token，可直接贴出`,
       [h("pre", { class: "log-view", text: report.text || "（空）" })],
       h("div", { class: "toolbar" }, [downloadButton]),
     );

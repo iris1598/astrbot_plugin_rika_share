@@ -32,7 +32,6 @@ import argparse
 import asyncio
 import datetime as dt
 import io
-import logging
 import os
 import platform
 import re
@@ -47,6 +46,10 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve()
 PLUGIN_ROOT = SCRIPT.parent.parent          # .../astrbot_plugin_rika_share
+# scripts/ 自身放进 sys.path：脚本要在没有 AstrBot 时独立运行，日志桩从这里取
+sys.path.insert(0, str(SCRIPT.parent))
+
+from dev_logger import StubLogger  # noqa: E402
 OUT_ROOT = SCRIPT.parent / "dev_test_out"
 
 #: 日志与终端输出共用一条流：写到哪里都同时进日志文件
@@ -84,45 +87,26 @@ class _Tee:
 _LOGFILE = None
 
 
-def setup_logging(verbose: bool) -> Path:
-    """建立日志：全部走 _Tee，屏幕与文件内容一致。"""
+#: 塞给 ``astrbot.api.logger`` 的那个桩（脚本自己也可以直接用）
+_API_LOGGER = StubLogger("astrbot.api")
+
+
+def setup_output(verbose: bool) -> Path:
+    """建立输出：屏幕与日志文件内容一致（全部走 ``_Tee``）。
+
+    刻意不配置 Python 内置日志模块——按插件审核规则，日志器只能来自
+    ``astrbot.api``；第三方库的输出保持各自的默认设置。
+    """
     global _LOGFILE
     OUT_ROOT.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     path = OUT_ROOT / f"dev_smoke_{stamp}.log"
+    _API_LOGGER.set_level("DEBUG" if verbose else "INFO")
     # line buffering=1：即使脚本卡住/被中断，已写内容也不会丢
     _LOGFILE = open(path, "w", encoding="utf-8", buffering=1)
     tee = _Tee(_ORIG_STDOUT, _LOGFILE)
     sys.stdout = tee
     sys.stderr = tee
-
-    handler = logging.StreamHandler(tee)
-    handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            datefmt="%H:%M:%S",
-        )
-    )
-    root = logging.getLogger()
-    for h in list(root.handlers):
-        root.removeHandler(h)
-    root.addHandler(handler)
-    root.setLevel(logging.DEBUG if verbose else logging.INFO)
-
-    # 这些库在 DEBUG 级别会刷屏，压掉
-    for name in (
-        "httpx",
-        "httpcore",
-        "urllib3",
-        "asyncio",
-        "PIL",
-        "fontTools",
-        "curl_cffi",
-        "charset_normalizer",
-        "aiohttp",
-        "multipart",
-    ):
-        logging.getLogger(name).setLevel(logging.WARNING)
     return path
 
 
@@ -193,7 +177,7 @@ def install_astrbot_stub() -> None:
     """
     astrbot = types.ModuleType("astrbot")
     api = types.ModuleType("astrbot.api")
-    api.logger = logging.getLogger("astrbot.api")
+    api.logger = _API_LOGGER
 
     components = types.ModuleType("astrbot.api.message_components")
     for name in ("Plain", "Image", "Video", "Record", "File", "Node", "Nodes", "Json"):
@@ -254,7 +238,7 @@ class FakeContext:
 
     async def send_message(self, umo, chain):
         self.sent.append((umo, chain))
-        logging.getLogger("astrbot.api").info("[主动消息 %s] %r", umo, chain)
+        _API_LOGGER.info("[主动消息 %s] %r", umo, chain)
         return True
 
 
@@ -714,9 +698,7 @@ async def run(args) -> int:
     def _handle_loop_exception(loop, context):
         exc = context.get("exception")
         if isinstance(exc, (IgnoreException, SilentException)):
-            logging.getLogger("asyncio").debug(
-                "后台任务按设计跳过: %s", exc
-            )
+            log(f"后台任务按设计跳过: {exc}")
             return
         loop.default_exception_handler(context)
 
@@ -814,7 +796,7 @@ def parse_args():
 
 def main() -> int:
     args = parse_args()
-    log_path = setup_logging(args.verbose)
+    log_path = setup_output(args.verbose)
 
     log("=" * 64)
     log("  插件独立冒烟测试  link_parser")

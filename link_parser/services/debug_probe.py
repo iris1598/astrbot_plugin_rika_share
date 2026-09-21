@@ -9,8 +9,8 @@
 - **不读也不写** ``_content_cache`` / ``_identity_cache``，每次都是全新解析
   （否则「命中缓存」会把真正要看的解析过程掩盖掉）；
 - **不向任何会话发送消息**，也不改动 ``parsers`` / 渲染器的配置；
-- 只把插件自己的 logger 输出收进报告，顺带在测试期间把该 logger 临时降到 DEBUG
-  （结束后恢复原级别）；
+- 只记录**探针自己关心的事件**（每步开始/结束/异常、媒体逐项结果、跳过决策），
+  不拦截、也不改动框架 logger 的任何状态（不改级别、不挂处理器）；
 - 报告里所有 Cookie / Token 都会被替换成 ``***``——它是拿来贴给别人的。
 
 媒体下载与卡片渲染都默认执行，因为它们正是「解析看着正常、消息却发不出去」的常见断点。
@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import logging
 import platform as _platform
 import re
 import sys
@@ -104,59 +103,62 @@ class DebugReport:
         }
 
 
-# ==================== 日志捕获 ==================== #
+# ==================== 流程日志（探针自己记录） ==================== #
 
 
-def _plugin_logger_name(plugin: Any) -> str:
-    """按插件类的模块名推出它的专用 logger 名（``astrbot.plugin.<插件名>``）。
+@dataclass(slots=True)
+class DebugEvent:
+    """一条调试事件。"""
 
-    从类反推而不是写死，避免又多一处插件身份标识的副本。
+    time: str  # HH:MM:SS.mmm
+    level: str  # info / warn / error
+    message: str
+    traceback_text: str = ""
+
+
+class EventLog:
+    """探针自己的事件日志。
+
+    **为什么不拦截框架日志**：审核规则要求日志器必须、且只能从 ``astrbot.api``
+    导入（``from astrbot.api import logger``），不得使用 Python 内置的日志模块。
+    所以这里既不往 logger 上挂处理器、也不改它的级别，而是把调试过程中真正要看的东西
+    自己记下来——每步的开始/结束/异常、媒体逐项结果、跳过的决策。框架侧照旧把插件的
+    完整输出打到 AstrBot 日志面板，两边互不干扰，探针也不再改动任何全局状态。
     """
-    module = getattr(type(plugin), "__module__", "") or ""
-    name = module.split(".", 1)[0] or "astrbot_plugin_rika_share"
-    return f"astrbot.plugin.{name}"
 
+    def __init__(self) -> None:
+        self.events: list[DebugEvent] = []
 
-class _LogCapture(logging.Handler):
-    """把插件 logger 的输出收进内存，并在测试期间临时放宽日志级别。
+    def _add(self, level: str, message: str, traceback_text: str = "") -> None:
+        now = datetime.now()
+        stamp = f"{now:%H:%M:%S}.{now.microsecond // 1000:03d}"
+        self.events.append(DebugEvent(stamp, level, message, traceback_text))
 
-    AstrBot 的插件 logger 设了 ``propagate = False``，所以必须挂在它自己身上，
-    挂 root 是收不到的。
-    """
+    def info(self, message: str) -> None:
+        self._add("info", message)
 
-    def __init__(self, logger_name: str):
-        super().__init__(level=logging.DEBUG)
-        self.records: list[str] = []
-        self._logger = logging.getLogger(logger_name)
-        self._previous_level: int | None = None
+    def warn(self, message: str) -> None:
+        self._add("warn", message)
 
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            self.records.append(f"{self.format(record)}")
-        except Exception:  # noqa: BLE001 - 日志收集失败绝不能影响调试流程
-            pass
-
-    def __enter__(self) -> "_LogCapture":
-        self.setFormatter(
-            logging.Formatter(
-                fmt="%(asctime)s.%(msecs)03d | %(levelname)-7s | %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-        )
-        self._previous_level = self._logger.level
-        # 调试页要看的就是 DEBUG 级别的细节，测完恢复
-        self._logger.setLevel(logging.DEBUG)
-        self._logger.addHandler(self)
-        return self
-
-    def __exit__(self, *_exc: object) -> None:
-        self._logger.removeHandler(self)
-        if self._previous_level is not None:
-            self._logger.setLevel(self._previous_level)
+    def error(self, message: str, exc: BaseException | None = None) -> None:
+        """记一条错误；给了异常就带上完整堆栈（报告里最有用的部分）。"""
+        stack = ""
+        if exc is not None:
+            stack = "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            ).rstrip()
+        self._add("error", message, stack)
 
     @property
     def text(self) -> str:
-        return "\n".join(self.records)
+        """渲染成报告里的日志段落（与旧的 capture 输出格式保持一致）。"""
+        lines: list[str] = []
+        for event in self.events:
+            lines.append(f"{event.time} | {event.level.upper():<7} | {event.message}")
+            if event.traceback_text:
+                for text in event.traceback_text.splitlines():
+                    lines.append(f"        | {text}")
+        return "\n".join(lines)
 
 
 # ==================== 小工具 ==================== #
@@ -235,7 +237,7 @@ def _skip_reason(exc: BaseException) -> str:
     text = str(exc).strip()
     if text and text != _IGNORE_DEFAULT_MESSAGE:
         return text
-    return "按设计跳过下载（时长超限、媒体为空等，详见插件日志）"
+    return "按设计跳过下载（时长超限、媒体为空等）"
 
 
 def _media_kind(content: Any) -> str:
@@ -261,6 +263,7 @@ class _AbortFlow(Exception):
 
 async def _step(
     steps: list[DebugStep],
+    events: EventLog,
     name: str,
     action: Callable[[], Awaitable[Any]],
     *,
@@ -278,20 +281,24 @@ async def _step(
         value = await action()
     except skip_statuses as exc:
         # 按设计跳过（如视频时长超限）不算失败
-        steps.append(DebugStep(name, "skip", _describe(exc), _ms(started)))
+        cost = _ms(started)
+        events.info(f"[跳过] {name}：{_describe(exc)}（{cost} ms）")
+        steps.append(DebugStep(name, "skip", _describe(exc), cost))
         if fatal:
             raise _AbortFlow from exc
         return None
     except Exception as exc:  # noqa: BLE001 - 调试页必须把失败原因完整带出来
-        steps.append(
-            DebugStep(name, "fail", _describe(exc), _ms(started), traceback.format_exc())
-        )
+        cost = _ms(started)
+        events.error(f"[失败] {name}：{_describe(exc)}（{cost} ms）", exc)
+        steps.append(DebugStep(name, "fail", _describe(exc), cost, traceback.format_exc()))
         if fatal:
             raise _AbortFlow from exc
         return None
 
+    cost = _ms(started)
     detail = detail_of(value) if detail_of else ""
-    steps.append(DebugStep(name, "ok", detail, _ms(started)))
+    events.info(f"[完成] {name}：{detail}（{cost} ms）" if detail else f"[完成] {name}（{cost} ms）")
+    steps.append(DebugStep(name, "ok", detail, cost))
     return value
 
 
@@ -309,32 +316,38 @@ async def run_debug_probe(
     steps: list[DebugStep] = []
     summary: dict[str, Any] = {}
     platform_name = ""
-    capture = _LogCapture(_plugin_logger_name(plugin))
+    events = EventLog()
 
-    with capture:
-        logger.info("=" * 60)
-        logger.info("[调试] 开始测试解析: %s", url)
-        try:
-            platform_name, summary = await _run_pipeline(
-                plugin,
-                url,
-                token,
-                steps,
-                summary,
-                download_media=download_media,
-                render_card=render_card,
-            )
-        except _AbortFlow:
-            pass
-        except Exception as exc:  # noqa: BLE001 - 兜底，保证一定产出报告
-            steps.append(
-                DebugStep("未预期异常", "fail", _describe(exc), 0, traceback.format_exc())
-            )
-        logger.info("[调试] 流程结束，耗时 %d ms", _ms(started))
-        logger.info("=" * 60)
+    events.info(
+        f"开始调试：{url}"
+        f"（下载媒体={'是' if download_media else '否'} / 渲染卡片={'是' if render_card else '否'}）"
+    )
+    logger.info("=" * 60)
+    logger.info("[调试] 开始测试解析: %s", url)
+    try:
+        platform_name, summary = await _run_pipeline(
+            plugin,
+            url,
+            token,
+            steps,
+            events,
+            summary,
+            download_media=download_media,
+            render_card=render_card,
+        )
+    except _AbortFlow:
+        events.warn("流程在失败步骤处中止，后续步骤未执行")
+    except Exception as exc:  # noqa: BLE001 - 兜底，保证一定产出报告
+        events.error("未预期异常，流程中止", exc)
+        steps.append(
+            DebugStep("未预期异常", "fail", _describe(exc), 0, traceback.format_exc())
+        )
+    elapsed = _ms(started)
+    events.info(f"流程结束，总耗时 {elapsed} ms")
+    logger.info("[调试] 流程结束，耗时 %d ms", _ms(started))
+    logger.info("=" * 60)
 
     ok = bool(steps) and all(step.status != "fail" for step in steps)
-    elapsed = _ms(started)
     text = _build_report_text(
         plugin,
         url,
@@ -343,7 +356,7 @@ async def run_debug_probe(
         elapsed,
         steps,
         summary,
-        capture.text,
+        events.text,
         download_media,
         render_card,
     )
@@ -367,6 +380,7 @@ async def _run_pipeline(
     url: str,
     token: str,
     steps: list[DebugStep],
+    events: EventLog,
     summary: dict[str, Any],
     *,
     download_media: bool,
@@ -390,6 +404,7 @@ async def _run_pipeline(
 
     detected = await _step(
         steps,
+        events,
         "识别平台",
         _detect,
         fatal=True,
@@ -405,6 +420,7 @@ async def _run_pipeline(
     # ---------- 2. 缓存标识 ----------
     identity = await _step(
         steps,
+        events,
         "缓存标识",
         lambda: parser.cache_identity(url),
         fatal=True,
@@ -423,6 +439,7 @@ async def _run_pipeline(
 
     result = await _step(
         steps,
+        events,
         "解析接口",
         _parse,
         fatal=True,
@@ -435,20 +452,24 @@ async def _run_pipeline(
 
     # ---------- 4. 媒体下载 ----------
     if download_media:
-        await _download_all(plugin, result, steps, summary)
+        await _download_all(result, steps, events, summary)
     else:
+        events.info("[跳过] 媒体下载：已按选项跳过")
         steps.append(DebugStep("媒体下载", "skip", "已按选项跳过", 0))
 
     # ---------- 5. 卡片渲染 ----------
     renderer = getattr(plugin, "_renderer", None)
     if not render_card:
+        events.info("[跳过] 卡片渲染：已按选项跳过")
         steps.append(DebugStep("卡片渲染", "skip", "已按选项跳过", 0))
     elif renderer is None or not renderer.enabled:
+        events.warn("[跳过] 卡片渲染：渲染未启用（或 Pillow 缺失）")
         steps.append(DebugStep("卡片渲染", "skip", "渲染未启用（或 Pillow 缺失）", 0))
     else:
         # cache_key 带上本次会话标识，卡片文件名唯一 —— 不会覆盖真正发出去的那张
         rendered = await _step(
             steps,
+            events,
             "卡片渲染",
             lambda: renderer.render(result, cache_key=f"debug_{token}"),
             fatal=False,
@@ -459,6 +480,7 @@ async def _run_pipeline(
     # ---------- 6. 输出构建 ----------
     built = await _step(
         steps,
+        events,
         "输出构建",
         lambda: build_platform_output(result, platform_name),
         fatal=False,
@@ -468,14 +490,14 @@ async def _run_pipeline(
         summary["消息头"] = built[0]
 
     # ---------- 7. Cloudflare 兜底判断 ----------
-    await _cloudflare_step(plugin, url, steps, summary)
+    await _cloudflare_step(plugin, url, steps, events, summary)
     return platform_name, summary
 
 
 async def _download_all(
-    plugin: Any,
     result: Any,
     steps: list[DebugStep],
+    events: EventLog,
     summary: dict[str, Any],
 ) -> None:
     """逐个取媒体路径，失败不影响后续（与主流程的 safe_get 语义一致）。
@@ -495,6 +517,7 @@ async def _download_all(
 
     started = time.monotonic()
     if not targets:
+        events.info("[跳过] 媒体下载：解析结果里没有媒体内容")
         steps.append(DebugStep("媒体下载", "skip", "解析结果里没有媒体内容", _ms(started)))
         summary["媒体下载"] = "无"
         return
@@ -514,16 +537,21 @@ async def _download_all(
         if path is not None:
             done += 1
             lines.append(f"      {label}: {_file_info(path)}（{cost} ms）")
+            events.info(f"媒体 {label}：{_file_info(path)}（{cost} ms）")
             continue
 
         exc = caught[0] if caught else None
         if isinstance(exc, _SKIP_EXCEPTIONS):
             skipped += 1
-            lines.append(f"      {label}: [跳过] {_skip_reason(exc)}（{cost} ms）")
+            reason = _skip_reason(exc)
+            lines.append(f"      {label}: [跳过] {reason}（{cost} ms）")
+            events.info(f"媒体 {label} 按设计跳过：{reason}（{cost} ms）")
         else:
             failed += 1
-            reason = _describe(exc) if exc else "没拿到异常，详情见插件日志"
+            reason = _describe(exc) if exc else "没拿到异常"
             lines.append(f"      {label}: [失败] {reason}（{cost} ms）")
+            # 带堆栈：这条以前只能靠框架日志里那句 logger.exception，现在自己记
+            events.error(f"媒体 {label} 下载失败：{reason}（{cost} ms）", exc)
 
     counts = f"{len(targets)} 个媒体，成功 {done} 个"
     if failed:
@@ -542,24 +570,32 @@ async def _download_all(
 
 
 async def _cloudflare_step(
-    plugin: Any, url: str, steps: list[DebugStep], summary: dict[str, Any]
+    plugin: Any,
+    url: str,
+    steps: list[DebugStep],
+    events: EventLog,
+    summary: dict[str, Any],
 ) -> None:
     """报告 Cloudflare 兜底会不会接管这个链接（不改动任何状态）。"""
     from .web_screenshot import is_url_blacklisted
 
     pconfig = _safe_config()
     if pconfig is None or not pconfig.CLOUDFLARE_FALLBACK_ENABLED:
+        events.info("[跳过] Cloudflare 兜底：未启用")
         steps.append(DebugStep("Cloudflare 兜底", "skip", "未启用", 0))
         return
     client = getattr(plugin, "_cloudflare_client", None)
     if client is None or not client.is_configured:
+        events.warn("[跳过] Cloudflare 兜底：已启用但缺少账号 ID / Token")
         steps.append(DebugStep("Cloudflare 兜底", "skip", "已启用但缺少账号 ID / Token", 0))
         return
     if is_url_blacklisted(url, pconfig.CLOUDFLARE_BLACKLIST):
+        events.info("[跳过] Cloudflare 兜底：命中截图黑名单")
         steps.append(DebugStep("Cloudflare 兜底", "skip", "命中截图黑名单", 0))
         summary["Cloudflare 兜底"] = "命中黑名单，会跳过"
         return
     # 平台解析已经命中，兜底本来就不会触发；这里只报告「如果没命中会不会兜底」
+    events.info("Cloudflare 兜底可用，但本链接已由适配器处理，不会走兜底")
     steps.append(DebugStep("Cloudflare 兜底", "ok", "可用（本链接已被适配器接管）", 0))
     summary["Cloudflare 兜底"] = "可用；但本链接已由适配器处理，不会走兜底"
 
@@ -657,7 +693,7 @@ def _build_report_text(
     elapsed_ms: int,
     steps: list[DebugStep],
     summary: dict[str, Any],
-    plugin_log: str,
+    events_text: str,
     download_media: bool,
     render_card: bool,
 ) -> str:
@@ -716,8 +752,11 @@ def _build_report_text(
         "---- 结论 " + "-" * 62,
         verdict,
         "",
-        "---- 插件日志（测试期间临时开到 DEBUG） " + "-" * 32,
-        plugin_log or "（本次没有捕获到插件日志）",
+        "---- 流程日志 " + "-" * 58,
+        "本段由探针自己记录（每一步的结果、媒体逐项结果、跳过与失败的原因），不含框架日志；",
+        "插件在 AstrBot 日志面板里的完整输出不受本次调试影响。",
+        "",
+        events_text or "（本次没有记录到事件）",
         "",
         line,
         "报告结束",
