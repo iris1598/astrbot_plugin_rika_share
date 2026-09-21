@@ -38,8 +38,8 @@ GENERIC_URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"https?://[^\s'\"<>]+"
 class PlatformEnum(str, Enum):
     """已支持平台的标识。
 
-    取值同时用于：适配器注册表键名、``DISABLED_PLATFORMS`` 配置项、
-    渲染配色的 ``PLATFORM_COLORS`` 键名。
+    取值同时用于：适配器注册表键名、解析器开关 ``PLATFORM_<NAME>_ENABLED``
+    （见 ``config.PLATFORM_SWITCHES``）、渲染配色的 ``PLATFORM_COLORS`` 键名。
     """
 
     ACFUN = "acfun"

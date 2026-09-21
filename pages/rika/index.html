@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>莉卡解析 · 设置</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="bg-aurora" aria-hidden="true"></div>
+    <div class="app">
+      <aside class="rail">
+        <div class="rail-brand">
+          <span class="rail-logo">莉</span>
+          <span class="rail-brand-text">
+            <strong>莉卡解析</strong>
+            <em id="brand-version">—</em>
+          </span>
+        </div>
+        <nav class="rail-nav" id="rail-nav"></nav>
+        <div class="rail-foot">
+          <span class="dot" id="rail-dot"></span>
+          <span id="rail-status">连接中…</span>
+        </div>
+      </aside>
+
+      <main class="stage">
+        <header class="stage-head">
+          <div class="stage-title">
+            <h1 id="view-title">设置</h1>
+            <p id="view-sub">全部配置项，保存后立即生效</p>
+          </div>
+          <div class="stage-actions">
+            <span class="pill" id="head-pill" hidden></span>
+            <button class="btn" id="btn-reload" type="button">刷新</button>
+          </div>
+        </header>
+        <div class="stage-body" id="stage-body"></div>
+      </main>
+    </div>
+
+    <div class="toast-host" id="toast-host" aria-live="polite"></div>
+    <div class="modal-host" id="modal-host" hidden></div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

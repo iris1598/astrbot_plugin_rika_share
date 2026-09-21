@@ -29,7 +29,12 @@ from astrbot.api.star import Context, Star, register, StarTools
 
 from .link_parser.adapters import get_adapter, iter_adapters
 from .link_parser.adapters.registry import AdapterBuildContext
-from .link_parser.config import get_config, init_config, migrate_grouped_config
+from .link_parser.config import (
+    get_config,
+    init_config,
+    migrate_grouped_config,
+    migrate_platform_switches,
+)
 from .link_parser.constants import GENERIC_URL_PATTERN
 from .link_parser.exceptions import (
     DownloadException,
@@ -57,6 +62,7 @@ from .link_parser.services.web_screenshot import (
     is_url_blacklisted,
 )
 from .link_parser.utils import clear_cache_dir, cleanup_cache_dir
+from .link_parser.webui import WebUIApi, read_schema_problems
 
 
 def _get_plugin_data_dir() -> Path:
@@ -131,13 +137,18 @@ class ParserPlugin(Star):
 
         pconfig = init_config(config, self.cache_dir, self.config_dir)
 
-        # 将旧版扁平配置迁移到分组配置，避免设置页整理后已有设置丢失
+        # 迁移：① 旧版扁平配置 → 分组配置；② 旧版 DISABLED_PLATFORMS 逗号串 → 各解析器开关
+        # 两者都只搬「用户改过、而新位置还是默认值」的项，因此重复调用是幂等的
         try:
-            if migrate_grouped_config(config):
+            # 两个都要跑，不能用 or 短路掉后者
+            grouped_changed = migrate_grouped_config(config)
+            switch_changed = migrate_platform_switches(config)
+            changed = grouped_changed or switch_changed
+            if changed:
                 save = getattr(config, "save_config", None)
                 if callable(save):
                     save()
-                logger.info("已迁移旧版扁平配置到分组配置")
+                logger.info("已迁移旧版配置（扁平项 → 分组、禁用平台 → 解析器开关）")
         except Exception:
             logger.warning("旧版配置迁移失败，将使用兼容回退读取", exc_info=True)
 
@@ -153,15 +164,9 @@ class ParserPlugin(Star):
         self._cache_cleanup_task: asyncio.Task | None = None
 
         # ========== 解析图片渲染 ==========
-        self._renderer = ShareCardRenderer(
-            self.cache_dir,
-            enabled=pconfig.RENDER_ENABLED,
-            width=pconfig.RENDER_WIDTH,
-            theme=pconfig.RENDER_THEME,
-            font_path=pconfig.RENDER_FONT_PATH or None,
-            layout=pconfig.RENDER_LAYOUT,
-            cover_full_size=pconfig.RENDER_COVER_FULL_SIZE,
-        )
+        self._renderer = self._build_renderer()
+        # 构造参数快照：网页保存配置后据此判断要不要重建渲染器
+        self._renderer_sig = self._renderer_signature()
         if self._renderer.enabled:
             logger.info(
                 f"解析图片渲染已启用 (主题: {pconfig.RENDER_THEME}, "
@@ -181,6 +186,7 @@ class ParserPlugin(Star):
 
         # ========== Cloudflare 截图 Fallback ==========
         self._cloudflare_client: CloudflareScreenshotClient | None = None
+        self._cloudflare_sig = self._cloudflare_signature()
         if pconfig.CLOUDFLARE_FALLBACK_ENABLED:
             self._cloudflare_client = CloudflareScreenshotClient(config)
             if self._cloudflare_client.is_configured:
@@ -190,6 +196,116 @@ class ParserPlugin(Star):
                     "Cloudflare 截图 Fallback 已开启但未配置 Account ID / API Token，"
                     "请检查插件配置"
                 )
+
+        self._register_webui()
+
+    # ==================== 网页设置页 ==================== #
+
+    def _register_webui(self) -> None:
+        """注册插件网页设置页（``pages/rika``）的后端接口。
+
+        老版本 AstrBot 没有 ``register_web_api``，此时静默跳过——
+        聊天命令与解析功能都不受影响，只是没有网页设置页。
+        """
+        # 自检：_conf_schema.json 与 CONFIG_META 不一致会让保存的值在重载时丢失；
+        # 分组可见性不一致会在原生面板留下空标题（两者都由 read_schema_problems 逐条打日志）
+        read_schema_problems()
+
+        if not hasattr(self.context, "register_web_api"):
+            logger.info("[link_parser] 当前 AstrBot 不支持插件页面，跳过 WebUI 注册")
+            return
+        try:
+            self._webui = WebUIApi(self)
+            self._webui.register()
+            logger.info("[link_parser] WebUI 接口已注册（插件页面 pages/rika）")
+        except Exception:
+            logger.warning("[link_parser] WebUI 接口注册失败，网页设置页不可用", exc_info=True)
+
+    async def apply_runtime_config(self) -> dict[str, Any]:
+        """把刚保存的配置应用到运行中的组件，避免用户还要重载插件。
+
+        ``self.parsers`` 用原地更新的方式重建：B站账号服务持有的是同一个 dict 引用，
+        换成新 dict 会让它继续操作已经被丢弃的解析器。
+        """
+        result: dict[str, Any] = {}
+
+        if self._renderer_signature() != self._renderer_sig:
+            self._renderer = self._build_renderer()
+            self._renderer_sig = self._renderer_signature()
+            result["renderer"] = self._renderer.enabled
+
+        pconfig = get_config()
+        disabled = pconfig.DISABLED_PLATFORMS
+        if disabled != self.disabled_platforms:
+            self.disabled_platforms = disabled
+            self.parsers.clear()
+            self._init_parsers()
+            result["platforms"] = sorted(self.parsers)
+
+        if self._cloudflare_signature() != self._cloudflare_sig:
+            self._cloudflare_sig = self._cloudflare_signature()
+            self._cloudflare_client = (
+                CloudflareScreenshotClient(self.config)
+                if self._cloudflare_sig is not None
+                else None
+            )
+            result["cloudflare"] = bool(
+                self._cloudflare_client and self._cloudflare_client.is_configured
+            )
+
+        return result
+
+    def _cloudflare_signature(self) -> tuple | None:
+        """Cloudflare 截图客户端的构造参数快照（``None`` 表示未启用）。"""
+        pconfig = get_config()
+        if not pconfig.CLOUDFLARE_FALLBACK_ENABLED:
+            return None
+        return (
+            pconfig.CLOUDFLARE_ACCOUNT_ID,
+            pconfig.CLOUDFLARE_API_TOKEN,
+            pconfig.CLOUDFLARE_TIMEOUT,
+            pconfig.CLOUDFLARE_VIEWPORT_WIDTH,
+            pconfig.CLOUDFLARE_VIEWPORT_HEIGHT,
+            pconfig.CLOUDFLARE_WAIT_UNTIL,
+            pconfig.CLOUDFLARE_GOTO_TIMEOUT,
+            pconfig.CLOUDFLARE_FULL_PAGE,
+            pconfig.CLOUDFLARE_DEVICE_SCALE_FACTOR,
+            pconfig.CLOUDFLARE_SCREENSHOT_TYPE,
+            pconfig.CLOUDFLARE_SCREENSHOT_QUALITY,
+            pconfig.CLOUDFLARE_OMIT_BACKGROUND,
+            pconfig.CLOUDFLARE_SELECTOR,
+            pconfig.CLOUDFLARE_WAIT_FOR_SELECTOR,
+            pconfig.CLOUDFLARE_WAIT_FOR_TIMEOUT,
+            pconfig.CLOUDFLARE_USER_AGENT,
+            pconfig.CLOUDFLARE_EXTRA_HEADERS,
+            pconfig.CLOUDFLARE_COOKIES,
+            pconfig.CLOUDFLARE_CACHE_TTL,
+        )
+
+    def _build_renderer(self) -> ShareCardRenderer:
+        """按当前配置构造卡片渲染器。"""
+        pconfig = get_config()
+        return ShareCardRenderer(
+            self.cache_dir,
+            enabled=pconfig.RENDER_ENABLED,
+            width=pconfig.RENDER_WIDTH,
+            theme=pconfig.RENDER_THEME,
+            font_path=pconfig.RENDER_FONT_PATH or None,
+            layout=pconfig.RENDER_LAYOUT,
+            cover_full_size=pconfig.RENDER_COVER_FULL_SIZE,
+        )
+
+    def _renderer_signature(self) -> tuple:
+        """渲染器的构造参数快照，用于判断保存配置后是否需要重建。"""
+        pconfig = get_config()
+        return (
+            pconfig.RENDER_ENABLED,
+            pconfig.RENDER_WIDTH,
+            pconfig.RENDER_THEME,
+            pconfig.RENDER_FONT_PATH,
+            pconfig.RENDER_LAYOUT,
+            pconfig.RENDER_COVER_FULL_SIZE,
+        )
 
     def _init_parsers(self) -> None:
         """按适配器注册表实例化已启用的平台解析器。"""

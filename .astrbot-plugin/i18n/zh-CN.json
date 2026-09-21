@@ -1,0 +1,8 @@
+{
+  "pages": {
+    "rika": {
+      "title": "莉卡解析",
+      "description": "插件配置的维护入口：平台、Twitter、B站、缓存、卡片渲染与 Cloudflare 截图。"
+    }
+  }
+}

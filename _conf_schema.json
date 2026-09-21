@@ -1,141 +1,232 @@
 {
+  "解析器开关": {
+    "type": "object",
+    "description": "各平台解析器的启用开关",
+    "items": {
+      "PLATFORM_BILIBILI_ENABLED": {
+        "description": "解析 B站 链接",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后不再解析B站链接，其余平台不受影响",
+        "obvious_hint": true,
+        "invisible": false
+      },
+      "PLATFORM_DOUYIN_ENABLED": {
+        "description": "解析 抖音 链接",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后不再解析抖音链接，其余平台不受影响",
+        "obvious_hint": true,
+        "invisible": false
+      },
+      "PLATFORM_KUAISHOU_ENABLED": {
+        "description": "解析 快手 链接",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后不再解析快手链接，其余平台不受影响",
+        "obvious_hint": true,
+        "invisible": false
+      },
+      "PLATFORM_WEIBO_ENABLED": {
+        "description": "解析 微博 链接",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后不再解析微博链接，其余平台不受影响",
+        "obvious_hint": true,
+        "invisible": false
+      },
+      "PLATFORM_XIAOHONGSHU_ENABLED": {
+        "description": "解析 小红书 链接",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后不再解析小红书链接，其余平台不受影响",
+        "obvious_hint": true,
+        "invisible": false
+      },
+      "PLATFORM_TWITTER_ENABLED": {
+        "description": "解析 Twitter/X 链接",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后不再解析Twitter/X链接，其余平台不受影响",
+        "obvious_hint": true,
+        "invisible": false
+      },
+      "PLATFORM_NGA_ENABLED": {
+        "description": "解析 NGA 链接",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后不再解析NGA链接，其余平台不受影响",
+        "obvious_hint": true,
+        "invisible": false
+      },
+      "PLATFORM_ACFUN_ENABLED": {
+        "description": "解析 AcFun 链接",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后不再解析AcFun链接，其余平台不受影响",
+        "obvious_hint": true,
+        "invisible": false
+      }
+    }
+  },
   "平台设置": {
     "type": "object",
     "description": "各平台的解析与下载设置",
+    "invisible": true,
     "items": {
       "DISABLED_PLATFORMS": {
         "description": "禁用的平台(逗号分隔)",
         "type": "string",
         "default": "",
         "hint": "例如: acfun,nga (留空表示全部启用)",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "VIDEO_DURATION_MAXIMUM": {
         "description": "视频/音频最大时长(秒)",
         "type": "int",
         "default": 480,
         "hint": "超过此时长的视频将不会被下载",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "DOUYIN_LIVE_PHOTO_ENABLED": {
         "description": "抖音动态图重建",
         "type": "bool",
         "default": true,
         "hint": "开启后，抖音的实况照片(clip_type=5)与普通动图(clip_type=4)都改为「主图 + 短视频」重建为单文件动态照片（可用 Google 相册 / 小米 / OPPO / vivo / 三星相册播放）；关闭则只发静态主图。不依赖 ffmpeg",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "XHS_CK": {
         "description": "小红书 Cookie",
         "type": "string",
         "hint": "从浏览器获取 xiaohongshu.com 的 cookie (可选)",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "FORWARD_MAX_NODES": {
         "description": "单条合并转发最大节点数",
         "type": "int",
         "default": 10,
         "hint": "OneBot 合并转发会把节点内的图片全部 base64 编码后再整体序列化，峰值内存约为图片总量的 4 倍。图集较大时按此值拆成多条合并转发发送，避免 OOM。仅对 OneBot(aiocqhttp) 生效",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "FORWARD_MAX_BATCH_MB": {
         "description": "单条合并转发图片体积上限(MB)",
         "type": "int",
         "default": 30,
         "hint": "按图片原始字节累计计算，超出即拆成下一条。调小更省内存但会发更多条消息，调大则相反。单张超过此值的图片会单独成一条发送",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       }
     }
   },
   "Twitter 设置": {
     "type": "object",
     "description": "Twitter/X 反代（媒体与解析接口改走自定义反代，绕过 twimg.com / api.vxtwitter.com 无法直连）",
+    "invisible": true,
     "items": {
       "TWITTER_MEDIA_PROXY_ENABLED": {
         "description": "启用 Twitter 反代",
         "type": "bool",
         "default": false,
         "hint": "开启后，推文的图片、视频、封面与作者头像改从自定义反代地址下载，解析接口 api.vxtwitter.com 也一并改走反代（需部署最新版 Worker）",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "TWITTER_MEDIA_PROXY_BASE": {
         "description": "Twitter 反代地址",
         "type": "string",
         "default": "",
         "hint": "Cloudflare Worker 反代根地址，例如 https://x-media-proxy.xxx.workers.dev（结尾不要带斜杠）",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       }
     }
   },
   "B站设置": {
     "type": "object",
     "description": "B站 Cookie、下载清晰度与 Cookie 监控",
+    "invisible": true,
     "items": {
       "BILI_CK": {
         "description": "哔哩哔哩 Cookie（可选，也可用 /bili_login 扫码登录获取）",
         "type": "string",
         "hint": "从浏览器获取 bilibili.com 的 SESSDATA 值，或使用 /bili_login 扫码登录自动获取",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "BILI_QUALITY": {
         "description": "B站视频下载清晰度",
         "type": "string",
         "default": "1080P",
         "hint": "可选: 360P, 480P, 720P, 1080P, 1080P+, 4K, 8K (需要对应账号权限)",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "BILI_COOKIE_MONITOR_ENABLED": {
         "description": "启用B站Cookie定时监控",
         "type": "bool",
         "default": true,
         "hint": "开启后将定时检测B站Cookie是否有效，失效时自动通知",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "BILI_COOKIE_CHECK_INTERVAL": {
         "description": "B站Cookie检测间隔(秒)",
         "type": "int",
         "default": 3600,
         "hint": "每隔多少秒检测一次Cookie有效性，最小60秒",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "BILI_NOTIFY_USER_ID": {
         "description": "Cookie失效/恢复时通知的QQ号",
         "type": "string",
         "default": "",
         "hint": "留空则不发送通知，只记录日志",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       }
     }
   },
   "缓存设置": {
     "type": "object",
     "description": "缓存文件过期与自动清理策略",
+    "invisible": true,
     "items": {
       "CACHE_TTL_HOURS": {
         "description": "缓存文件过期时间(小时)",
         "type": "int",
         "default": 24,
         "hint": "缓存文件超过此时间未被使用将被清理。设为 0 禁用自动清理",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "CACHE_CLEANUP_INTERVAL_MINUTES": {
         "description": "缓存清理检查间隔(分钟)",
         "type": "int",
         "default": 60,
         "hint": "每隔多少分钟检查一次过期缓存",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       }
     }
   },
   "解析图片渲染": {
     "type": "object",
     "description": "将解析结果渲染为精美卡片图片发送（Pillow 实现，无需浏览器）",
+    "invisible": true,
     "items": {
       "RENDER_ENABLED": {
         "description": "启用解析图片渲染",
         "type": "bool",
         "default": true,
         "hint": "开启后，解析结果会渲染成一张精美的分享卡片图片；渲染失败时自动回退为文本输出",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "RENDER_THEME": {
         "description": "卡片主题",
@@ -146,7 +237,8 @@
           "light"
         ],
         "hint": "深色 / 浅色两套主题",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "RENDER_LAYOUT": {
         "description": "卡片布局",
@@ -159,7 +251,8 @@
           "feed"
         ],
         "hint": "standard 标准横幅(全宽封面) / magazine 双栏杂志(封面左置) / immersive 沉浸全屏(封面铺满,无图内容自动回退标准) / feed 社交动态(作者优先,媒体内嵌)",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "RENDER_WIDTH": {
         "description": "卡片宽度(px)",
@@ -171,21 +264,24 @@
           "min": 520,
           "max": 1080,
           "step": 20
-        }
+        },
+        "invisible": true
       },
       "RENDER_FONT_PATH": {
         "description": "自定义渲染字体(可选)",
         "type": "string",
         "default": "",
         "hint": "填写 .ttf/.ttc/.otf 字体文件路径或所在目录；留空自动探测系统中文字体",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "RENDER_COVER_FULL_SIZE": {
         "description": "封面全尺寸模式",
         "type": "bool",
         "default": false,
         "hint": "开启后不再裁剪封面图片，而是按封面原始宽高比完整展示",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       }
     }
   },
@@ -198,60 +294,69 @@
         "type": "bool",
         "default": false,
         "hint": "开启后，链接不匹配任何已适配平台时，自动使用 Cloudflare Browser Rendering 渲染网页截图为图片发送",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": false
       },
       "CLOUDFLARE_ACCOUNT_ID": {
         "description": "Cloudflare 账号 ID",
         "type": "string",
         "hint": "Cloudflare Dashboard 可查看，需开通 Browser Rendering 服务",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "CLOUDFLARE_API_TOKEN": {
         "description": "Cloudflare API Token",
         "type": "string",
         "hint": "需拥有 Browser Rendering - Edit 权限",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "CLOUDFLARE_TIMEOUT": {
         "description": "截图 API 超时时间(秒)",
         "type": "int",
         "default": 60,
         "hint": "Cloudflare 渲染页面超时，建议 30-120 秒",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "CLOUDFLARE_CACHE_TTL": {
         "description": "截图缓存时间(秒)",
         "type": "int",
         "default": 0,
         "hint": "0 表示不缓存、始终重新渲染；设置后相同页面在 TTL 内直接返回缓存结果（省额度）",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "CLOUDFLARE_BLACKLIST": {
         "description": "截图黑名单",
         "type": "list",
         "default": [],
         "hint": "命中后跳过该链接的 Cloudflare 截图。支持域名（example.com 含子域名）、通配符（*.example.com、https://example.com/*）和不含点的关键词",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       }
     }
   },
   "Cloudflare 截图设置": {
     "type": "object",
     "description": "页面渲染与截图参数（视窗、等待策略、格式等）",
+    "invisible": true,
     "items": {
       "CLOUDFLARE_VIEWPORT_WIDTH": {
         "description": "截图视窗宽度(px)",
         "type": "int",
         "default": 1280,
         "hint": "渲染页面使用的浏览器视窗宽度",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "CLOUDFLARE_VIEWPORT_HEIGHT": {
         "description": "截图视窗高度(px)",
         "type": "int",
         "default": 720,
         "hint": "渲染页面使用的浏览器视窗高度",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "CLOUDFLARE_WAIT_UNTIL": {
         "description": "页面加载等待策略",
@@ -264,7 +369,8 @@
           "networkidle2"
         ],
         "hint": "JS 重页面建议 networkidle0/networkidle2（等待网络空闲后再截图）；速度优先可选 load/domcontentloaded",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "CLOUDFLARE_GOTO_TIMEOUT": {
         "description": "页面加载超时(毫秒)",
@@ -276,14 +382,16 @@
           "min": 5000,
           "max": 120000,
           "step": 5000
-        }
+        },
+        "invisible": true
       },
       "CLOUDFLARE_FULL_PAGE": {
         "description": "整页截图",
         "type": "bool",
         "default": false,
         "hint": "开启后截取完整页面（含滚动区域），关闭则只截当前视窗",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       },
       "CLOUDFLARE_DEVICE_SCALE_FACTOR": {
         "description": "截图清晰度(deviceScaleFactor)",
@@ -295,7 +403,8 @@
           "min": 1,
           "max": 3,
           "step": 0.5
-        }
+        },
+        "invisible": true
       },
       "CLOUDFLARE_SCREENSHOT_TYPE": {
         "description": "截图格式",
@@ -306,7 +415,8 @@
           "jpeg"
         ],
         "hint": "png 支持透明背景；jpeg 体积更小，可配合质量参数",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "CLOUDFLARE_SCREENSHOT_QUALITY": {
         "description": "截图质量(仅 jpeg 有效)",
@@ -318,42 +428,48 @@
           "min": 0,
           "max": 100,
           "step": 5
-        }
+        },
+        "invisible": true
       },
       "CLOUDFLARE_OMIT_BACKGROUND": {
         "description": "透明背景",
         "type": "bool",
         "default": false,
         "hint": "开启后隐藏默认白色背景，适合 png 透明图（仅 png 生效）",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "CLOUDFLARE_SELECTOR": {
         "description": "指定元素截图(可选)",
         "type": "string",
         "default": "",
         "hint": "填写 CSS 选择器（如 #content），只截取该元素区域，留空截取整个页面",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "CLOUDFLARE_WAIT_FOR_SELECTOR": {
         "description": "等待元素出现后再截图(可选)",
         "type": "string",
         "default": "",
         "hint": "JS 动态页面可填写内容加载完成的 CSS 选择器，浏览器会等该元素出现再截图",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "CLOUDFLARE_WAIT_FOR_TIMEOUT": {
         "description": "等待元素超时(毫秒)",
         "type": "int",
         "default": 0,
         "hint": "配合“等待元素出现”使用，0 表示使用 Cloudflare 默认",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "CLOUDFLARE_USER_AGENT": {
         "description": "自定义 User-Agent",
         "type": "string",
         "default": "",
         "hint": "留空使用 Cloudflare 默认 UA；部分站点按 UA 返回不同内容",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "CLOUDFLARE_EXTRA_HEADERS": {
         "description": "附加请求头(JSON)",
@@ -362,7 +478,8 @@
         "editor_mode": true,
         "editor_language": "json",
         "hint": "加载页面时附加的 HTTP 头，JSON 格式，如 {\"Authorization\":\"Bearer xxx\"}",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "CLOUDFLARE_COOKIES": {
         "description": "附加 Cookie(JSON)",
@@ -371,27 +488,31 @@
         "editor_mode": true,
         "editor_language": "json",
         "hint": "需要登录的页面可配置 Cookie 数组，如 [{\"name\":\"session\",\"value\":\"xxx\",\"domain\":\"example.com\",\"path\":\"/\"}]",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       }
     }
   },
   "调试设置": {
     "type": "object",
     "description": "日志与调试选项",
+    "invisible": true,
     "items": {
       "DEBUG_LOG_ENABLED": {
         "description": "启用详细错误日志",
         "type": "bool",
         "default": true,
         "hint": "关闭后，下载失败等错误将不会在日志中打印详细堆栈",
-        "obvious_hint": false
+        "obvious_hint": false,
+        "invisible": true
       },
       "SEND_ERROR_MESSAGES": {
         "description": "发送插件错误消息",
         "type": "bool",
         "default": false,
         "hint": "开启后，插件发生错误时向对话发送错误信息；关闭后仅保留插件日志",
-        "obvious_hint": true
+        "obvious_hint": true,
+        "invisible": true
       }
     }
   },

@@ -15,7 +15,8 @@ AstrBot 插件：自动识别聊天消息里的分享链接 / JSON 分享卡片 
 | 插件注册名 / 展示名 | `@register("链接解析器", ...)` / `metadata.yaml: display_name: 莉卡解析` |
 | 插件目录名（= 数据目录名） | `astrbot_plugin_rika_share`（**不要改**） |
 | 入口 | `main.py` → 插件类 `ParserPlugin` |
-| 实现包 | `link_parser/`（adapters / models / services / output / utils） |
+| 实现包 | `link_parser/`（adapters / models / services / output / utils / webui） |
+| 配置维护入口 | 插件网页设置页 `pages/rika/`（原生面板只留解析器开关 + Cloudflare 截图开关） |
 | 支持平台 | B站、抖音、快手、微博、小红书、Twitter(X)、AcFun、NGA + Cloudflare 网页截图兜底 |
 | 上游来源 | 移植自 [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser) |
 
@@ -43,9 +44,16 @@ AstrBot 插件：自动识别聊天消息里的分享链接 / JSON 分享卡片 
 astrbot_plugin_rika_share/
 ├── main.py                       # 插件入口：插件类 + 全部 Handler（唯一允许写 Handler 的地方）
 ├── metadata.yaml                 # 插件元数据（name/display_name/version/repo）
-├── _conf_schema.json             # WebUI 配置项 Schema（分组 + 旧版扁平项，后者 invisible）
+├── _conf_schema.json             # 存储契约：分组项（仅 bool 功能开关可见）+ 旧版扁平项（invisible）
 ├── requirements.txt
 ├── agent.md                      # ← 本文件
+├── .astrbot-plugin/i18n/         # 网页设置页标题/描述的国际化文案
+├── pages/rika/                   # 插件网页设置页（AstrBot 只扫描 pages/<name>/index.html）
+│   ├── index.html                #   页面骨架：侧边分组导航 + 内容区 + toast/弹窗容器
+│   ├── style.css                 #   设计系统：CSS 变量 + 玻璃拟态卡片 + 明暗两套主题
+│   ├── ui.js                     #   零依赖 DOM/表单小工具（h / card / toast / switch …）
+│   ├── app.js                    #   框架层：bridge 就绪 → 取配置元数据 → 建导航 → 挂载视图
+│   └── views/settings.js         #   设置视图：按分组渲染全部配置项 + 脏值跟踪 + 保存/恢复
 ├── docs/previews/                # README 用的渲染预览图
 ├── scripts/                      # 开发辅助脚本（见第 8 节）
 │   ├── dev_smoke_test.py         #   独立冒烟测试：B站扫码登录 + 链接解析（自带 astrbot 桩）
@@ -54,9 +62,11 @@ astrbot_plugin_rika_share/
 │   └── font_coverage_probe.py    #   字体覆盖探测
 └── link_parser/                  # 实现主体
     ├── __init__.py               # 分层说明（本文件第 2 节的简短版）
-    ├── config.py                 # ParserConfig + 分组配置读取 + 旧版扁平配置迁移
+    ├── config.py                 # CONFIG_META（配置项唯一来源）+ ParserConfig + 配置读写/迁移
+    │                             #   └─ PLATFORM_SWITCHES：一个平台一个开关，取代 DISABLED_PLATFORMS
     ├── constants.py              # 请求头/超时常量、PlatformEnum、GENERIC_URL_PATTERN
     ├── exceptions.py             # 异常体系（见 5.4）
+    ├── webui.py                  # 网页设置页后端接口（config 读取 / 保存 / 恢复默认）
     ├── adapters/                 # 平台解析适配器
     │   ├── __init__.py           # 导入各适配器触发自注册；_ADAPTER_MODULES 是新平台入口清单
     │   ├── registry.py           # AdapterSpec / AdapterBuildContext / register_adapter / iter_adapters
@@ -193,7 +203,10 @@ ADAPTER = register_adapter(
 2. 在 `link_parser/constants.py` 的 `PlatformEnum` 加平台标识（`register_adapter` 会用它校验 `name`）。
 3. 在 `link_parser/adapters/__init__.py` 的 `_ADAPTER_MODULES` 里 import 该模块（**顺序 = `iter_adapters()` 顺序 = 解析器构建顺序**）。
 
-自动生效的部分：`main.py` 的过滤正则（`_pattern(name)` 从注册表读）、解析器实例化（`_init_parsers` 遍历注册表）、`DISABLED_PLATFORMS` 开关、`/clear_cache`。渲染配色可选加 `card_render/theme.py` 的 `PLATFORM_COLORS`。
+自动生效的部分：`main.py` 的过滤正则（`_pattern(name)` 从注册表读）、解析器实例化（`_init_parsers` 遍历注册表）、`/clear_cache`。渲染配色可选加 `card_render/theme.py` 的 `PLATFORM_COLORS`。
+
+**开关要手动补一行**：平台启停读取 `ParserConfig.DISABLED_PLATFORMS`，它由 `config.PLATFORM_SWITCHES`
+里的开关推导；新平台不在那张表里时默认启用（不会报错，但用户关不掉），见 5.6。
 
 **注意**：`main.py` 里 8 个平台 Handler 是**静态写死**的（框架要求 Handler 在插件模块内且装饰器在类定义时求值），新增平台时**仍需在 `main.py` 补一个 3 行的 Handler**，只是不需要改过滤正则和实例化逻辑。
 
@@ -242,11 +255,59 @@ ADAPTER = register_adapter(
 于是「视频时长超限、主动跳过下载」这个**正常分支**也会刷一整段 ERROR + traceback
 （`DEBUG_LOG_ENABLED` 默认 True，必现）。新增「按设计跳过」的路径沿用这两个异常即可。
 
-### 5.6 配置读取
+### 5.6 配置读取与网页设置页
 
 - 统一入口：`link_parser.config.get_config()`（未初始化会抛 `RuntimeError`），由 `main.py` 在 `__init__` 里 `init_config(config, cache_dir, config_dir)`。
-- 配置项**同时存在分组键与旧版扁平键**：`CONFIG_GROUP_KEYS` 分组表 + `_LEGACY_DEFAULTS` 默认值表；`_cfg_get()` 先读分组，分组仍是默认值而扁平旧值被改过时优先旧值；启动时 `migrate_grouped_config()` 把旧值搬进分组。
-- **新增配置项必须同时改 4 处**：`_conf_schema.json`（分组里加 + 底部加 `invisible: true` 的旧版扁平项）、`config.py`（`CONFIG_GROUP_KEYS`、`_LEGACY_DEFAULTS`、`ParserConfig` 属性）、README 配置表、（可选）`agent.md` 本文档。
+- **配置项的唯一来源是 `CONFIG_META`**（`config.py`）：一行一个字典，声明 `key/group/label/type/default/hint`
+  （`type` 取 `string | text | int | float | bool | select | list`；`secret` 让页面用密码框展示）。
+  由它派生 `CONFIG_GROUP_KEYS`、`_LEGACY_DEFAULTS` 与 `config_meta_payload()`，
+  即**网页设置页的表单、后端的类型校验、默认值、旧值迁移共用同一份定义**。
+- 配置项**同时存在分组键与旧版扁平键**：`_cfg_get()` 先读分组，分组仍是默认值而扁平旧值被改过时优先旧值；启动时 `migrate_grouped_config()` 把旧值搬进分组。
+- **新增配置项必须同时改 5 处**：
+  1. `link_parser/config.py` 的 `CONFIG_META`（新增条目；要新增分组则同时加 `CONFIG_GROUPS`）
+  2. `link_parser/config.py` 的 `ParserConfig`（新增同名 property，供业务代码读取）
+  3. `_conf_schema.json` 的分组 `items`（**存储契约**，非开关条目要带 `invisible: true`；
+     若该组因此没有任何可见条目，**组对象本身也要加 `invisible: true`**，见下文）
+  4. `_conf_schema.json` 底部的旧版扁平条目（`invisible: true`，迁移用；历史上存在的键才需要）
+  5. README 配置表
+- **维护入口分工**：`_conf_schema.json` 里**只有「解析器开关」组和 `CLOUDFLARE_FALLBACK_ENABLED`
+  可见**，其余条目全部 `invisible`（只作存储契约），细节都在插件网页设置页里维护。
+  页面保存后由 `main.apply_runtime_config()` 把新值热应用到渲染器 / 解析器 / 截图客户端，
+  不需要重载插件；其余配置（时长、Cookie 等）本来就是每次读取时现取，自动生效。
+- **组标题必须跟着藏**：AstrBot 渲染插件配置用的是 `AstrBotConfig.vue`，
+  它渲染嵌套组的判断是 `!metadata[...].items[key]?.invisible`——**组标题本身只看
+  `type === 'object'`，不检查组内还有没有可见条目**。所以「组内条目全被标 invisible」
+  时，必须把**组对象**也标上 `invisible: true`，否则原生面板会留下一串只有标题的空卡
+  （平台设置 / Twitter 设置 / B站设置 …）。`verify_schema_alignment()` 会校验二者一致。
+  `invisible` 只影响渲染：`_config_schema_to_default_config` 与 `check_config_integrity`
+  都不读它，所以默认值照旧生成、用户存过的值也不会被剔掉。
+- **一致性自检**：`_conf_schema.json` 与 `CONFIG_META` 的键集合、分组归属必须一致
+  （AstrBot 会剔除 schema 之外的键，不一致会让用户保存的值在重载时静默丢失）。
+  插件启动时 `read_schema_problems()` 自检并逐条打日志；页面顶部也会把问题显示出来。
+  `LEGACY_ONLY_KEYS`（当前只有 `DISABLED_PLATFORMS`）是例外：它们只存在于 schema 中供迁移读取，
+  不参与键集合比对，但**必须留在 schema 里**（被剔掉就再也读不到老用户的旧值了）。
+
+#### 解析器开关（取代 `DISABLED_PLATFORMS`）
+
+平台启停是**一个平台一个 bool 开关**（`PLATFORM_<NAME>_ENABLED`），不再让用户手填平台名。
+
+| 环节 | 位置 | 说明 |
+| :--- | :--- | :--- |
+| 开关清单 | `config.PLATFORM_SWITCHES` | `(平台名, 展示名)` 元组，顺序同 `_ADAPTER_MODULES` |
+| 键名生成 | `config.platform_switch_key(name)` | `bilibili` → `PLATFORM_BILIBILI_ENABLED` |
+| 消费方 | `ParserConfig.DISABLED_PLATFORMS` | 由开关推导，注册表里有开关的新平台默认启用 |
+| 旧值迁移 | `config.migrate_platform_switches` | 把旧逗号串搬进开关并**清空旧串**，幂等 |
+
+四条改这块时要注意的：
+
+1. **新增平台适配器要顺手加一个开关**：`PLATFORM_SWITCHES` 加一行 + `_conf_schema.json`
+   的「解析器开关」组加同名 bool。漏了不会报错（`_known_platform_names()` 兜底为默认启用），
+   但用户就没法在面板/页面里关掉它。
+2. **旧串必须清空**。如果只搬不清，用户把开关拨回「启用」时，`_cfg_get` 读到的旧串
+   又会把它按回去，表现为「开关拨不动」——迁移函数里同时清了分组与顶层两处。
+3. **`DISABLED_PLATFORMS` 不能从 schema 里删**（见 `LEGACY_ONLY_KEYS`）：AstrBot 会剔除
+   schema 之外的键，删了就永远读不到老用户的旧值，静默把用户禁用的平台放出来。
+4. **开关是唯一真相**，别再加第二条「禁用平台」状态线（比如又保留一份运行时副本）。
 
 ### 5.7 缓存键 =「内容标识」（`BaseParser.cache_identity`）
 
@@ -322,18 +383,44 @@ DedeUserID__ckMd5）、`data.cookie_info.cookies`（部分渠道）、`Set-Cooki
 - 改这块时不要引入第二条 cookie 状态线，也不要让配置项的运行时副本被覆盖——历史上正是因为
   `update_cookie` 覆盖了 `_bili_ck`，导致运行期一旦出问题就只能靠重载插件恢复。
 
+### 5.10 网页设置页（`pages/rika` + `link_parser/webui.py`）
+
+AstrBot 只扫描 `pages/<page_name>/index.html`，页面脚本通过 `window.AstrBotPluginPage`
+bridge 调后端；后端路由必须带插件名前缀，页面侧写去掉前缀的相对路径。
+
+| 环节 | 位置 | 说明 |
+| :--- | :--- | :--- |
+| 路由注册 | `link_parser/webui.py::WebUIApi.register` | `GET/POST /astrbot_plugin_rika_share/config`、`POST .../config/reset` |
+| 页面挂载 | `main.py::_register_webui` | 老版本 AstrBot 没有 `register_web_api` 时静默跳过，不影响聊天侧功能 |
+| 热应用 | `main.py::apply_runtime_config` | 渲染器 / 解析器 / 截图客户端按「构造参数快照」变了才重建 |
+| 表单定义 | `config.CONFIG_META` | 页面不硬编码字段，全部由后端下发（改配置只改 `config.py`，页面自适应） |
+
+三条容易踩的约束：
+
+1. **`self.parsers` 必须原地更新**（`clear()` 后重建，不要换新的 dict）。
+   `BiliAccountService` 持有的是这个 dict 的引用，换成新对象会让它继续操作已被丢弃的解析器。
+2. **页面运行在受限 iframe 里**，拿不到 Dashboard 的 cookie / localStorage，
+   所有请求都要走 bridge；相对资源路径由 AstrBot 重写并追加短期 `asset_token`，不要手拼绝对路径。
+3. **不要往页面里搬解析/缓存/预览之类的功能**。这页的定位就是「配置维护入口」，
+   功能类页面会让配置契约与运行时状态纠缠在一起。
+
 ---
 
 ## 6. 「我要做 X，改哪里」速查表
 
 | 任务 | 改动位置 | 注意 |
 | :--- | :--- | :--- |
-| 新增平台解析 | `adapters/<平台>.py` + `constants.PlatformEnum` + `adapters/__init__._ADAPTER_MODULES` + `main.py` 一个 Handler | 见 5.1 |
+| 新增平台解析 | `adapters/<平台>.py` + `constants.PlatformEnum` + `adapters/__init__._ADAPTER_MODULES` + `main.py` 一个 Handler + `config.PLATFORM_SWITCHES` 一个开关 | 见 5.1、5.6；漏了开关只会「默认启用且关不掉」 |
+| 改哪些平台被启用 | `config.PLATFORM_SWITCHES` / `PLATFORM_<NAME>_ENABLED` 开关 | 别回头去写 `DISABLED_PLATFORMS` 逗号串，那是被取代的旧写法 |
 | 修某平台解析失效 | `adapters/<平台>.py`（+ `models/platforms/<平台>/`） | 先确认是接口变了还是模型字段变了 |
 | 调整 URL 触发范围 | 对应适配器 `register_adapter(url_pattern=...)` | `main.py` 的 filter 自动跟随，无需改 |
 | 改缓存命中规则 / 加内容标识 | `adapters/base.py` 的 `cache_identity` 阶梯；平台侧声明 `SHORT_LINK_KEYWORDS` / `IDENTITY_PATTERNS` / 覆写 `identity_from_match` | 见 5.7；**别把 token / 时间戳等易变参数带进标识** |
 | 改缓存有效期（某平台出现实时数据过期） | 平台适配器声明 `CACHE_TTL_SECONDS` | 见 5.8；改动时确认卡片也跟着换代 |
-| 新增 / 修改配置项 | 4 处，见 5.6 | 漏改会导致 WebUI 不显示或旧值丢失 |
+| 新增 / 修改配置项 | 5 处，见 5.6 | 漏改会导致页面不显示、保存被拒或旧值丢失 |
+| 调网页设置页样式 | `pages/rika/style.css`（CSS 变量 / 卡片 / 表单 / 窄屏分段） | 只跟随 `<html data-theme>`，不硬编码浅色底 |
+| 调设置页表单与保存逻辑 | `pages/rika/views/settings.js`（+ `ui.js` 的通用控件） | 字段由 `CONFIG_META` 下发，不要在页面里硬编码配置键 |
+| 调页面骨架 / 分组导航 | `pages/rika/index.html` + `app.js` | 导航项由后端分组生成，新增分组不用改 HTML |
+| 调设置页后端接口 | `link_parser/webui.py` | 只做「取参 → 校验 → 转发 config 读写 → 拼 JSON」 |
 | 新增卡片布局 | `card_render/renderer.py`（`_render_<layout>` + `_render_sync` 分发）+ `card_render/theme.py`（`LAYOUT_NAMES`）+ `_conf_schema.json`（`RENDER_LAYOUT.options` 两处）+ README | 无封面场景必须能回退（参考 `_render_immersive`） |
 | 新增主题 / 平台配色 | `card_render/theme.py`（`THEMES` / `PLATFORM_COLORS`） | 主题名要同步 schema 的 options 与 `ParserConfig.RENDER_THEME` 白名单 |
 | 调字体 / 颜文字回退 | `card_render/fonts.py` | 用 `scripts/kaomoji_render_test.py` 验证 |
@@ -351,6 +438,8 @@ DedeUserID__ckMd5）、`data.cookie_info.cookies`（部分渠道）、`Set-Cooki
 ---
 
 ## 7. 平台适配器清单
+
+每个平台都有一个独立的启停开关（`PLATFORM_<NAME>_ENABLED`），在原生配置面板与插件网页设置页都能开关，见 5.6。
 
 | 平台 | name | 触发正则（注册表） | 构建参数 | 接口与注意点 |
 | :--- | :--- | :--- | :--- | :--- |
@@ -431,7 +520,15 @@ print("handlers       :", len(handlers))      # 应为 14
 assert not bad and len(handlers) == 14
 ```
 
-期望基线（2026-09-20 实测）：模块导入 **62/62**、适配器 **8 个**（`adapter_names()` 顺序固定）、Handler **14 个**（`grep -c "@filter\." main.py` 为 17，见铁律 1）、渲染 **96 张**全部成功。
+期望基线（2026-09-21 实测）：模块导入 **63/63**（`main.py` + `link_parser/` 下 62 个模块）、适配器 **8 个**（`adapter_names()` 顺序固定）、Handler **14 个**（`grep -c "@filter\." main.py` 为 17，见铁律 1）、配置项 **51 项 / 9 组**（`len(CONFIG_META)`）、原生面板只显示 **2 个分组 / 9 个开关**（「解析器开关」8 个 + 「Cloudflare 基础设置」的 `CLOUDFLARE_FALLBACK_ENABLED`，其余 7 组整组 `invisible`）、渲染 **96 张**全部成功。
+
+**网页设置页**没有随仓库的自动化回归（它跑在受限 iframe 里），改完 `pages/rika/` 后两条路一起走：
+
+1. **真机**：从 WebUI「插件详情 → 莉卡解析」打开页面，确认分组导航、搜索、解析器开关、
+   Cookie 遮罩（能显示明文）、保存条、恢复默认与「有改动时刷新要先确认」都正常；
+2. **jsdom 冒烟**（能提前抓出「值没写进控件」这类光看代码发现不了的问题，做法见第 9 节最后一条）：
+   载入 `index.html` → 挂假 `window.AstrBotPluginPage` → 断言首屏字段数、各控件类型的回填、
+   搜索 / 分组导航 / 脏值跟踪 / 保存 / 恢复默认 / 刷新 / 折叠 / 异常路径。
 
 ---
 
@@ -448,6 +545,17 @@ assert not bad and len(handlers) == 14
 - **卡片换代不删旧图**：重新解析后新卡片另存文件名（避免覆盖正在发送的旧图），旧文件交给 `CACHE_TTL_HOURS` 回收 —— 因此缓存目录会存在同内容的多代卡片，属正常现象。
 - **超时/重发的双发问题**：OneBot 大文件发送可能 retcode 1200（invoke timeout）但实际已发出，回退重发会导致重复 —— 相关判断在 `exceptions.py` 里已删（原 `is_timeout_exception` 未被使用），如需处理请谨慎。
 - **可选依赖降级**：Pillow 缺失 → 渲染自动关闭回退文本；fontTools 缺失 → 单字体渲染；ffmpeg 缺失 → 相关媒体处理抛 `RuntimeError`；curl_cffi 缺失 → 下载只用 httpx。
+- **页面里给表单控件赋值必须用 DOM 属性、不能用 `setAttribute`**。`<textarea value="…">` 是无效的——
+  textarea 的值来自子文本，属性写法在浏览器里恒为空框。`pages/rika/ui.js` 的 `h()` 因此对 `value`
+  单独走 `node.value = …`（`option` 的 value 会反射回 attribute，两种元素都正确）。
+  踩过一次的实际后果：`CLOUDFLARE_BLACKLIST` / `CLOUDFLARE_EXTRA_HEADERS` / `CLOUDFLARE_COOKIES`
+  三个字段在页面上永远显示为空，用户照着空框编辑保存就会把原有内容清掉。
+  改 `h()` 或新增 textarea 控件后，务必确认「已有值能回填」。
+- **`pages/rika/` 没有随仓库的自动化回归**（它跑在受限 iframe 里）。做过一轮 jsdom 验证：
+  用 jsdom 载入 `index.html`，挂一个假的 `window.AstrBotPluginPage`（`ready` / `onContext` /
+  `apiGet` / `apiPost`），后端按 `webui.py` 的响应契约实现，即可覆盖首屏渲染、控件类型与回填、
+  搜索、分组导航、脏值跟踪、保存 / 恢复默认 / 刷新（含确认框）、折叠、异常路径。
+  改页面后建议照这个思路再跑一遍；光看代码很容易漏掉上面那类「值没写进去」的问题。
 - **B站凭证会在响应头回传新 Cookie 时自动刷新**并写盘，调试时不要依赖「配置文件里就是当前值」。
 - **B站 cookie 有「唯一真相」约束**：权威副本在 `BilibiliParser`（`config/bilibili_cookies.json`）。
   `BiliAccountService` 只回读与转发；`initialize()` 不得无条件覆盖解析器已有的（更新的）cookie。
@@ -491,6 +599,10 @@ assert not bad and len(handlers) == 14
 
 | 日期 | 变更 | 影响小节 |
 | :--- | :--- | :--- |
+| 2026-09-21 | 网页设置页全量功能验证（jsdom + 假 bridge，114 项断言）并修掉一个**数据丢失级 bug**：`pages/rika/ui.js` 的 `h()` 把 `value` 写成 `setAttribute`，而 `<textarea value="…">` 无效（textarea 的值来自子文本）→ `CLOUDFLARE_BLACKLIST` / `CLOUDFLARE_EXTRA_HEADERS` / `CLOUDFLARE_COOKIES` 在页面上恒为空框，用户照着编辑保存会清掉原内容。改为对 `value` 走 `node.value = …`（`option` 的 value 会反射回 attribute，两种元素都正确） | 9（新增两条坑）、8 |
+| 2026-09-21 | 修复原生配置面板残留空分组标题：`_conf_schema.json` 中「组内条目全被标 `invisible`」的分组，把**组对象本身**也标 `invisible: true`（AstrBot 的 `AstrBotConfig.vue` 渲染组标题时不检查组内是否还有可见项）；`verify_schema_alignment()` 新增「分组可见性与组内条目一致性」校验，并同步修订 `main.py` 里 `_register_webui` 的注释；改后原生面板只剩「解析器开关」与「Cloudflare 基础设置」两张卡 | 5.6、8 |
+| 2026-09-21 | 平台启停改为**一个平台一个开关**：新增 `config.PLATFORM_SWITCHES` / `platform_switch_key` / `migrate_platform_switches`，`ParserConfig.DISABLED_PLATFORMS` 改为由开关推导；旧版 `DISABLED_PLATFORMS` 逗号串在启动时迁移进开关并清空（列进 `LEGACY_ONLY_KEYS`，继续留在 schema 里供迁移读取）；`_conf_schema.json` 可见项收敛为 **8 个解析器开关 + `CLOUDFLARE_FALLBACK_ENABLED`**；配置项 44 → 51 项、分组 8 → 9 组（新增「解析器开关」） | 0、2、5.1、5.6、6、7、8 |
+| 2026-09-21 | 新增插件网页设置页 `pages/rika/`（移植自 astrbot_plugin_denia_share 的界面样式：侧边分组导航 + 玻璃拟态卡片 + 明暗主题），并设置页成为配置的**唯一维护入口**：① `config.py` 新增 `CONFIG_META` 作为配置项唯一来源（派生 `CONFIG_GROUP_KEYS` / `_LEGACY_DEFAULTS` / 页面表单），新增 `config_meta_payload` / `coerce_value` / `verify_schema_alignment` 与 `current_values` / `apply_updates` / `reset_to_defaults` / `save`；② 新增 `link_parser/webui.py`（`config` 读取/保存、`config/reset`），`main.py` 新增 `_register_webui` 与 `apply_runtime_config`（渲染器/解析器/截图客户端按参数快照热重建，`self.parsers` 原地更新）；③ `_conf_schema.json` 只保留 **10 个 bool 功能开关**可见，其余 34 项标 `invisible`；④ 新增 `.astrbot-plugin/i18n/zh-CN.json`。附带修正：`FORWARD_MAX_BATCH_MB` 默认值由 `_LEGACY_DEFAULTS` 里的 12 统一为 schema 的 **30**（此前两者不一致，旧版扁平值永远迁移不进分组） | 0、2、5.6、5.10（新增）、6、8 |
 | 2026-09-21 | 发布准备：版本号统一为 **v3.0.0**（`metadata.yaml` / `main.py` 的 `@register` / README 徽章）；新增 `LICENSE`（MIT）；README 补上 Twitter 反代 Worker 的独立仓库地址 | 6 |
 | 2026-09-21 | 发布前整理：README 重排（新增目录导航、按 `_conf_schema.json` 的 8 组重写配置表、补全 9 个漏文档的配置项、统一版本号为 `v2.4.0`）；清理仓库内测试产物（含 cookie / 账号信息的 `scripts/dev_test_out/`） | 6、10.1 |
 | 2026-09-21 | 真机冒烟发现并修复两处：① `PathTask.safe_get` 把 `IgnoreException`/`SilentException` 当控制流（DEBUG、无 traceback），此前「视频时长超限跳过下载」会刷一整段 ERROR；② B站凭证补齐 `buvid3`/`buvid4`（`_ensure_buvid`）并归一化 cookie 字典（`_credential_cookie_dict` 剔除库属性别名，cookie 串 716→642 字符） | 5.5、5.9 |
