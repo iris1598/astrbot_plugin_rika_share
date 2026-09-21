@@ -314,11 +314,19 @@ WebUI 侧边栏「插件」→ 莉卡解析 → 插件详情页 → 打开页面
 astrbot_plugin_rika_share/
 ├── main.py                       # 插件入口：插件类 + 全部事件 Handler（AstrBot 要求写在此处）
 ├── metadata.yaml                 # 插件元数据定义
-├── _conf_schema.json             # WebUI 配置项分组 Schema
+├── _conf_schema.json             # 配置存储契约（条目全部 invisible，原生面板不展示）
 ├── requirements.txt              # Python 依赖清单
 ├── README.md                     # 本文件
 ├── LICENSE                       # MIT 许可证
 ├── agent.md                      # AI 开发指南（结构契约 / 改哪里 / 验证清单 / 维护要求）
+├── CHANGELOG.md                  # 变更日志（最新在上）
+├── .astrbot-plugin/i18n/         # 插件页面标题 / 描述的国际化文案
+├── pages/rika/                   # 插件网页设置页（设置 + 链接调试两个视图）
+│   ├── index.html                #   页面骨架：侧边导航 + 内容区
+│   ├── style.css                 #   设计系统：CSS 变量 + 明暗两套主题
+│   ├── ui.js                     #   零依赖 DOM / 表单小工具
+│   ├── app.js                    #   框架层：bridge 就绪 → 建导航 → 切换视图
+│   └── views/                    #   settings.js（设置）· debug.js（链接调试）
 ├── docs/previews/                # 卡片渲染与布局预览图
 ├── scripts/                      # 开发辅助脚本
 │   ├── dev_smoke_test.py         #   独立冒烟测试：扫码登录 + 链接解析（自带 astrbot 桩）
@@ -346,6 +354,7 @@ astrbot_plugin_rika_share/
     ├── services/                 # 有状态服务（一个服务一个模块）
     │   ├── downloader.py         #   异步流式媒体下载
     │   ├── card_render/          #   卡片渲染子系统（theme / fonts / text / renderer）
+    │   ├── debug_probe.py        #   链接调试探针（逐步跑主流程 + 打码出报告）
     │   ├── web_screenshot.py     #   Cloudflare Browser Rendering 网页截图
     │   ├── live_photo.py         #   实况照片（主图 + 短视频）单文件合成
     │   └── bilibili_account.py   #   B站扫码登录 / Cookie 监控与自动应用
@@ -354,8 +363,9 @@ astrbot_plugin_rika_share/
     │   ├── json_card.py          #   JSON 分享卡片识别与链接提取
     │   └── replies.py            #   统一的回复构造（错误提示等）
     ├── utils/                    # 无状态工具（cache / media / formatting / cookie / url）
-    ├── config.py                 # 配置读取与旧版配置自动迁移
+    ├── config.py                 # CONFIG_META（配置项唯一来源）+ 配置读写 / 迁移
     ├── constants.py              # 请求头、超时、平台枚举、通用 URL 正则
+    ├── webui.py                  # 插件页面的后端接口（配置读写 + 链接调试）
     └── exceptions.py             # 异常体系
 ```
 

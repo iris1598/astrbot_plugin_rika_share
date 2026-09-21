@@ -652,12 +652,13 @@ class ParserPlugin(Star):
             result = error_result(event, f"ℹ️ {e.message}")
             if result is not None:
                 yield result
-        except ParseException as e:
-            result = error_result(event, f"❌ 解析失败: {e.message}")
-            if result is not None:
-                yield result
+        # 顺序要紧：DownloadException 是 ParseException 的子类，放在父类之后就成了死代码
         except DownloadException as e:
             result = error_result(event, f"⚠️ 下载失败: {e.message}")
+            if result is not None:
+                yield result
+        except ParseException as e:
+            result = error_result(event, f"❌ 解析失败: {e.message}")
             if result is not None:
                 yield result
         except Exception as e:

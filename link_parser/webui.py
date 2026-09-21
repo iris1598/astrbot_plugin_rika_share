@@ -6,8 +6,8 @@
   不重复实现解析/渲染/登录逻辑。
 - 路由统一带插件名前缀（``/astrbot_plugin_rika_share/xxx``），这是 AstrBot 的要求；
   页面侧通过 bridge 写的是去掉前缀的相对路径。
-- 只暴露**配置读写**：保存后由 ``ParserPlugin.apply_runtime_config()`` 把新值应用到
-  渲染器 / 解析器 / 截图客户端，不需要重载插件。
+- 只暴露**配置读写**与**链接调试**：保存后由 ``ParserPlugin.apply_runtime_config()`` 把新值应用到
+  渲染器 / 解析器 / 截图客户端，不需要重载插件；调试接口只读地跑一遍流程并回传报告，不改运行时状态。
 
 安全约定：页面运行在受限 iframe 里，但后端仍按「不可信输入」处理——
 配置只接受 :data:`~link_parser.config.CONFIG_META` 白名单里的键，
