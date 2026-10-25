@@ -96,6 +96,19 @@
         "obvious_hint": true,
         "invisible": true
       },
+      "BILI_CODEC": {
+        "description": "B站视频下载编码格式",
+        "type": "string",
+        "default": "H264",
+        "options": [
+          "H264",
+          "H265",
+          "AV1"
+        ],
+        "hint": "H.264 (AVC) 兼容性最好，聊天客户端推荐；H.265 (HEVC) 体积更小；AV1 部分客户端不支持。所选编码不可用时自动回退到其它编码",
+        "obvious_hint": true,
+        "invisible": true
+      },
       "BILI_COOKIE_MONITOR_ENABLED": {
         "description": "启用B站Cookie定时监控",
         "type": "bool",
@@ -506,6 +519,19 @@
     "type": "string",
     "default": "1080P",
     "hint": "可选: 360P, 480P, 720P, 1080P, 1080P+, 4K, 8K (需要对应账号权限)",
+    "obvious_hint": true,
+    "invisible": true
+  },
+  "BILI_CODEC": {
+    "description": "B站视频下载编码格式",
+    "type": "string",
+    "default": "H264",
+    "options": [
+      "H264",
+      "H265",
+      "AV1"
+    ],
+    "hint": "H.264 (AVC) 兼容性最好，聊天客户端推荐；H.265 (HEVC) 体积更小；AV1 部分客户端不支持。所选编码不可用时自动回退到其它编码",
     "obvious_hint": true,
     "invisible": true
   },

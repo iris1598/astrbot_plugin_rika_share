@@ -139,6 +139,20 @@ CONFIG_META: tuple[dict[str, Any], ...] = (
         "hint": "需要对应账号权限；未登录时实际只能拿到 720P",
     },
     {
+        "key": "BILI_CODEC",
+        "group": "B站设置",
+        "label": "B站视频编码格式",
+        "type": "select",
+        "default": "H264",
+        "options": ["H264", "H265", "AV1"],
+        "labels": [
+            "H.264 (AVC) 兼容性最好",
+            "H.265 (HEVC) 体积更小",
+            "AV1 (旧版默认行为)",
+        ],
+        "hint": "下载视频轨使用的编码。QQ / 微信等聊天客户端对 AV1 支持很差（发不出或无法播放），遇到就选 H.264；所选编码在该视频上不存在时自动回退到其它编码",
+    },
+    {
         "key": "BILI_COOKIE_MONITOR_ENABLED",
         "group": "B站设置",
         "label": "启用B站Cookie定时监控",
@@ -922,6 +936,19 @@ class ParserConfig:
     @property
     def BILI_QUALITY(self) -> str:
         return str(self._cfg_get("BILI_QUALITY", "1080P"))
+
+    @property
+    def BILI_CODEC(self) -> str:
+        """B站下载视频编码偏好：H264 / H265 / AV1（非法值回退 H264）"""
+        val = (
+            str(self._cfg_get("BILI_CODEC", "H264")).strip().upper().replace(".", "")
+        )
+        # 兼容 AVC / HEVC 等常见别名写法
+        if val == "AVC":
+            val = "H264"
+        elif val == "HEVC":
+            val = "H265"
+        return val if val in {"H264", "H265", "AV1"} else "H264"
 
     @property
     def BILI_COOKIE_MONITOR_ENABLED(self) -> bool:

@@ -1,7 +1,7 @@
 # 莉卡解析 · astrbot_plugin_rika_share
 
 ![AstrBot Plugin](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)
-![Version](https://img.shields.io/badge/Version-v3.0.1-brightgreen?style=flat-square)
+![Version](https://img.shields.io/badge/Version-v3.1.0-brightgreen?style=flat-square)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D3.5.13-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square)
 ![Render](https://img.shields.io/badge/Render-Pillow-orange?style=flat-square)
@@ -85,14 +85,14 @@
 
 页面来自 [astrbot_plugin_denia_share](https://github.com/xiaoxi2760/astrbot_plugin_denia_share)。
 
-插件自带一个 Dashboard 页面（插件详情页里打开），把 44 项配置按 8 个分组收在一处：
+插件自带一个 Dashboard 页面（插件详情页里打开），把 45 项配置按 8 个分组收在一处：
 
 - 左侧分组导航 + 顶部搜索，长配置表不再靠滚动找；
 - Cookie / Token 默认遮罩，可一键显示核对；
 - 底部保存条实时显示「已修改 N 项」，支持放弃更改、恢复默认与批量保存；
 - 保存后即时生效，卡片渲染、解析器开关、截图凭据都会自动热更新。
 
-全部 44 项配置都在页面里维护，原生插件配置面板不再展示配置项；
+全部 45 项配置都在页面里维护，原生插件配置面板不再展示配置项；
 页面顶部的「解析器开关」按适配器注册表动态生成，**新增平台会自动多出一个开关**，
 不用改配置也不用改代码。
 
@@ -151,7 +151,7 @@
 
 ## ⚙️ 配置说明
 
-配置按逻辑划分为 **8 个分组**，共 44 项，**全部在插件网页设置页里维护**：
+配置按逻辑划分为 **8 个分组**，共 45 项，**全部在插件网页设置页里维护**：
 WebUI 侧边栏「插件」→ 莉卡解析 → 插件详情页 → 打开页面。
 页面支持搜索、分组折叠、Cookie 遮罩、批量保存与恢复默认，
 另外带一个「链接调试」视图用于排查解析问题。
@@ -201,6 +201,7 @@ WebUI 侧边栏「插件」→ 莉卡解析 → 插件详情页 → 打开页面
 | :--- | :--- | :--- | :--- |
 | `BILI_CK` | string | `""` | B站 Cookie（SESSDATA）。*建议直接用 `/bili_login` 扫码登录* |
 | `BILI_QUALITY` | string | `"1080P"` | 下载清晰度：`360P` / `480P` / `720P` / `1080P` / `1080P+` / `4K` / `8K`（更高档位需账号权限） |
+| `BILI_CODEC` | string | `"H264"` | 下载视频编码：`H264` (AVC) / `H265` (HEVC) / `AV1`。聊天客户端对 AV1 支持差，发不出或播不了就选 `H264`；所选编码不可用时自动回退 |
 | `BILI_COOKIE_MONITOR_ENABLED` | bool | `true` | 是否启用 Cookie 定时监控 |
 | `BILI_COOKIE_CHECK_INTERVAL` | int | `3600` | 检测间隔（秒，最小 60） |
 | `BILI_NOTIFY_USER_ID` | string | `""` | Cookie 失效 / 恢复时接收通知的 QQ 号或 UserID（留空仅记日志） |

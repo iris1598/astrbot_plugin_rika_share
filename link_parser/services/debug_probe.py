@@ -672,7 +672,7 @@ def _environment_lines(plugin: Any) -> list[str]:
         # 只列非敏感项；Cookie / Token 一律只报长度
         lines.append(
             f"关键配置    : 渲染={pconfig.RENDER_ENABLED} 时长上限={pconfig.VIDEO_DURATION_MAXIMUM}s "
-            f"B站清晰度={pconfig.BILI_QUALITY} 调试日志={pconfig.DEBUG_LOG_ENABLED}"
+            f"B站清晰度={pconfig.BILI_QUALITY} B站编码={pconfig.BILI_CODEC} 调试日志={pconfig.DEBUG_LOG_ENABLED}"
         )
         for key in _SECRET_KEYS:
             value = getattr(pconfig, key, None)

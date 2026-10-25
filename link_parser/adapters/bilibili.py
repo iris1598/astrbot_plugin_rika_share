@@ -236,7 +236,8 @@ class BilibiliParser(BaseParser):
         }
 
         async def download_video():
-            output_path = pconfig.cache_dir / f"{video_info.bvid}-{page_num}.mp4"
+            # 文件名带编码后缀：切换编码格式后重新下载，避免命中旧编码的缓存文件
+            output_path = pconfig.cache_dir / f"{video_info.bvid}-{page_num}-{pconfig.BILI_CODEC.lower()}.mp4"
             if output_path.exists():
                 return output_path
             v_url, v_backups, a_url, a_backups = await self.extract_download_urls(video=video, page_index=page_info.index)
@@ -387,10 +388,20 @@ class BilibiliParser(BaseParser):
             "8K": VideoQuality._8K,
         }
 
+        # 编码格式字符串 → VideoCodecs 优先级列表映射。
+        # detect_best_streams 的 codecs 参数「越靠前优先级越高」，同清晰度下按此顺序
+        # 平局裁决；所选编码在该视频上不存在时自动落到后继编码，而不是下载失败。
+        CODEC_MAP = {
+            "H264": [VideoCodecs.AVC, VideoCodecs.HEV, VideoCodecs.AV1],
+            "H265": [VideoCodecs.HEV, VideoCodecs.AVC, VideoCodecs.AV1],
+            "AV1": [VideoCodecs.AV1, VideoCodecs.AVC, VideoCodecs.HEV],
+        }
+
         # 从配置读取用户设置的清晰度，不区分大小写
         pconfig = get_config()
         raw_quality = pconfig.BILI_QUALITY.strip().upper().replace("＋", "+")
         target_quality = QUALITY_MAP.get(raw_quality, VideoQuality._1080P)
+        codec_priority = CODEC_MAP.get(pconfig.BILI_CODEC, CODEC_MAP["H264"])
 
         if video is None:
             video = Video(bvid=bvid, aid=avid, credential=await self.credential)
@@ -402,7 +413,7 @@ class BilibiliParser(BaseParser):
         detecter = VideoDownloadURLDataDetecter(download_url_data)
         streams = detecter.detect_best_streams(
             video_max_quality=target_quality,
-            codecs=[VideoCodecs.AV1, VideoCodecs.AVC, VideoCodecs.HEV],
+            codecs=codec_priority,
             no_dolby_video=True, no_hdr=True,
         )
 

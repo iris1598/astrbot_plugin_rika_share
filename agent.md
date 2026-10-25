@@ -661,7 +661,7 @@ print("handlers       :", len(handlers))      # 应为 14
 assert not bad and len(handlers) == 14
 ```
 
-期望基线（2026-09-21 实测）：模块导入 **64/64**（`main.py` + `link_parser/` 下 63 个模块）、适配器 **8 个**（`adapter_names()` 顺序 = priority 10→80）、Handler **14 个**（8 平台 + JSON 卡片 + 兜底 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **44 项 / 8 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
+期望基线（2026-09-21 实测）：模块导入 **64/64**（`main.py` + `link_parser/` 下 63 个模块）、适配器 **8 个**（`adapter_names()` 顺序 = priority 10→80）、Handler **14 个**（8 平台 + JSON 卡片 + 兜底 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **45 项 / 8 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
 
 **「新增平台零改动」回归**：往 `link_parser/adapters/` 里临时丢一个最小适配器
 （继承 `BaseParser` + 末尾 `register_adapter(AdapterSpec(name="probe", url_pattern=..., parser_cls=...))`，
