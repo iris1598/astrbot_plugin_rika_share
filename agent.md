@@ -29,7 +29,7 @@ AstrBot 插件：自动识别聊天消息里的分享链接 / JSON 分享卡片 
 1. **所有 Handler 必须「归属」在 `main.py` 这个模块下。**
    AstrBot 用 `handler.handler_module_path == 插件模块路径` **精确匹配**来归属 Handler（框架源码 `<AstrBot>/astrbot/core/star/star_handler.py`，不在本仓库；`__module__` 不匹配的 Handler 会在 `only_activated` 过滤里被直接丢掉，功能静默失效）。
    因此：**各平台 Handler 由 `main._PLATFORM_HANDLERS` 按适配器注册表自动生成**（生成函数在本模块内构造，显式改写 `__module__` / `__name__`，仍满足归属要求），其余 Handler 手写在 `main.py`。业务逻辑一律放 `link_parser/`，Handler 壳子不许离开本模块。
-   数量基线：**14 个 Handler** = 8 平台 + JSON 卡片 + Cloudflare 兜底 + 4 指令；**新增平台会同时多出一个 Handler**，所以 Handler 数随平台数变化，一律以第 8 节的注册表冒烟脚本为准。`grep -c "@filter\." main.py` 只剩静态装饰器（当前 **11**，其中 3 行是注释里提到的 `@filter.regex`），已经不能当基线用。
+   数量基线：**15 个 Handler** = 8 平台 + JSON 卡片 + Cloudflare 兜底 + 封面下载（见 5.13）+ 4 指令；**新增平台会同时多出一个 Handler**，所以 Handler 数随平台数变化，一律以第 8 节的注册表冒烟脚本为准。`grep -c "@filter\." main.py` 只剩静态装饰器（当前 **12**，其中 3 行是注释里提到的 `@filter.regex`），已经不能当基线用。
 2. **插件类名必须以 `Plugin` 结尾（或名为 `Main`）。**
    框架按 `name.lower().endswith("plugin") or name.lower() == "main"` 找插件类（`star_manager._get_classes`）。现用名 `ParserPlugin`。
 3. **不要改插件身份标识**：`metadata.yaml` 的 `name`、`author`、目录名、`main.py` 的 `_get_plugin_data_dir()` 中的 `astrbot_plugin_rika_share`、`StarTools.get_data_dir("astrbot_plugin_rika_share")`、`_conf_schema.json` 里的配置键名。
@@ -89,6 +89,7 @@ astrbot_plugin_rika_share/
     │   └── platforms/<平台>/     # 各平台接口返回结构（每个平台一个子包，见 5.2）
     ├── services/                 # 有状态服务（一个服务一个模块 / 子系统）
     │   ├── downloader.py         # StreamDownloader：httpx 流式下载，失败回退 curl_cffi；m3u8 分片
+    │   ├── cover.py              # 封面选取与落盘（视频封面 → 图文首图 → 动图·实况静态图）
     │   ├── card_render/          # 卡片渲染子系统
     │   │   ├── renderer.py       #   ShareCardRenderer + 4 种布局实现
     │   │   ├── theme.py          #   L / THEMES / PLATFORM_COLORS / LAYOUT_NAMES / Pillow 探测
@@ -101,6 +102,7 @@ astrbot_plugin_rika_share/
     ├── output/                   # 输出构建
     │   ├── builder.py            # 分平台构建节点内容 + 合并转发 / 纯文本发送 + 媒体单独发送
     │   ├── json_card.py          # JSON 卡片识别、链接提取、EventUrlWrapper
+    │   ├── quoted.py             # 引用（回复）消息的文本与链接提取（见 5.13）
     │   └── replies.py            # error_result（受 SEND_ERROR_MESSAGES 控制）
     └── utils/
         ├── cache.py · media.py（ffmpeg/文件）· formatting.py（文本）· cookie.py
@@ -146,33 +148,37 @@ astrbot_plugin_rika_share/
  └─ AstrBot 按 Handler 的 filter 命中（正则 / 指令）
      ├─ 平台正则 Handler（如 bilibili_handler）→ _dispatch(event, "bilibili")
      ├─ json_card_handler      消息含 JSON 卡片组件时（@filter.regex(r".*")）
-     └─ cloudflare_fallback_handler  任意 http(s) 链接（@filter.regex(GENERIC_URL_PATTERN)）
+     ├─ cloudflare_fallback_handler  任意 http(s) 链接（@filter.regex(GENERIC_URL_PATTERN)）
+     └─ cover_command_handler  「下载封面」（@filter.regex(COVER_COMMAND_PATTERN)，见 5.13）
          ↓
  _dispatch：若消息含 JSON 卡片组件则直接 return（避免与 json_card_handler 重复解析）
          ↓ 取 self.parsers[平台名]
  _process_url(event, parser)   ← 所有解析流量的唯一主干
-   1. parser.cache_identity(url)  → 缓存键「内容标识」（规则见 5.7，
-                                    短链会先跟随跳转；结果按原始文本记忆在 _identity_cache）
-   2. _content_cache 命中则直接跳到第 4 步（**只写日志、不向对话发消息**）；
-      未命中：parser.search_url(url) → (keyword, match) → parser.parse(...) → ParseResult
-      （create_* 只提交下载任务，返回 PathTask），再写入 _content_cache[cache_key]
-      缓存条目按需过期：超过 parser.CACHE_TTL_SECONDS（见 5.7）则视为未命中重新解析，
-      并让卡片代次 +1（新卡片另存文件名，不覆盖可能正在发送的旧图）
-   3. build_platform_output(result, platform) → (header, nodes_content)
-   4. ShareCardRenderer.render(...)           → 卡片 PNG（失败返回 None）
-   5. 有卡片：context.send_message(umo, MessageChain().file_image(...)) 主动发送
+   1. _resolve_entry(parser, url)（本文件内）
+      a. parser.cache_identity(url) → 缓存键「内容标识」（规则见 5.7，
+         短链会先跟随跳转；结果按原始文本记忆在 _identity_cache）
+      b. _content_cache 命中则直接复用（**只写日志、不向对话发消息**）；
+         未命中：parser.search_url(url) → (keyword, match) → parser.parse(...) → ParseResult
+         （create_* 只提交下载任务，返回 PathTask），再写入 _content_cache[cache_key]
+         缓存条目按需过期：超过 parser.CACHE_TTL_SECONDS（见 5.7）则视为未命中重新解析，
+         并让卡片代次 +1（新卡片另存文件名，不覆盖可能正在发送的旧图）
+   2. build_platform_output(result, platform) → (header, nodes_content)
+   3. ShareCardRenderer.render(...)           → 卡片 PNG（失败返回 None）
+   4. 有卡片：context.send_message(umo, MessageChain().file_image(...)) 主动发送
         视频：不再发文字摘要；图文/动态：仍发 header + 图集
       无卡片：文本输出，并把 extra["limit_warnings"] 逐条追加为文本
-   6. 文本/图集发送：OneBot → send_nodes_batched（按预算拆多条）
+   5. 文本/图集发送：OneBot → send_nodes_batched（按预算拆多条）
                      其他平台 → send_plain_output
-   7. try_send_media：单独发视频/音频（图片已在节点里，不重复发）
-   8. 异常 → SilentException 静默 / IgnoreException ℹ️ / ParseException ❌
+   6. try_send_media：单独发视频/音频（图片已在节点里，不重复发）
+   7. 异常 → SilentException 静默 / IgnoreException ℹ️ / ParseException ❌
              / DownloadException ⚠️ / 其他 ❌（error_result 受 SEND_ERROR_MESSAGES 控制）
 ```
 
 **JSON 卡片流程**：`json_card_handler` →（`output/json_card.py`）识别组件、递归提取链接 → 逐个链接试 `parser.search_url`，命中即用 `EventUrlWrapper(event, link)` 把 `message_str` 换成该链接 → 走同一条 `_process_url`。
 
 **Cloudflare 兜底流程**：仅在 `CLOUDFLARE_FALLBACK_ENABLED` 且已配 Account ID / Token 时生效 → 先确认**没有任何适配器**能处理该链接 → 命中 `CLOUDFLARE_BLACKLIST` 则跳过 → 截图成功时 OneBot 发合并转发、其他平台主动发送；失败静默（按 `DEBUG_LOG_ENABLED` 决定是否打日志）。
+
+**封面下载流程**：`cover_command_handler` → 取被引用消息的文本与链接（`output/quoted.py`）→ 挑第一个被解析器认领的链接 → 走**同一条** `_resolve_entry`（命中缓存就不重复解析）→ `services/cover.py` 选封面并落盘 → 单发一张图。细节见 5.13。
 
 **输出格式约定**：`header` 形如 `莉卡解析 | 平台名 - 内容类型`（内容类型取 `extra["content_type"]`，抖音会细分 视频/实况/动图/图文）。
 
@@ -537,6 +543,49 @@ grep -rnE "logger\.(setLevel|addHandler|removeHandler|handlers|propagate|filters
 
 ---
 
+### 5.13 引用消息 + 下载封面（`cover_command_handler`）
+
+用户**引用一条含分享链接的消息**、再回一句「下载封面」，插件把该内容的封面图单独发出来。
+
+| 环节 | 位置 | 说明 |
+| :--- | :--- | :--- |
+| 触发 | `constants.COVER_COMMAND_PATTERN` + `main.cover_command_handler` | `@filter.regex`，不要求唤醒（见下） |
+| 被引用消息 | `output/quoted.py` | `quoted_text` / `quoted_links` |
+| 选封面 | `services/cover.py::select_cover` | 视频封面 → 图文首图 → 动图·实况的静态图 |
+| 解析与缓存 | `main._resolve_entry` | **与主流程同一条缓存**，命中就不重复解析 |
+| 发送 | `main._download_cover` | OneBot 直接回链；其他平台主动发送 |
+
+**为什么用 `@filter.regex` 而不是 `@filter.command`**：指令过滤器要求
+`event.is_at_or_wake_command`（@ 机器人 / 唤醒前缀 / **引用机器人自己的消息**），
+而本功能的典型用法是「引用**别人**发的链接消息」——那种引用不算唤醒，指令过滤器会直接
+不触发。正则过滤器没有这个约束，所以改用正则，并在没有引用消息时靠
+`is_at_or_wake_command` 判断「要不要提示用法」，避免在群里对无关消息插话。
+
+**链接来源只有一个：被引用消息里的链接**（`quoted_text` → `quoted_links`）。
+取法优先用框架的 `astrbot.core.utils.quoted_message`（能按 reply id 反查原消息，
+OneBot 关掉「获取引用消息」时也能用），老版本 AstrBot 没有这个模块就回退到读
+`Reply` 组件的 `message_str` / `chain`；`chain` 里的 JSON 分享卡片也会被展开。
+
+> **不要加「回查本会话最近一次解析的链接」这类猜测逻辑**：引用机器人发出的卡片图时
+> 确实拿不到链接（那条消息里只有图片），但按「最近一次解析」去猜，在群里多条链接
+> 并发时会给错内容——宁可回一句「引用的消息里没有可解析的分享链接」，让用户去引用原文。
+
+**只有被某个已启用解析器认领的链接才算命中**（`_pick_supported_link` 走
+`parser.search_url`）：普通网页、已关闭平台的链接一律按「没找到」处理，
+提示「引用的消息里没有可解析的分享链接」，而不是抛解析错误。
+
+**提示文案**（可观察行为，改动要记进 `CHANGELOG.md`）：
+`ℹ️ 请先引用一条含分享链接的消息，再回复「下载封面」` /
+`❌ 引用的消息里没有可解析的分享链接` / `ℹ️ 这条内容没有可下载的封面` / `⚠️ 封面下载失败`。
+
+**缓存文件可能已被回收**：`PathTask` 会把内存里的旧路径原样返回，所以 `_cover_for`
+取到路径后要 `path.is_file()` 复核；文件不在了就丢掉这条缓存、`refresh=True` 重新解析一次
+（最多两次）。这与 5.8 的「TTL 只管结果是否过期、不管文件还在不在」是两件事。
+
+**本功能不引入新的内存缓存**：链接直接来自被引用消息，解析结果复用 `_content_cache`。
+
+---
+
 ## 6. 「我要做 X，改哪里」速查表
 
 | 任务 | 改动位置 | 注意 |
@@ -546,6 +595,9 @@ grep -rnE "logger\.(setLevel|addHandler|removeHandler|handlers|propagate|filters
 | 改哪些平台被启用 | 网页设置页的「解析器开关」→ `DISABLED_PLATFORMS` 逗号串 | 开关由 `iter_adapters()` 动态渲染，见 5.6 |
 | 修某平台解析失效 | `adapters/<平台>.py`（+ `models/platforms/<平台>/`） | 先确认是接口变了还是模型字段变了 |
 | 调整 URL 触发范围 | 对应适配器 `register_adapter(url_pattern=...)` | `main.py` 的 filter 自动跟随，无需改 |
+| 调「引用消息 + 下载封面」的触发词 / 提示文案 | `constants.COVER_COMMAND_PATTERN` + `main._download_cover` | 见 5.13；提示文案属可观察行为 |
+| 改「什么算封面」（取哪个字段） | `services/cover.py::select_cover` | 视频封面 → 图文首图 → 动图·实况静态图 |
+| 改引用消息的解析方式 | `output/quoted.py` | 见 5.13；优先框架 `quoted_message`，回退读 `Reply` 组件 |
 | 改缓存命中规则 / 加内容标识 | `adapters/base.py` 的 `cache_identity` 阶梯；平台侧声明 `SHORT_LINK_KEYWORDS` / `IDENTITY_PATTERNS` / 覆写 `identity_from_match` | 见 5.7；**别把 token / 时间戳等易变参数带进标识** |
 | 改缓存有效期（某平台出现实时数据过期） | 平台适配器声明 `CACHE_TTL_SECONDS` | 见 5.8；改动时确认卡片也跟着换代 |
 | 新增 / 修改配置项 | 5 处，见 5.6 | 漏改会导致页面不显示、保存被拒或旧值丢失 |
@@ -634,7 +686,7 @@ grep -rnE "logger\.(setLevel|addHandler|removeHandler|handlers|propagate|filters
 **导入冒烟脚本**（放临时目录，不提交；在 AstrBot 仓库根目录执行）：
 
 ```python
-# 目的：确认全部模块可导入、8 个适配器已注册、14 个 Handler 已被框架接收
+# 目的：确认全部模块可导入、8 个适配器已注册、15 个 Handler 已被框架接收
 import importlib, pkgutil, sys
 sys.path.insert(0, r"<插件父目录>")           # 含 astrbot_plugin_rika_share 目录的那个上级目录
 
@@ -657,16 +709,16 @@ handlers = star_handlers_registry.get_handlers_by_module_name(
 )
 print("imports_failed :", bad)
 print("adapters       :", adapter_names())    # 应为 8 个，顺序固定
-print("handlers       :", len(handlers))      # 应为 14
-assert not bad and len(handlers) == 14
+print("handlers       :", len(handlers))      # 应为 15
+assert not bad and len(handlers) == 15
 ```
 
-期望基线（2026-09-21 实测）：模块导入 **64/64**（`main.py` + `link_parser/` 下 63 个模块）、适配器 **8 个**（`adapter_names()` 顺序 = priority 10→80）、Handler **14 个**（8 平台 + JSON 卡片 + 兜底 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **45 项 / 8 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
+期望基线（2026-10-26 实测）：模块导入 **66/66**（`main.py` + `link_parser/` 下 65 个模块）、适配器 **8 个**（`adapter_names()` 顺序 = priority 10→80）、Handler **15 个**（8 平台 + JSON 卡片 + 兜底 + 封面下载 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **45 项 / 8 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
 
 **「新增平台零改动」回归**：往 `link_parser/adapters/` 里临时丢一个最小适配器
 （继承 `BaseParser` + 末尾 `register_adapter(AdapterSpec(name="probe", url_pattern=..., parser_cls=...))`，
 **不改任何其他文件**），跑上面的冒烟脚本，应当看到 `adapter_names()` 多出 `probe`、
-Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复跑回到 8/14。
+Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复跑回到 8/15。
 这一步是防止自动发现 / 动态 Handler 被人「修回去」的唯一护栏。
 
 **插件页面**没有随仓库的自动化回归（它跑在受限 iframe 里），改完 `pages/rika/` 后两条路一起走：
@@ -726,6 +778,13 @@ Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复�
   同理，它内部读 `get_config()` 得包 `try`——配置没初始化时那个 RuntimeError
   会把真正的失败原因盖掉。
 - **缓存键是内容标识、不是原始链接**：短链首次出现会多一次跳转请求（一跳优先，失败再跟完整链），之后由 `_identity_cache` 记忆；标识里若混入易变参数（token / 时间戳）会导致同一内容反复重解析，规则见 5.7。
+- **引用消息不一定是「有内容的」**：OneBot 关掉「获取引用消息」时 `Reply` 只有 `id`，
+  必须走框架的 `quoted_message` 反查，所以 `output/quoted.py` 的两条取法都要留着。
+  但**不要**再往前一步去猜（比如「回查最近一次解析的链接」）：引用机器人发的卡片图时
+  拿不到链接是正常的，猜错内容比不回答更糟，见 5.13。
+- **`@filter.regex` 不要求唤醒**：`cover_command_handler` 因此会在没 @ 机器人时也触发。
+  它第一件事是确认「有没有引用消息」，没有就只在 `is_at_or_wake_command` 时提示用法——
+  去掉这个判断，群里任何人打出「下载封面」都会被插件插一句话。
 
 ---
 
@@ -752,6 +811,7 @@ Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复�
 15. 插件页面新增视图 / 后端路由，或链接调试的步骤、报告格式变化（→ 第 5.10、5.11 节、第 2 节）
 16. 「按设计跳过」与「失败」的判定口径变化（→ 第 5.4、5.11 节）
 17. 日志的实现方式变化：日志器来源、是否拦截/改动框架日志（→ 第 5.12 节、第 8 节、第 9 节）
+18. 封面下载变化：触发词、链接来源（只认被引用消息）、封面取法、提示文案（→ 第 5.13 节、第 4 节、第 6 节、第 9 节）
 
 ### 10.2 更新方式
 

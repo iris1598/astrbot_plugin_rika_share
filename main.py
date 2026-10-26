@@ -32,7 +32,7 @@ from astrbot.api.star import Context, Star, register, StarTools
 from .link_parser.adapters import iter_adapters
 from .link_parser.adapters.registry import AdapterBuildContext
 from .link_parser.config import get_config, init_config, migrate_grouped_config
-from .link_parser.constants import GENERIC_URL_PATTERN
+from .link_parser.constants import COVER_COMMAND_PATTERN, GENERIC_URL_PATTERN
 from .link_parser.exceptions import (
     DownloadException,
     IgnoreException,
@@ -45,13 +45,17 @@ from .link_parser.output import (
     build_platform_output,
     error_result,
     extract_links_from_event,
+    find_reply_component,
     has_json_component,
+    quoted_links,
+    quoted_text,
     send_nodes_batched,
     send_plain_output,
     try_send_media,
 )
 from .link_parser.services.bilibili_account import BiliAccountService
 from .link_parser.services.card_render import ShareCardRenderer
+from .link_parser.services.cover import CoverPick, download_cover
 from .link_parser.services.downloader import StreamDownloader
 from .link_parser.services.web_screenshot import (
     CloudflareScreenshotClient,
@@ -534,43 +538,54 @@ class ParserPlugin(Star):
         self._identity_cache[text] = identity
         return identity
 
+    async def _resolve_entry(
+        self, parser: Any, url: str, *, refresh: bool = False
+    ) -> tuple[str, _ContentCacheEntry]:
+        """取「内容标识 → 缓存条目」，未命中或已过期则解析一次并写入缓存。
+
+        ``refresh=True`` 跳过缓存直接重新解析（封面下载遇到缓存文件已被回收时用）。
+        返回 ``(cache_key, entry)``，``cache_key`` 同时用于派生卡片文件名。
+        """
+        # 缓存键 = 内容标识：不同短链 / 长链指向同一内容时命中同一条缓存
+        cache_key = await self._content_cache_key(parser, url)
+        entry = None if refresh else self._content_cache.get(cache_key)
+
+        # 结果缓存过期：内容带实时数据（如 B站在线人数），不能继续复用旧结果
+        if entry is not None and entry.expired(parser.CACHE_TTL_SECONDS):
+            logger.info(
+                f"解析缓存已过期（>{parser.CACHE_TTL_SECONDS}s），重新解析以刷新实时数据: "
+                f"{entry.result.platform.display_name} [{cache_key}]"
+            )
+            entry = None
+
+        if entry is None:
+            # 若上一代结果仍在（过期场景），代次 +1 让新卡片另存文件，
+            # 避免覆盖可能正在被发送的旧卡片
+            previous = self._content_cache.pop(cache_key, None)
+            generation = previous.generation + 1 if previous else 0
+            keyword, searched = parser.search_url(url)
+            result = await parser.parse(keyword, searched)
+            entry = _ContentCacheEntry(
+                result=result, parsed_at=time.monotonic(), generation=generation
+            )
+            self._content_cache[cache_key] = entry
+        else:
+            # 命中缓存只在日志里提示，不向对话发送消息
+            age = time.monotonic() - entry.parsed_at
+            logger.info(
+                f"命中解析缓存（{age:.0f}s 前解析），跳过重复解析: "
+                f"{entry.result.platform.display_name} [{cache_key}] {url[:80]}"
+            )
+        return cache_key, entry
+
     async def _process_url(
         self, event: AstrMessageEvent, parser: Any
     ) -> AsyncGenerator[MessageEventResult, None]:
         url = event.message_str.strip()
 
         try:
-            # 缓存键 = 内容标识：不同短链 / 长链指向同一内容时命中同一条缓存
-            cache_key = await self._content_cache_key(parser, url)
-            entry = self._content_cache.get(cache_key)
-
-            # 结果缓存过期：内容带实时数据（如 B站在线人数），不能继续复用旧结果
-            if entry is not None and entry.expired(parser.CACHE_TTL_SECONDS):
-                logger.info(
-                    f"解析缓存已过期（>{parser.CACHE_TTL_SECONDS}s），重新解析以刷新实时数据: "
-                    f"{entry.result.platform.display_name} [{cache_key}]"
-                )
-                entry = None
-
-            if entry is None:
-                # 若上一代结果仍在（过期场景），代次 +1 让新卡片另存文件，
-                # 避免覆盖可能正在被发送的旧卡片
-                previous = self._content_cache.pop(cache_key, None)
-                generation = previous.generation + 1 if previous else 0
-                keyword, searched = parser.search_url(url)
-                result = await parser.parse(keyword, searched)
-                entry = _ContentCacheEntry(
-                    result=result, parsed_at=time.monotonic(), generation=generation
-                )
-                self._content_cache[cache_key] = entry
-            else:
-                # 命中缓存只在日志里提示，不向对话发送消息
-                age = time.monotonic() - entry.parsed_at
-                logger.info(
-                    f"命中解析缓存（{age:.0f}s 前解析），跳过重复解析: "
-                    f"{entry.result.platform.display_name} [{cache_key}] {url[:80]}"
-                )
-                result = entry.result
+            cache_key, entry = await self._resolve_entry(parser, url)
+            result = entry.result
 
             # 根据平台构建：标题头 + 合并转发内容列表
             header, nodes_content = await build_platform_output(
@@ -658,6 +673,119 @@ class ParserPlugin(Star):
                 yield result
         except Exception as e:
             logger.exception("解析异常")
+            result = error_result(event, f"❌ 处理出错: {str(e)[:100]}")
+            if result is not None:
+                yield result
+
+    # ==================== 封面下载（引用回复触发） ====================
+
+    def _pick_supported_link(self, links: list[str]) -> tuple[Any, str] | None:
+        """挑出第一个「有适配器认领」的链接。
+
+        没被任何已启用解析器认领的链接（普通网页、已关闭的平台）不算命中——
+        与其对无关链接回一句「解析失败」，不如让调用方按「没找到」处理。
+        """
+        for link in links:
+            link = link.rstrip(".,!?;:)'\"】」》）")
+            for parser in self.parsers.values():
+                try:
+                    parser.search_url(link)
+                except Exception:
+                    continue
+                return parser, link
+        return None
+
+    async def _cover_for(
+        self, parser: Any, url: str
+    ) -> tuple[CoverPick | None, Path | None]:
+        """解析（或复用缓存）并取封面文件，返回 ``(选择结果, 路径)``。
+
+        缓存里的文件可能已被 TTL 清理（``PathTask`` 会把旧路径原样返回），
+        所以取到路径后要确认文件还在，否则丢掉这条缓存重新解析一次。
+        """
+        last_pick: CoverPick | None = None
+        for attempt in (0, 1):
+            cache_key, entry = await self._resolve_entry(
+                parser, url, refresh=attempt > 0
+            )
+            pick, path = await download_cover(entry.result)
+            last_pick = pick
+            if path is not None and path.is_file():
+                return pick, path
+            self._content_cache.pop(cache_key, None)
+            if pick is None:
+                break  # 这条内容本来就没有封面，重试也没有意义
+        return last_pick, None
+
+    @filter.regex(COVER_COMMAND_PATTERN.pattern)
+    async def cover_command_handler(self, event: AstrMessageEvent):
+        """引用一条含分享链接的消息并回复「下载封面」，下载该内容的封面图。"""
+        if find_reply_component(event) is None:
+            # 没有引用任何消息：只有明确叫到机器人时才提示用法，避免在群里插话
+            if event.is_at_or_wake_command:
+                yield event.plain_result(
+                    "ℹ️ 请先引用一条含分享链接的消息，再回复「下载封面」"
+                )
+            return
+
+        async for r in self._download_cover(event):
+            yield r
+
+    async def _download_cover(
+        self, event: AstrMessageEvent
+    ) -> AsyncGenerator[MessageEventResult, None]:
+        text = await quoted_text(event)
+        target = self._pick_supported_link(quoted_links(event, text))
+        if target is None:
+            yield event.plain_result("❌ 引用的消息里没有可解析的分享链接")
+            return
+
+        parser, url = target
+        try:
+            pick, path = await self._cover_for(parser, url)
+            if pick is None:
+                yield event.plain_result("ℹ️ 这条内容没有可下载的封面")
+                return
+            if path is None:
+                yield event.plain_result("⚠️ 封面下载失败")
+                return
+
+            header = f"莉卡解析 | {parser.platform.display_name} - {pick.label}"
+            logger.info(f"封面已下载: {url[:80]} → {path.name}")
+            if self._is_onebot(event):
+                yield event.chain_result([
+                    Comp.Plain(header),
+                    Comp.Image.fromFileSystem(str(path)),
+                ])
+            else:
+                # 非 OneBot 平台：主动发送，避免「回复时 @ 发送人」污染图片消息
+                try:
+                    sent = await self.context.send_message(
+                        event.unified_msg_origin,
+                        MessageChain().message(f"{header}\n").file_image(str(path)),
+                    )
+                    if not sent:
+                        logger.warning(f"封面主动发送未找到匹配平台会话: {path.name}")
+                except Exception as e:
+                    logger.warning(f"封面主动发送异常: {e}")
+
+        except SilentException:
+            return  # 匹配不到模式时静默失败，不发送通知
+        except IgnoreException as e:
+            result = error_result(event, f"ℹ️ {e.message}")
+            if result is not None:
+                yield result
+        # 顺序要紧：DownloadException 是 ParseException 的子类，放在父类之后就成了死代码
+        except DownloadException as e:
+            result = error_result(event, f"⚠️ 下载失败: {e.message}")
+            if result is not None:
+                yield result
+        except ParseException as e:
+            result = error_result(event, f"❌ 解析失败: {e.message}")
+            if result is not None:
+                yield result
+        except Exception as e:
+            logger.exception("封面下载异常")
             result = error_result(event, f"❌ 处理出错: {str(e)[:100]}")
             if result is not None:
                 yield result

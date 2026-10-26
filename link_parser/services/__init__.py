@@ -1,6 +1,7 @@
 """有状态服务层（每个服务一个模块，按功能命名）。
 
 - :mod:`~link_parser.services.downloader`         异步流式媒体下载
+- :mod:`~link_parser.services.cover`              封面选取与落盘（引用消息 + 下载封面）
 - :mod:`~link_parser.services.card_render`        解析结果卡片渲染（Pillow，多模块子系统）
 - :mod:`~link_parser.services.web_screenshot`     Cloudflare Browser Rendering 网页截图
 - :mod:`~link_parser.services.live_photo`         实况照片（主图 + 短视频）单文件合成
