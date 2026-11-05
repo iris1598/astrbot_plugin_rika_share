@@ -1,7 +1,7 @@
 # 莉卡解析 · astrbot_plugin_rika_share
 
 ![AstrBot Plugin](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)
-![Version](https://img.shields.io/badge/Version-v3.1.0-brightgreen?style=flat-square)
+![Version](https://img.shields.io/badge/Version-v3.2.0-brightgreen?style=flat-square)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D3.5.13-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square)
 ![Render](https://img.shields.io/badge/Render-Pillow-orange?style=flat-square)
@@ -121,7 +121,14 @@
 | **Twitter / X** | 推文 / 媒体 | 高清图片、视频 | 解析接口与媒体均可走自建反代 |
 | **AcFun** | 视频 | 视频文件 | 基础视频解析 |
 | **NGA** | 帖子内容 / 主题 | 正文与图集 | 论坛内容快速展示 |
+| **网易云音乐** | 歌曲 / 专辑 / 歌单 / 电台 | 专辑封面图、音频（语音发送） | **联动提供**：需安装 [astrbot_plugin_multincm](https://github.com/iris1598/astrbot_plugin_multincm)，登录态复用其配置 |
 | **通用网页** | 任意 HTTP/HTTPS 页面 | 网页高清截图 | 需开通 Cloudflare Browser Rendering |
+
+> **关于网易云音乐**：本插件不内置网易云解析。检测到已安装 `astrbot_plugin_multincm`
+> （网易云多选点歌）时，会自动把它接入为一个解析器——网易云链接由莉卡渲染分享卡片并发送音频
+> （multincm 开启「使用音乐卡片」时 QQ 平台直接发送音乐卡片），登录态（Cookie / 账号）复用
+> multincm 的配置；multincm 未安装时没有这个解析器，其余平台不受影响。
+> multincm 自己的指令（点歌 / 歌词 / 直链等）不受联动影响。
 
 ---
 
@@ -459,6 +466,16 @@ ADAPTER = register_adapter(
 
 平台的**先后顺序**由 `AdapterSpec.priority` 决定（内置平台占 10-80，新平台默认 100 排在末尾）；
 它同时是解析器构建顺序与设置页开关的排列顺序，需要抢占某个位置时才显式声明。
+
+### 外部插件作为解析器（联动）
+
+解析器也可以来自**其他插件**：在 `link_parser/adapters/_external.py` 的
+`EXTERNAL_ADAPTERS` 清单里登记一行 `(插件目录名, 桥接模块名)`，本插件启动时
+（生成平台 Handler 之前）会尝试导入该桥接模块并调用其 `register()`——桥接模块内
+定义一个继承 `BaseParser` 的解析器并注册进适配器注册表即可，其余环节（事件过滤器、
+解析器实例化、设置页开关）与内置平台完全一致。外部插件未安装时就没有这个解析器，
+仅记一条 DEBUG 日志。网易云音乐的解析正是这样由
+[astrbot_plugin_multincm](https://github.com/iris1598/astrbot_plugin_multincm) 联动提供的。
 
 若平台返回结构较复杂，在 `link_parser/models/platforms/<平台名>/` 下新建子包：
 模块名按接口命名（如 `video_info.py`、`status.py`），并在子包 `__init__.py` 中导出

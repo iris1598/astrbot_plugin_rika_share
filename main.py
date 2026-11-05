@@ -1,6 +1,7 @@
 """莉卡解析 - 链接分享解析插件
 
 支持 B站 | 抖音 | 快手 | 微博 | 小红书 | Twitter | AcFun | NGA
+网易云音乐由外部插件联动提供（安装 astrbot_plugin_multincm 后自动接入）
 
 移植自 nonebot-plugin-parser (https://github.com/fllesser/nonebot-plugin-parser)
 内置B站扫码登录、Cookie监控、自动应用Cookie功能
@@ -10,7 +11,7 @@
 （见 ``_PLATFORM_HANDLERS``），因此**新增平台不需要改动本文件**。
 具体实现按职责分层放在 ``link_parser`` 包中：
 
-    link_parser/adapters   平台解析适配器（自动发现 + 自注册）
+    link_parser/adapters   平台解析适配器（自动发现 + 自注册 + 外部插件接入）
     link_parser/models     数据类型
     link_parser/services   下载 / 渲染 / 截图 / 实况照片 / B站账号
     link_parser/output     解析结果到消息链的输出构建
@@ -30,6 +31,7 @@ import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star, register, StarTools
 
 from .link_parser.adapters import iter_adapters
+from .link_parser.adapters._external import register_external_adapters
 from .link_parser.adapters.registry import AdapterBuildContext
 from .link_parser.config import get_config, init_config, migrate_grouped_config
 from .link_parser.constants import COVER_COMMAND_PATTERN, GENERIC_URL_PATTERN
@@ -103,6 +105,10 @@ def _make_platform_handler(name: str, pattern: str):
 #: 排在 JSON 卡片 / Cloudflare 兜底 / 指令之前，这里保持不变。
 #:
 #: 新增平台不需要动本文件：注册了适配器就会在这里自动多出一个 Handler。
+#: 外部解析器插件（见 ``link_parser/adapters/_external.py``）也在这一步之前接入，
+#: 因此已安装外部插件时会自动多出对应平台；未安装则没有该平台，一切照旧。
+register_external_adapters()
+
 _PLATFORM_HANDLERS: dict[str, Any] = {
     spec.name: _make_platform_handler(spec.name, spec.url_pattern.pattern)
     for spec in iter_adapters()
@@ -136,7 +142,7 @@ class _ContentCacheEntry:
 
 
 @register("莉卡解析", "iris1598",
-          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA", "v3.1.0")
+          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA|网易云(联动)", "v3.2.0")
 class ParserPlugin(Star):
     # 合并转发（Comp.Nodes）是 OneBot v11 独有特性，其他平台均不支持
     @staticmethod
@@ -515,6 +521,33 @@ class ParserPlugin(Star):
 
     # ==================== 核心处理流程 ====================
 
+    #: 支持 ``Comp.Music`` 音乐卡片的平台（与 multincm._send_song 的判断保持一致）
+    _MUSIC_CARD_PLATFORMS = frozenset({"qq", "aiocqhttp", "qqguild"})
+
+    @staticmethod
+    def _supports_music_card(event: AstrMessageEvent) -> bool:
+        """当前平台是否能发送 ``Comp.Music`` 音乐卡片。"""
+        try:
+            return event.get_platform_name().lower() in ParserPlugin._MUSIC_CARD_PLATFORMS
+        except Exception:
+            return False
+
+    @staticmethod
+    def _build_music_card(spec: dict[str, Any]) -> "Comp.Music | None":
+        """按外部解析器下发的规格构造 ``Comp.Music``（type=163，按歌曲 ID 由协议端签名）。
+
+        Pydantic v1 会忽略 ``_`` 前缀字段，``_type`` 需经 ``__dict__`` 注入
+        （与 multincm._send_music_card 的做法一致）。构造失败返回 ``None``，
+        由调用方回退常规输出。
+        """
+        try:
+            card = Comp.Music(id=int(spec["id"]))
+            card.__dict__["_type"] = str(spec.get("type") or "163")
+            return card
+        except Exception:
+            logger.warning("构造音乐卡片失败，回退常规解析输出", exc_info=True)
+            return None
+
     async def _content_cache_key(self, parser: Any, text: str) -> str:
         """取解析结果的缓存键。
 
@@ -587,6 +620,17 @@ class ParserPlugin(Star):
             cache_key, entry = await self._resolve_entry(parser, url)
             result = entry.result
 
+            # ========== 音乐卡片模式（外部解析器联动，见 5.14） ==========
+            # 外部解析器按其插件设置（multincm 的 use_music_card）要求发音乐卡片时，
+            # 音乐卡片整体替代文本输出 / 卡片图 / 音频；平台不支持或构造失败
+            # 则继续走下面的常规输出（此时音频内容仍在，回退为语音发送）。
+            music_card_spec = result.extra.get("music_card")
+            if music_card_spec and self._supports_music_card(event):
+                music_card = self._build_music_card(music_card_spec)
+                if music_card is not None:
+                    yield event.chain_result([music_card])
+                    return
+
             # 根据平台构建：标题头 + 合并转发内容列表
             header, nodes_content = await build_platform_output(
                 result, result.platform.name
@@ -610,6 +654,9 @@ class ParserPlugin(Star):
                 isinstance(c, VideoContent) and not c.is_image_like
                 for c in result.contents
             )
+            # 外部解析器声明「卡片已承载全部信息」（如网易云歌曲 / 歌单）：
+            # 卡片渲染成功时不再重复发送文本输出；渲染关闭或失败时文本仍是信息载体，不受影响
+            suppress_text = bool(result.extra.get("suppress_text_output"))
 
             if render_path is not None:
                 # 渲染图单独发送（主动发送，不经过事件回复管线，
@@ -626,8 +673,9 @@ class ParserPlugin(Star):
                 except Exception as e:
                     logger.warning(f"解析卡片主动发送异常: {e}")
 
-                if is_video:
-                    # 视频：卡片已承载全部信息（含时长超限警告），不再重复发送文字摘要或警告
+                if is_video or suppress_text:
+                    # 视频 / 外部解析器声明抑制：卡片已承载全部信息（含警告块），
+                    # 不再重复发送文字摘要或警告
                     header_text = ""
                     text_items = []
                 else:

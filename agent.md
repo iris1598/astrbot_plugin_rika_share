@@ -19,7 +19,7 @@ AstrBot 插件：自动识别聊天消息里的分享链接 / JSON 分享卡片 
 | 实现包 | `link_parser/`（adapters / models / services / output / utils / webui） |
 | 配置维护入口 | 插件网页设置页 `pages/rika/`（设置 + 链接调试两个视图）；原生配置面板**不展示任何配置项**，只作存储契约 |
 | 变更日志 | `CHANGELOG.md`（最新在上）；`agent.md` 只描述**当前状态** |
-| 支持平台 | B站、抖音、快手、微博、小红书、Twitter(X)、AcFun、NGA + Cloudflare 网页截图兜底 |
+| 支持平台 | B站、抖音、快手、微博、小红书、Twitter(X)、AcFun、NGA + Cloudflare 网页截图兜底；**网易云音乐由外部插件联动提供**（安装 `astrbot_plugin_multincm` 后自动接入，见 5.14） |
 | 上游来源 | 移植自 [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser) |
 
 ---
@@ -29,7 +29,7 @@ AstrBot 插件：自动识别聊天消息里的分享链接 / JSON 分享卡片 
 1. **所有 Handler 必须「归属」在 `main.py` 这个模块下。**
    AstrBot 用 `handler.handler_module_path == 插件模块路径` **精确匹配**来归属 Handler（框架源码 `<AstrBot>/astrbot/core/star/star_handler.py`，不在本仓库；`__module__` 不匹配的 Handler 会在 `only_activated` 过滤里被直接丢掉，功能静默失效）。
    因此：**各平台 Handler 由 `main._PLATFORM_HANDLERS` 按适配器注册表自动生成**（生成函数在本模块内构造，显式改写 `__module__` / `__name__`，仍满足归属要求），其余 Handler 手写在 `main.py`。业务逻辑一律放 `link_parser/`，Handler 壳子不许离开本模块。
-   数量基线：**15 个 Handler** = 8 平台 + JSON 卡片 + Cloudflare 兜底 + 封面下载（见 5.13）+ 4 指令；**新增平台会同时多出一个 Handler**，所以 Handler 数随平台数变化，一律以第 8 节的注册表冒烟脚本为准。`grep -c "@filter\." main.py` 只剩静态装饰器（当前 **12**，其中 3 行是注释里提到的 `@filter.regex`），已经不能当基线用。
+   数量基线：**15 个 Handler** = 8 平台 + JSON 卡片 + Cloudflare 兜底 + 封面下载（见 5.13）+ 4 指令；**新增平台会同时多出一个 Handler**（含外部解析器插件接入的平台，见 5.14——装着 `astrbot_plugin_multincm` 时为 16 个），所以 Handler 数随平台数变化，一律以第 8 节的注册表冒烟脚本为准。`grep -c "@filter\." main.py` 只剩静态装饰器（当前 **12**，其中 3 行是注释里提到的 `@filter.regex`），已经不能当基线用。
 2. **插件类名必须以 `Plugin` 结尾（或名为 `Main`）。**
    框架按 `name.lower().endswith("plugin") or name.lower() == "main"` 找插件类（`star_manager._get_classes`）。现用名 `ParserPlugin`。
 3. **不要改插件身份标识**：`metadata.yaml` 的 `name`、`author`、目录名、`main.py` 的 `_get_plugin_data_dir()` 中的 `astrbot_plugin_rika_share`、`StarTools.get_data_dir("astrbot_plugin_rika_share")`、`_conf_schema.json` 里的配置键名。
@@ -79,6 +79,7 @@ astrbot_plugin_rika_share/
     │   ├── __init__.py           # 自动发现：导入本目录全部适配器模块（新增平台无需在这里登记）
     │   ├── registry.py           # AdapterSpec(含 priority) / AdapterBuildContext / register_adapter / iter_adapters
     │   ├── base.py               # BaseParser 基类 + @handle 装饰器 + 解析结果构造工具
+    │   ├── _external.py          # 外部解析器插件接入点（探针清单 + 导入桥接模块并调其 register()，见 5.14）
     │   └── bilibili.py · douyin.py · kuaishou.py · weibo.py
     │       xiaohongshu.py · twitter.py · nga.py · acfun.py
     ├── models/                   # 数据类型
@@ -266,6 +267,9 @@ JSON 卡片里「哪个平台先认领链接」= 设置页开关排列 = `DISABL
 | `limit_warnings` | 时长超限等警告列表（`list[str]`） | 卡片警告块；无卡片时追加为文本 |
 | `info` | B站 AI 总结 | 卡片正文补充 |
 | `is_video` | 小红书等「是否视频笔记」 | 输出分支 |
+| `suppress_text_output` | 「卡片已承载全部信息」声明：卡片渲染成功时不再发送文本输出（渲染关闭/失败仍回退文本） | `_process_url` |
+| `music_card` | 音乐卡片规格 `{"type": "163", "id": <歌曲id>}`：QQ 系平台发送 `Comp.Music` 并整体替代卡片图/文本/音频 | `main._process_url` |
+| `audio_as_file` | 音频以文件（`Comp.File`）而非语音发送 | `output/builder.try_send_media` |
 
 `ParseResult` 的关键属性：`video`（**仅当 `contents` 恰好 1 个且非图片类产物**时才返回）、`img_contents`、`all_grid_images`、`content_type`。
 `VideoContent.is_image_like` / `still_path`：动图（Twitter gif）与动态照片（抖音实况）走**图片**通道，不要再当视频发一遍。
@@ -586,11 +590,77 @@ OneBot 关掉「获取引用消息」时也能用），老版本 AstrBot 没有�
 
 ---
 
+### 5.14 外部解析器插件（网易云 = astrbot_plugin_multincm 联动）
+
+解析器可以来自**其他插件**：`adapters/_external.py`（下划线前缀 = 自动发现跳过）持有
+`EXTERNAL_ADAPTERS = ((插件目录名, 桥接模块名), ...)` 清单；`main.py` 在生成
+`_PLATFORM_HANDLERS` **之前**调用 `register_external_adapters()`，逐个导入外部插件的
+桥接模块并调用其 `register()`——桥接模块向注册表注册一个继承 `BaseParser` 的解析器，
+其余环节（事件过滤器、`_init_parsers`、设置页开关）与内置平台完全一致。
+
+| 环节 | 位置 | 说明 |
+| :--- | :--- | :--- |
+| 探测清单 | `adapters/_external.py::EXTERNAL_ADAPTERS` | 目前仅 `("astrbot_plugin_multincm", "rikashare_bridge")` |
+| 接入时机 | `main.py` 的 `register_external_adapters()` | **必须在 `_PLATFORM_HANDLERS` 之前**（注册表是 Handler 生成的输入） |
+| 桥接模块 | `<multincm>/rikashare_bridge.py` | `NeteaseParser(BaseParser)` + `register()`；平台名 `netease` |
+| 模块根候选 | 两侧各自的 `_MODULE_ROOTS` / `_RIKA_ROOTS` | `data.plugins.<名>` → `astrbot.builtin_stars.<名>` → 裸包名（开发脚本） |
+
+**三种未接入形态**（都只影响这一个平台，不连累本插件加载）：
+
+| 情形 | 表现 |
+| :--- | :--- |
+| 外部插件未安装 | DEBUG 日志「未检测到」，没有这个解析器（用户要求的行为） |
+| 插件在但桥接模块缺失 / 依赖缺失 / `register()` 异常 | WARNING 日志，跳过接入 |
+| 外部插件被停用（inactivated） | 照常注册，但桥接解析器在解析时查 `sp.global_get("inactivated_plugins")`，命中则抛 `SilentException` 静默跳过（停用 = 联动停用，无需重载本插件） |
+
+**为什么是本插件「拉取」而不是外部插件「推送」**：注册表驱动平台 Handler 生成，而 Handler
+在本插件入口模块导入时就按注册表快照生成完毕；外部插件加载顺序不受本插件控制（可能晚于
+本插件实例化），推送会错过这两个时机。拉取让时机确定。
+
+**与 multincm 指令的共存**：multincm 的「点歌 / 解析 / 歌词 / 直链」等指令消息（参数带
+网易云链接时）会同时命中 `netease_handler` 的正则——桥接解析器在 `parse` 入口用
+`_COMMAND_MESSAGE_RE`（与 multincm 指令正则同款）识别它们并抛 `SilentException` 让出，
+指令由 multincm 自己的 handler 响应，不会重复回复。注意 `search_url` / `cache_identity`
+层**不做**这个判断（`cache_identity` 对指令消息里的短链可能多跳一次转，属可接受开销，
+结果会被 `_identity_cache` 记忆）。
+
+**桥接模块不得在顶层自注册**（只在 `register()` 里注册）：本插件重载后注册表是全新实例，
+而桥接模块在 `sys.modules` 里仍是旧对象（顶层代码不会重跑），靠显式调用才能重新注册。
+反过来，multincm 单独重载后本插件仍持有旧解析器类——功能继续（旧代码对象仍被引用）但
+逻辑陈旧，重载本插件即恢复；multincm 的 `terminate()` 会重建 netease 会话，所以卸载
+multincm 后旧解析器也不会悬空崩溃。
+
+**`netease` 的注册细节**：`AdapterSpec(priority=100)` 默认排在内置平台之后；
+短链 `163cn.tv` 的 `@handle` **不捕获命名分组**，让 `cache_identity` 走短链展开阶梯
+（同一首歌的不同短链共用缓存）；内容标识形如 `netease:id=<id>&type=<type>`；
+封面放 `graphics`（卡片用、合并转发不重复发）、音频放 `contents`。**发送形态遵循
+multincm 的设置**（均在解析时现读其运行时配置，改动后只对新解析生效）：
+
+- 全部结果声明 `extra["suppress_text_output"]`——分享卡片已承载标题/作者/封面/描述，
+  卡片渲染成功后不再发「莉卡解析 | …」文本；渲染关闭或失败仍回退文本；
+- 歌曲 + `use_music_card` 开启 + 拿到播放地址 → `extra["music_card"] = {"type": "163", "id": 歌曲id}`，
+  QQ 系平台（`_MUSIC_CARD_PLATFORMS`：qq / aiocqhttp / qqguild）只发音乐卡片（协议端按
+  ID 签名，音频任务不会被 await、不产生下载）；平台不支持或构造失败回退常规输出
+  （卡片图 + 语音）。**仅限歌曲（Song）**：电台节目 ID 不是歌曲 ID，163 卡片会取错内容；
+- 歌曲 + `send_as_file` 开启 → `extra["audio_as_file"]`，音频以 `Comp.File` 发送
+  （Discord 平台一律发文件）。
+
+VIP 歌曲拿不到播放地址时降级为仅卡片并写 `extra["limit_warnings"]`（此时音乐卡片
+也不下发，与 multincm 的门槛一致）。**歌曲卡的信息增强**：作者行带第一位音乐人头像
+（multincm 侧 `get_artist_info`，端点 `/weapi/artist/head/info/get` 源自 pyncm
+`GetArtistDetails`；失败只少头像不连累解析）、作者副标题放专辑名
+（`Author.description`）、`extra["stats_line"]` 放 `⏱ 时长 🔥 热度`（⏱ 图标已加进
+`text._STAT_LABELS`）。电台节目 / 歌单 / 专辑 / 电台维持原样（描述里已含统计）。
+卡片配色 `netease: #C20C0C` 已加进 `PLATFORM_COLORS`。
+
+---
+
 ## 6. 「我要做 X，改哪里」速查表
 
 | 任务 | 改动位置 | 注意 |
 | :--- | :--- | :--- |
 | 新增平台解析 | **只新建 `adapters/<平台>.py`**（可选：`models/platforms/<平台>/` 子包、`theme.py` 配色、`builder.py` 定制分支） | 见 5.1；不用改 `main.py` / `constants.py` / `adapters/__init__.py`，开关与 Handler 都自动生成 |
+| 接入 / 下线外部解析器插件（联动） | `adapters/_external.py` 的 `EXTERNAL_ADAPTERS` 清单；桥接契约见对方仓库的 `rikashare_bridge.py` | 见 5.14；探测在 `main.py` 生成 Handler 之前，未安装 = 没有该解析器 |
 | 调整平台先后顺序 | 对应适配器的 `AdapterSpec(priority=…)` | 见 5.1；`_init_parsers` / 设置页开关 / 拼串顺序都跟着变 |
 | 改哪些平台被启用 | 网页设置页的「解析器开关」→ `DISABLED_PLATFORMS` 逗号串 | 开关由 `iter_adapters()` 动态渲染，见 5.6 |
 | 修某平台解析失效 | `adapters/<平台>.py`（+ `models/platforms/<平台>/`） | 先确认是接口变了还是模型字段变了 |
@@ -640,6 +710,7 @@ OneBot 关掉「获取引用消息」时也能用），老版本 AstrBot 没有�
 | Twitter/X | `twitter` | `x\.com` | 默认 | 走 `api.vxtwitter.com`；可开自建反代（`TWITTER_MEDIA_PROXY_*`），反代失败自动回退直连；gif 类型走图片通道 |
 | NGA | `nga` | `nga.178.com` / `ngabbs.com` / `bbs.nga.cn` | 默认 | 403 且响应含 `guestJs` 时取 Cookie 后带 `rand` 参数重试；解析 `postsubject0` / `postauthor0` / `postdate0` / `postcontent0` |
 | AcFun | `acfun` | `acfun.cn` | 默认 | `videoInfo_new` 接口 + `window.videoInfo`；视频走 m3u8 分片下载 |
+| 网易云音乐 | `netease` | `music\.163\.com` / `163cn\.tv` | —（`build` 缺省） | **外部联动**（见 5.14）：解析器类在 `astrbot_plugin_multincm.rikashare_bridge`，未安装该插件时本平台不存在；登录态复用 multincm 配置；歌曲发音频、歌单/专辑/电台发卡片 |
 | 通用网页 | —（非适配器） | `GENERIC_URL_PATTERN` = `https?://…` | — | Cloudflare Browser Rendering 截图兜底，见第 4 节 |
 
 ---
@@ -715,6 +786,11 @@ assert not bad and len(handlers) == 15
 
 期望基线（2026-10-26 实测）：模块导入 **66/66**（`main.py` + `link_parser/` 下 65 个模块）、适配器 **8 个**（`adapter_names()` 顺序 = priority 10→80）、Handler **15 个**（8 平台 + JSON 卡片 + 兜底 + 封面下载 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **45 项 / 8 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
 
+> 上述基线按**未安装外部解析器插件**的环境计。装着 `astrbot_plugin_multincm` 时，
+> `_external.register_external_adapters()` 会在导入阶段多注册 `netease` 平台：
+> 适配器 **9 个**、Handler **16 个**（多一个 `netease_handler`），且 `netease` 排在
+> 注册表末尾（priority 100）。判断基线时先看有没有装联动插件。
+
 **「新增平台零改动」回归**：往 `link_parser/adapters/` 里临时丢一个最小适配器
 （继承 `BaseParser` + 末尾 `register_adapter(AdapterSpec(name="probe", url_pattern=..., parser_cls=...))`，
 **不改任何其他文件**），跑上面的冒烟脚本，应当看到 `adapter_names()` 多出 `probe`、
@@ -785,6 +861,12 @@ Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复�
 - **`@filter.regex` 不要求唤醒**：`cover_command_handler` 因此会在没 @ 机器人时也触发。
   它第一件事是确认「有没有引用消息」，没有就只在 `is_at_or_wake_command` 时提示用法——
   去掉这个判断，群里任何人打出「下载封面」都会被插件插一句话。
+- **外部解析器插件（5.14）的两个时序坑**：
+  ① `register_external_adapters()` 必须留在 `_PLATFORM_HANDLERS` 生成之前——挪到后面
+  外部平台就没有事件入口，静默失效；
+  ② 外部桥接模块**不能改成顶层自注册**——本插件重载后注册表是新的，而桥接模块在
+  `sys.modules` 里是旧的，只有显式调用其 `register()` 才能重新注册。
+  另外 `_external.py` 以下划线开头不是装饰：它是基础设施，自动发现必须继续跳过它。
 
 ---
 
@@ -812,6 +894,7 @@ Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复�
 16. 「按设计跳过」与「失败」的判定口径变化（→ 第 5.4、5.11 节）
 17. 日志的实现方式变化：日志器来源、是否拦截/改动框架日志（→ 第 5.12 节、第 8 节、第 9 节）
 18. 封面下载变化：触发词、链接来源（只认被引用消息）、封面取法、提示文案（→ 第 5.13 节、第 4 节、第 6 节、第 9 节）
+19. 外部解析器接入点变化：探测清单、桥接契约、指令让出规则、停用判定（→ 第 5.14 节、第 6 节、第 7 节、第 9 节）
 
 ### 10.2 更新方式
 

@@ -356,4 +356,13 @@ async def try_send_media(event: AstrMessageEvent, result: ParseResult):
                 continue  # 动图 / 实况照片已作为图片并入合并转发
             yield event.chain_result([Comp.Video.fromFileSystem(str(path))])
         elif isinstance(cont, AudioContent):
-            yield event.chain_result([Comp.Record(file=str(path))])
+            # 外部解析器可声明音频以文件发送（multincm 的 send_as_file 设置）；
+            # Discord 平台音频一律发文件（无语音消息形态），与 multincm 的行为一致
+            try:
+                platform_name = event.get_platform_name().lower()
+            except Exception:
+                platform_name = ""
+            if result.extra.get("audio_as_file") or "discord" in platform_name:
+                yield event.chain_result([Comp.File(name=path.name, file=str(path))])
+            else:
+                yield event.chain_result([Comp.Record(file=str(path))])

@@ -104,6 +104,7 @@ PLATFORM_COLORS = {
     "twitter": "#55ACEE",
     "acfun": "#FD4C5D",
     "nga": "#66C0F4",
+    "netease": "#C20C0C",
     "youtube": "#FF4E45",
     "tiktok": "#2EF2EE",
     "website": "#8B7CF6",
