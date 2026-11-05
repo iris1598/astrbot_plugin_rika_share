@@ -633,8 +633,10 @@ multincm 后旧解析器也不会悬空崩溃。
 **`netease` 的注册细节**：`AdapterSpec(priority=100)` 默认排在内置平台之后；
 短链 `163cn.tv` 的 `@handle` **不捕获命名分组**，让 `cache_identity` 走短链展开阶梯
 （同一首歌的不同短链共用缓存）；内容标识形如 `netease:id=<id>&type=<type>`；
+`CACHE_TTL_SECONDS = 300`（结果里烙有音乐卡片 / 音频可用性决策，multincm 开关改后、
+Cookie 登录后最多 5 分钟自动生效，不设 TTL 会一直走旧缓存）；
 封面放 `graphics`（卡片用、合并转发不重复发）、音频放 `contents`。**发送形态遵循
-multincm 的设置**（均在解析时现读其运行时配置，改动后只对新解析生效）：
+multincm 的设置**（解析时现读其运行时配置，配合上面的 TTL 自动跟上改动）：
 
 - 全部结果声明 `extra["suppress_text_output"]`——分享卡片已承载标题/作者/封面/描述，
   卡片渲染成功后不再发「莉卡解析 | …」文本；渲染关闭或失败仍回退文本；
@@ -646,7 +648,10 @@ multincm 的设置**（均在解析时现读其运行时配置，改动后只对
   （Discord 平台一律发文件）。
 
 VIP 歌曲拿不到播放地址时降级为仅卡片并写 `extra["limit_warnings"]`（此时音乐卡片
-也不下发，与 multincm 的门槛一致）。**歌曲卡的信息增强**：作者行带第一位音乐人头像
+也不下发，与 multincm 的门槛一致）。**音乐卡片的可观察日志**（排查"为什么发语音"）：
+桥接解析时 `歌手将发送音乐卡片 (163) ID=`（未开开关为 DEBUG 级），发送时
+`发送音乐卡片 (163) ID=`；平台不支持为 `平台 xx 不支持音乐卡片，回退常规解析输出`。
+**歌曲卡的信息增强**：作者行带第一位音乐人头像
 （multincm 侧 `get_artist_info`，端点 `/weapi/artist/head/info/get` 源自 pyncm
 `GetArtistDetails`；失败只少头像不连累解析）、作者副标题放专辑名
 （`Author.description`）、`extra["stats_line"]` 放 `⏱ 时长 🔥 热度`（⏱ 图标已加进

@@ -526,11 +526,16 @@ class ParserPlugin(Star):
 
     @staticmethod
     def _supports_music_card(event: AstrMessageEvent) -> bool:
-        """当前平台是否能发送 ``Comp.Music`` 音乐卡片。"""
+        """当前平台是否能发送 ``Comp.Music`` 音乐卡片。
+
+        按平台类型名（``platform_meta.name``，如 ``aiocqhttp``）判断；对
+        OneBot 生态的变体命名再放行子串（与 ``_is_onebot`` 的口径一致）。
+        """
         try:
-            return event.get_platform_name().lower() in ParserPlugin._MUSIC_CARD_PLATFORMS
+            name = (event.get_platform_name() or "").lower()
         except Exception:
             return False
+        return name in ParserPlugin._MUSIC_CARD_PLATFORMS or "aiocqhttp" in name
 
     @staticmethod
     def _build_music_card(spec: dict[str, Any]) -> "Comp.Music | None":
@@ -628,8 +633,17 @@ class ParserPlugin(Star):
             if music_card_spec and self._supports_music_card(event):
                 music_card = self._build_music_card(music_card_spec)
                 if music_card is not None:
+                    logger.info(
+                        f"[link_parser] 发送音乐卡片 ({music_card_spec.get('type')}) "
+                        f"ID={music_card_spec.get('id')}"
+                    )
                     yield event.chain_result([music_card])
                     return
+            elif music_card_spec:
+                logger.info(
+                    f"[link_parser] 平台 {event.get_platform_name()} 不支持音乐卡片，"
+                    "回退常规解析输出（卡片图 + 语音）"
+                )
 
             # 根据平台构建：标题头 + 合并转发内容列表
             header, nodes_content = await build_platform_output(
