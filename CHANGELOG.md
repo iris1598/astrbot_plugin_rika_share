@@ -9,6 +9,7 @@
 
 | 日期 | 变更 | 影响小节 |
 | :--- | :--- | :--- |
+| 2026-11-06 | 调整网易云**音乐卡片发送顺序**（**可观察行为变化**）：此前命中 `extra["music_card"]` 时直接发音乐卡片并 `return`，解析卡片与文本都不再发送；现改为**先发解析卡片（渲染图；未启用/失败时回退文本），再发音乐卡片**，音乐卡片仅替代音频（发送后仍跳过 `try_send_media`，不发语音）。未开启音乐卡片、平台不支持或构造失败时行为不变 | 4、5.3、5.14 |
 | 2026-11-06 | 网易云联动两处修正：① **音乐卡片开关真正生效**——multincm 的 `Main.__init__` 在 `set_config()` 注入运行时配置时漏了 `use_music_card`，桥接的 `_use_music_card()` 恒读 `False`，导致链接解析永远回退语音；已补上该键（multincm 侧改动）；② **移除网易云的专属缓存 TTL**——`NeteaseParser.CACHE_TTL_SECONDS = 300` 删除，与其它内容不变的平台一致使用默认值 `None`（不设有效期）。改动发送开关 / 登录态后，新解析的链接立即生效，已缓存内容需 `/clear_cache` 或重启刷新 | 5.7、5.8、5.14 |
 | 2026-11-06 | 排查"音乐卡片不生效"：本地链路（桥接打标 → `_process_url` 分支 → `Comp.Music` 序列化为 `type:163` 段 → 平台名判断）逐环实测均正确；定位为**缓存时序缺陷**——音乐卡片决策在解析时烙进结果缓存而网易云无 TTL，multincm 开关改后 / Cookie 登录后旧缓存会一直走语音。修复：① `NeteaseParser.CACHE_TTL_SECONDS = 300`，开关与登录态变更最多 5 分钟自动生效（`/clear_cache` 立即生效）；② 全链路可观察日志：桥接 `歌曲将发送音乐卡片 (163) ID=`（未开开关 DEBUG）、发送 `发送音乐卡片 (163) ID=`、平台不支持 `平台 xx 不支持音乐卡片，回退常规解析输出`；③ `_supports_music_card` 对 OneBot 生态变体平台名放行子串（与 `_is_onebot` 口径一致） | 5.7、5.8、5.14 |
 | 2026-11-06 | 网易云**歌曲卡信息增强**（联动侧 multincm 同步更新）：① 歌曲卡作者行新增**音乐人头像**——multincm 的 netease 层从 pyncm 移植 `GetArtistDetails`（`/weapi/artist/head/info/get`）为 `artist_head_info` 端点 + `get_artist_info()` + `ArtistDetail` 模型，桥接取第一位音乐人的 `avatar`（缺失回退 `cover`），获取失败只少头像不连累解析；② 作者副标题（`Author.description`）放**专辑名**（`专辑《…》`）；③ `extra["stats_line"]` 放**时长与热度**（`⏱ mm:ss 🔥 <pop>`）——`text._STAT_LABELS` 新增 `⏱` / `⏱️` → 「时长」标签，统计徽章随卡片渲染；④ 电台节目 / 歌单 / 专辑 / 电台卡维持原样（描述里已含统计，避免重复） | 5.3、5.14、9 |

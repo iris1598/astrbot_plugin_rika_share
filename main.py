@@ -626,24 +626,20 @@ class ParserPlugin(Star):
             result = entry.result
 
             # ========== 音乐卡片模式（外部解析器联动，见 5.14） ==========
-            # 外部解析器按其插件设置（multincm 的 use_music_card）要求发音乐卡片时，
-            # 音乐卡片整体替代文本输出 / 卡片图 / 音频；平台不支持或构造失败
-            # 则继续走下面的常规输出（此时音频内容仍在，回退为语音发送）。
+            # 外部解析器按其插件设置（multincm 的 use_music_card）要求发音乐卡片时：
+            # 先发解析卡片（渲染图；未启用/失败时回退文本），再发音乐卡片。
+            # 音乐卡片替代音频：发送后不再走 try_send_media，避免重复发语音。
+            # 平台不支持或构造失败则继续走常规输出（音频内容仍在，回退为语音发送）。
             music_card_spec = result.extra.get("music_card")
-            if music_card_spec and self._supports_music_card(event):
-                music_card = self._build_music_card(music_card_spec)
-                if music_card is not None:
+            music_card = None
+            if music_card_spec:
+                if self._supports_music_card(event):
+                    music_card = self._build_music_card(music_card_spec)
+                else:
                     logger.info(
-                        f"[link_parser] 发送音乐卡片 ({music_card_spec.get('type')}) "
-                        f"ID={music_card_spec.get('id')}"
+                        f"[link_parser] 平台 {event.get_platform_name()} 不支持音乐卡片，"
+                        "回退常规解析输出（卡片图 + 语音）"
                     )
-                    yield event.chain_result([music_card])
-                    return
-            elif music_card_spec:
-                logger.info(
-                    f"[link_parser] 平台 {event.get_platform_name()} 不支持音乐卡片，"
-                    "回退常规解析输出（卡片图 + 语音）"
-                )
 
             # 根据平台构建：标题头 + 合并转发内容列表
             header, nodes_content = await build_platform_output(
@@ -712,6 +708,15 @@ class ParserPlugin(Star):
                     # 其他平台（QQ Official / Telegram 等）：拆分为独立消息
                     async for r in send_plain_output(event, header_text, text_items):
                         yield r
+
+            # 音乐卡片在解析卡片之后发送（两者都保留），并替代音频
+            if music_card is not None:
+                logger.info(
+                    f"[link_parser] 发送音乐卡片 ({music_card_spec.get('type')}) "
+                    f"ID={music_card_spec.get('id')}"
+                )
+                yield event.chain_result([music_card])
+                return
 
             # 单独发送媒体文件（Video / Audio）
             # 注意：图片已在 Nodes（OneBot）或 send_plain_output（其他平台）中处理

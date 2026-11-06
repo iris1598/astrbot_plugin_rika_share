@@ -268,7 +268,7 @@ JSON 卡片里「哪个平台先认领链接」= 设置页开关排列 = `DISABL
 | `info` | B站 AI 总结 | 卡片正文补充 |
 | `is_video` | 小红书等「是否视频笔记」 | 输出分支 |
 | `suppress_text_output` | 「卡片已承载全部信息」声明：卡片渲染成功时不再发送文本输出（渲染关闭/失败仍回退文本） | `_process_url` |
-| `music_card` | 音乐卡片规格 `{"type": "163", "id": <歌曲id>}`：QQ 系平台发送 `Comp.Music` 并整体替代卡片图/文本/音频 | `main._process_url` |
+| `music_card` | 音乐卡片规格 `{"type": "163", "id": <歌曲id>}`：QQ 系平台在解析卡片之后发送 `Comp.Music`，替代文本/音频（卡片图保留），见 5.14 | `main._process_url` |
 | `audio_as_file` | 音频以文件（`Comp.File`）而非语音发送 | `output/builder.try_send_media` |
 
 `ParseResult` 的关键属性：`video`（**仅当 `contents` 恰好 1 个且非图片类产物**时才返回）、`img_contents`、`all_grid_images`、`content_type`。
@@ -641,8 +641,8 @@ multincm 的设置**（解析时现读其运行时配置；改动开关后新解
 - 全部结果声明 `extra["suppress_text_output"]`——分享卡片已承载标题/作者/封面/描述，
   卡片渲染成功后不再发「莉卡解析 | …」文本；渲染关闭或失败仍回退文本；
 - 歌曲 + `use_music_card` 开启 + 拿到播放地址 → `extra["music_card"] = {"type": "163", "id": 歌曲id}`，
-  QQ 系平台（`_MUSIC_CARD_PLATFORMS`：qq / aiocqhttp / qqguild）只发音乐卡片（协议端按
-  ID 签名，音频任务不会被 await、不产生下载）；平台不支持或构造失败回退常规输出
+  QQ 系平台（`_MUSIC_CARD_PLATFORMS`：qq / aiocqhttp / qqguild）**先发解析卡片，再发音乐卡片**
+  （协议端按 ID 签名；音频任务不会被 await、不产生下载）；平台不支持或构造失败回退常规输出
   （卡片图 + 语音）。**仅限歌曲（Song）**：电台节目 ID 不是歌曲 ID，163 卡片会取错内容；
 - 歌曲 + `send_as_file` 开启 → `extra["audio_as_file"]`，音频以 `Comp.File` 发送
   （Discord 平台一律发文件）。
