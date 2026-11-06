@@ -633,10 +633,10 @@ multincm 后旧解析器也不会悬空崩溃。
 **`netease` 的注册细节**：`AdapterSpec(priority=100)` 默认排在内置平台之后；
 短链 `163cn.tv` 的 `@handle` **不捕获命名分组**，让 `cache_identity` 走短链展开阶梯
 （同一首歌的不同短链共用缓存）；内容标识形如 `netease:id=<id>&type=<type>`；
-`CACHE_TTL_SECONDS = 300`（结果里烙有音乐卡片 / 音频可用性决策，multincm 开关改后、
-Cookie 登录后最多 5 分钟自动生效，不设 TTL 会一直走旧缓存）；
+与其它内容不变的平台一样使用默认缓存（`CACHE_TTL_SECONDS = None`，不设有效期）；
 封面放 `graphics`（卡片用、合并转发不重复发）、音频放 `contents`。**发送形态遵循
-multincm 的设置**（解析时现读其运行时配置，配合上面的 TTL 自动跟上改动）：
+multincm 的设置**（解析时现读其运行时配置；改动开关后新解析的链接立即生效，
+已缓存的内容需要 `/clear_cache` 刷新）：
 
 - 全部结果声明 `extra["suppress_text_output"]`——分享卡片已承载标题/作者/封面/描述，
   卡片渲染成功后不再发「莉卡解析 | …」文本；渲染关闭或失败仍回退文本；
