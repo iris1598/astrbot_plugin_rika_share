@@ -44,6 +44,10 @@ COVER_COMMAND_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^\s*(?:@\S+\s*)?[/／]?\s*下载封面(?:图|图片)?\s*$"
 )
 
+#: QQ 官方机器人下的小程序分享卡片（纯文本形态，见 ``output/miniapp_card.py``）。
+#: 卡片文本没有内容链接，由 ``main.miniapp_card_handler`` 取 title 搜索解析。
+MINIAPP_CARD_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\[卡片消息\]")
+
 
 class PlatformEnum(str, Enum):
     """内置平台的标识（历史常量，新增平台**不需要**在这里登记）。

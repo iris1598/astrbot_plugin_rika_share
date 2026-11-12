@@ -19,7 +19,7 @@ AstrBot 插件：自动识别聊天消息里的分享链接 / JSON 分享卡片 
 | 实现包 | `link_parser/`（adapters / models / services / output / utils / webui） |
 | 配置维护入口 | 插件网页设置页 `pages/rika/`（设置 + 链接调试两个视图）；原生配置面板**不展示任何配置项**，只作存储契约 |
 | 变更日志 | `CHANGELOG.md`（最新在上）；`agent.md` 只描述**当前状态** |
-| 支持平台 | B站、抖音、快手、微博、小红书、Twitter(X)、AcFun、NGA + Cloudflare 网页截图兜底；**网易云音乐由外部插件联动提供**（安装 `astrbot_plugin_multincm` 后自动接入，见 5.14） |
+| 支持平台 | B站、抖音、快手、微博、小红书、Twitter(X)、AcFun、NGA + Cloudflare 网页截图兜底；QQ 官方机器人的纯文本分享卡片（`[卡片消息]`，无链接的按标题搜索，见 5.15）；**网易云音乐由外部插件联动提供**（安装 `astrbot_plugin_multincm` 后自动接入，见 5.14） |
 | 上游来源 | 移植自 [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser) |
 
 ---
@@ -29,7 +29,7 @@ AstrBot 插件：自动识别聊天消息里的分享链接 / JSON 分享卡片 
 1. **所有 Handler 必须「归属」在 `main.py` 这个模块下。**
    AstrBot 用 `handler.handler_module_path == 插件模块路径` **精确匹配**来归属 Handler（框架源码 `<AstrBot>/astrbot/core/star/star_handler.py`，不在本仓库；`__module__` 不匹配的 Handler 会在 `only_activated` 过滤里被直接丢掉，功能静默失效）。
    因此：**各平台 Handler 由 `main._PLATFORM_HANDLERS` 按适配器注册表自动生成**（生成函数在本模块内构造，显式改写 `__module__` / `__name__`，仍满足归属要求），其余 Handler 手写在 `main.py`。业务逻辑一律放 `link_parser/`，Handler 壳子不许离开本模块。
-   数量基线：**15 个 Handler** = 8 平台 + JSON 卡片 + Cloudflare 兜底 + 封面下载（见 5.13）+ 4 指令；**新增平台会同时多出一个 Handler**（含外部解析器插件接入的平台，见 5.14——装着 `astrbot_plugin_multincm` 时为 16 个），所以 Handler 数随平台数变化，一律以第 8 节的注册表冒烟脚本为准。`grep -c "@filter\." main.py` 只剩静态装饰器（当前 **12**，其中 3 行是注释里提到的 `@filter.regex`），已经不能当基线用。
+   数量基线：**16 个 Handler** = 8 平台 + JSON 卡片 + 分享卡片（官方机器人纯文本卡片，见 5.15）+ Cloudflare 兜底 + 封面下载（见 5.13）+ 4 指令；**新增平台会同时多出一个 Handler**（含外部解析器插件接入的平台，见 5.14——装着 `astrbot_plugin_multincm` 时为 17 个），所以 Handler 数随平台数变化，一律以第 8 节的注册表冒烟脚本为准。`grep -c "@filter\." main.py` 只剩静态装饰器（当前 **13**，其中 3 行是注释/文档串里提到的 `@filter.regex`），已经不能当基线用。
 2. **插件类名必须以 `Plugin` 结尾（或名为 `Main`）。**
    框架按 `name.lower().endswith("plugin") or name.lower() == "main"` 找插件类（`star_manager._get_classes`）。现用名 `ParserPlugin`。
 3. **不要改插件身份标识**：`metadata.yaml` 的 `name`、`author`、目录名、`main.py` 的 `_get_plugin_data_dir()` 中的 `astrbot_plugin_rika_share`、`StarTools.get_data_dir("astrbot_plugin_rika_share")`、`_conf_schema.json` 里的配置键名。
@@ -104,6 +104,7 @@ astrbot_plugin_rika_share/
     ├── output/                   # 输出构建
     │   ├── builder.py            # 分平台构建节点内容 + 合并转发 / 纯文本发送 + 媒体单独发送
     │   ├── json_card.py          # JSON 卡片识别、链接提取、EventUrlWrapper
+    │   ├── miniapp_card.py       # QQ 官方机器人分享卡片（纯文本形态）识别与字段提取（见 5.15）
     │   ├── quoted.py             # 引用（回复）消息的文本与链接提取（见 5.13）
     │   └── replies.py            # error_result（受 SEND_ERROR_MESSAGES 控制）
     └── utils/
@@ -150,6 +151,7 @@ astrbot_plugin_rika_share/
  └─ AstrBot 按 Handler 的 filter 命中（正则 / 指令）
      ├─ 平台正则 Handler（如 bilibili_handler）→ _dispatch(event, "bilibili")
      ├─ json_card_handler      消息含 JSON 卡片组件时（@filter.regex(r".*")）
+     ├─ miniapp_card_handler   官方机器人的纯文本分享卡片（@filter.regex(^\[卡片消息\])，见 5.15）
      ├─ cloudflare_fallback_handler  任意 http(s) 链接（@filter.regex(GENERIC_URL_PATTERN)）
      └─ cover_command_handler  「下载封面」（@filter.regex(COVER_COMMAND_PATTERN)，见 5.13）
          ↓
@@ -177,6 +179,8 @@ astrbot_plugin_rika_share/
 ```
 
 **JSON 卡片流程**：`json_card_handler` →（`output/json_card.py`）识别组件、递归提取链接 → 逐个链接试 `parser.search_url`，命中即用 `EventUrlWrapper(event, link)` 把 `message_str` 换成该链接 → 走同一条 `_process_url`。
+
+**分享卡片流程（官方机器人，见 5.15）**：`miniapp_card_handler` →（`output/miniapp_card.py`）识别 `[卡片消息]` 纯文本卡片：带 `jump_url` 且链接可认领时让路给平台 Handler；无链接的「小程序」卡片取 `title` → `parser.search_video_by_title(title)`（目前只有 B站 实现）→ 命中即用 `EventUrlWrapper(event, url)` → 走同一条 `_process_url`。
 
 **Cloudflare 兜底流程**：仅在 `CLOUDFLARE_FALLBACK_ENABLED` 且已配 Account ID / Token 时生效 → 先确认**没有任何适配器**能处理该链接 → 命中 `CLOUDFLARE_BLACKLIST` 则跳过 → 截图成功时 OneBot 发合并转发、其他平台主动发送；失败静默（按 `DEBUG_LOG_ENABLED` 决定是否打日志）。
 
@@ -701,6 +705,64 @@ VIP 歌曲拿不到播放地址时降级为仅卡片并写 `extra["limit_warning
 
 ---
 
+### 5.15 官方机器人分享卡片（`output/miniapp_card.py` + `miniapp_card_handler`）
+
+QQ **官方机器人**收不到分享卡片的 JSON 结构：QQ 开放平台把卡片转成**纯文本**下发，
+适配器原样放进 `message_str`（官方 `qq_official` 与第三方 `qq_official_full` 形态一致）：
+
+```
+[卡片消息] 小程序            ←「小程序」卡片：只有标题，没有内容链接
+摘要: [QQ小程序][魔裁/绘画] "来吧,成为我的共犯吧" 【bilibilionly同人扶持计划】
+source: 哔哩哔哩
+source_logo: https://open.gtimg.cn/...
+title: [魔裁/绘画] "来吧,成为我的共犯吧" 【bilibilionly同人扶持计划】
+preview: https://qq.ugcimg.cn/...
+
+[卡片消息] 图文H5            ←「图文H5」卡片：带真实内容链接
+摘要: 【分享】当不同动漫角色得到波塔拉耳环进行融合时
+title: 当不同动漫角色得到波塔拉耳环进行融合时
+desc: 当不同动漫角色得到波塔拉耳环进行融合时
+jump_url: https://b23.tv/hcXlPa4
+tag: 哔哩哔哩
+```
+
+文本里的 `open.gtimg.cn` / `qq.ugcimg.cn` 只是第三方图床，JSON 卡片流程（依赖
+`Comp.Json` 组件）不会触发，平台 Handler 的 URL 正则也匹配不到——「小程序」卡片
+只能**按标题搜索**。
+
+| 环节 | 位置 | 说明 |
+| :--- | :--- | :--- |
+| 触发 | `main.miniapp_card_handler` | `@filter.regex(MINIAPP_CARD_PATTERN)`（`^\[卡片消息\]`，位于 `constants.py`），注册在 JSON 卡片之后、Cloudflare 兜底之前 |
+| 识别与提取 | `output/miniapp_card.py` | `parse_miniapp_card` / `extract_card_title`（title 优先、摘要回退并剥 `[QQ小程序]` 前缀）/ `extract_card_link`（`jump_url`）；纯文本解析，不依赖 AstrBot，可独立测试 |
+| 链接优先 | handler 的协调守卫 | 卡片带 `jump_url` 且能被**任一已启用解析器**认领（`search_url(link)` 不抛）时直接 return——平台 Handler 的 filter 已命中该链接并先行解析，这里再按标题搜会重复发送 |
+| 平台匹配 | `main._card_source_parser` | 卡片 `source`（小程序）/ `tag`（图文H5）字段与解析器的 `platform.name` / `display_name` **精确相等**；没有对应解析器（未装/已停用）或不支持标题搜索 → 静默跳过 |
+| B站标题搜索 | `adapters/bilibili.py::search_video_by_title` | 返回可解析的视频链接（`https://www.bilibili.com/video/<bvid>`）或 `None`；命中后用 `EventUrlWrapper(event, url)` 走 `_process_url` 主干，缓存 / 渲染 / 输出与链接解析完全一致 |
+| 失败文案 | handler | 搜索失败 `❌ 解析失败: B站标题搜索失败: …`；搜不到 `❌ 未能在哔哩哔哩找到与「…」匹配的内容`（受 `SEND_ERROR_MESSAGES`） |
+
+**标题搜索的匹配策略**（`_title_search_variants` / `_normalize_search_title` /
+`_search_video_once`，实测结论，改前先想一遍）：
+
+1. **排序不可信，不盲目取第一条**：B站 `search_by_type` 接口未登录时的排序与网页
+   不一致（带 buvid 凭证也不变），同一关键词两次请求的排序都可能波动；第一条可能
+   是完全无关的视频。匹配以「归一化标题相等」为准，其次接受「结果标题以卡片标题
+   开头」（卡片标题被 QQ 截断的情况）。
+2. **归一化必做**：搜索结果标题带 `<em class="keyword">` 高亮标签和 `&quot;` 之类
+   的 HTML 实体，不清洗就比对不上。
+3. **关键词变体**：完整标题 → 去行首 `[xx]` 活动前缀 → 去全部 `[..]`/`【..】` 段。
+   实测带 `[魔裁/绘画]` 前缀的完整标题搜不到目标视频（前 84 条里都没有），去掉
+   前缀才能命中；变体逐个尝试，命中即停（每张卡片最多 2-3 次搜索请求）。
+4. **复用重试**：搜索走 `_call_bili_api_with_retry`（-504 / 网络超时退避重试）。
+
+**平台启停与缓存**：标题搜索是 B站 平台的新入口，受网页设置页的 B站 开关治理
+（解析器不在 `self.parsers` 就跳过）；命中后的视频走同一份内容缓存
+（`bilibili:bvid=…`），同一视频的链接分享与卡片分享共用一条。
+
+**Cloudflare 兜底**：`cloudflare_fallback_handler` 对 `[卡片消息]` 一律跳过
+（`is_miniapp_card` 守卫）——卡片文本里的图床 URL 不是网页，截图无意义；带
+`jump_url` 的卡片本来就由平台 Handler 按链接解析。**不要**把这个跳过「修」掉。
+
+---
+
 ## 6. 「我要做 X，改哪里」速查表
 
 | 任务 | 改动位置 | 注意 |
@@ -710,6 +772,7 @@ VIP 歌曲拿不到播放地址时降级为仅卡片并写 `extra["limit_warning
 | 调整平台先后顺序 | 对应适配器的 `AdapterSpec(priority=…)` | 见 5.1；`_init_parsers` / 设置页开关 / 拼串顺序都跟着变 |
 | 改哪些平台被启用 | 网页设置页的「解析器开关」→ `DISABLED_PLATFORMS` 逗号串 | 开关由 `iter_adapters()` 动态渲染，见 5.6 |
 | 修某平台解析失效 | `adapters/<平台>.py`（+ `models/platforms/<平台>/`） | 先确认是接口变了还是模型字段变了 |
+| 调官方机器人分享卡片的识别 / 文案 / 标题搜索策略 | `main.miniapp_card_handler` + `output/miniapp_card.py` + `adapters/bilibili.py::search_video_by_title` | 见 5.15；带 `jump_url` 优先链接（让路平台 Handler），标题搜索不盲目取第一条 |
 | 调整 URL 触发范围 | 对应适配器 `register_adapter(url_pattern=...)` | `main.py` 的 filter 自动跟随，无需改 |
 | 调「引用消息 + 下载封面」的触发词 / 提示文案 | `constants.COVER_COMMAND_PATTERN` + `main._download_cover` | 见 5.13；提示文案属可观察行为 |
 | 改「什么算封面」（取哪个字段） | `services/cover.py::select_cover` | 视频封面 → 图文首图 → 动图·实况静态图 |
@@ -748,7 +811,7 @@ VIP 歌曲拿不到播放地址时降级为仅卡片并写 `extra["limit_warning
 
 | 平台 | name | 触发正则（注册表） | 构建参数 | 接口与注意点 |
 | :--- | :--- | :--- | :--- | :--- |
-| B站 | `bilibili` | `bilibili\.com` / `b23\.tv` / `bili2233\.cn` / `BV…` / `av\d+` | 需 `BILI_CK` + `config_dir` | bilibili_api（优先 curl_cffi）；视频/动态/opus/直播/专栏/收藏夹；-504 与网络超时退避重试 2 次；凭证持久化到 `config/bilibili_cookies.json` |
+| B站 | `bilibili` | `bilibili\.com` / `b23\.tv` / `bili2233\.cn` / `BV…` / `av\d+` | 需 `BILI_CK` + `config_dir` | bilibili_api（优先 curl_cffi）；视频/动态/opus/直播/专栏/收藏夹；-504 与网络超时退避重试 2 次；凭证持久化到 `config/bilibili_cookies.json`；另实现 `search_video_by_title`（官方机器人卡片按标题搜索，见 5.15） |
 | 抖音 | `douyin` | `v.douyin.com` / `jx.douyin.com` / `douyin.com` / `iesdouyin.com` / `m.douyin.com` / `jingxuan.douyin.com` | 默认 | aweme detail 接口；`clip_type` 2/None=图、4=动图、5=实况照片，后两者走 `create_live_photo`（受 `DOUYIN_LIVE_PHOTO_ENABLED` 控制） |
 | 快手 | `kuaishou` | `v.kuaishou.com` / `kuaishou.com` / `chenzhongtech.com` | 默认 | 先取 Location，把 `/fw/long-video/` 换成 `/fw/photo/`，再解析 `window.INIT_STATE` |
 | 微博 | `weibo` | `weibo.com` / `weibo.cn` / `m.weibo.cn` / `video.weibo.com` / `mapp.api.weibo.cn` | 默认 | 三个接口：status（m.weibo.cn）/ video_show（h5.video）/ article（头条文章）；`mid`→`id` 用 base62；403/418 提示风控 |
@@ -803,7 +866,7 @@ grep -rnE "logger\.(setLevel|addHandler|removeHandler|handlers|propagate|filters
 **导入冒烟脚本**（放临时目录，不提交；在 AstrBot 仓库根目录执行）：
 
 ```python
-# 目的：确认全部模块可导入、8 个适配器已注册、15 个 Handler 已被框架接收
+# 目的：确认全部模块可导入、8 个适配器已注册、16 个 Handler 已被框架接收
 import importlib, pkgutil, sys
 sys.path.insert(0, r"<插件父目录>")           # 含 astrbot_plugin_rika_share 目录的那个上级目录
 
@@ -826,21 +889,21 @@ handlers = star_handlers_registry.get_handlers_by_module_name(
 )
 print("imports_failed :", bad)
 print("adapters       :", adapter_names())    # 应为 8 个，顺序固定
-print("handlers       :", len(handlers))      # 应为 15
+print("handlers       :", len(handlers))      # 应为 16
 assert not bad and len(handlers) == 15
 ```
 
-期望基线（2026-10-26 实测）：模块导入 **66/66**（`main.py` + `link_parser/` 下 65 个模块）、适配器 **8 个**（`adapter_names()` 顺序 = priority 10→80）、Handler **15 个**（8 平台 + JSON 卡片 + 兜底 + 封面下载 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **45 项 / 8 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
+期望基线（2026-11-12 实测）：模块导入 **67/67**（`main.py` + `link_parser/` 下 66 个模块）、适配器 **8 个**（`adapter_names()` 顺序 = priority 10→80）、Handler **16 个**（8 平台 + JSON 卡片 + 分享卡片 + 兜底 + 封面下载 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **45 项 / 8 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
 
 > 上述基线按**未安装外部解析器插件**的环境计。装着 `astrbot_plugin_multincm` 时，
 > `_external.register_external_adapters()` 会在导入阶段多注册 `netease` 平台：
-> 适配器 **9 个**、Handler **16 个**（多一个 `netease_handler`），且 `netease` 排在
+> 适配器 **9 个**、Handler **17 个**（多一个 `netease_handler`），且 `netease` 排在
 > 注册表末尾（priority 100）。判断基线时先看有没有装联动插件。
 
 **「新增平台零改动」回归**：往 `link_parser/adapters/` 里临时丢一个最小适配器
 （继承 `BaseParser` + 末尾 `register_adapter(AdapterSpec(name="probe", url_pattern=..., parser_cls=...))`，
 **不改任何其他文件**），跑上面的冒烟脚本，应当看到 `adapter_names()` 多出 `probe`、
-Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复跑回到 8/15。
+Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复跑回到 8/16。
 这一步是防止自动发现 / 动态 Handler 被人「修回去」的唯一护栏。
 
 **插件页面**没有随仓库的自动化回归（它跑在受限 iframe 里），改完 `pages/rika/` 后两条路一起走：
@@ -867,6 +930,7 @@ Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复�
 - **顺序变了就是行为变了**：`iter_adapters()` 按 `priority` 排序，不反映文件名。改动 priority 会连带改变解析器构建顺序、JSON 卡片的认领顺序、设置页开关排列与 `DISABLED_PLATFORMS` 拼串顺序（页面按注册表顺序拼回，顺序变了用户下次保存会看到「已修改 1 项」）。
 - **`@filter.regex` 不把 match 传进 Handler**：需要 URL 时自己从 `event.message_str` 重新 `search`（`cloudflare_fallback_handler` 就是这么做的）。
 - **`json_card_handler` 使用 `@filter.regex(r".*")`**，所有消息都会进它，第一件事就是 `has_json_component` 早退，别在里面加重活。
+- **官方机器人卡片（`[卡片消息]` 纯文本）由 `miniapp_card_handler` 处理，`cloudflare_fallback_handler` 对它一律跳过**：卡片文本里的 `source_logo` / `preview` 是图床 URL，截图无意义；带 `jump_url` 的卡片由平台 Handler 按链接解析。见 5.15——别把 CF 的跳过当 bug「修」回去，也别让标题搜索与链接解析同时触发（会重复发送同一条内容）。
 - **OneBot 才支持合并转发**：`Comp.Nodes` 仅 OneBot v11（`aiocqhttp`）可用；其他平台走 `send_plain_output` + 主动发送（避免 AstrBot「回复时 @」污染图片 markdown）。
 - **合并转发的内存风险**：OneBot 会把节点内图片整体 base64，峰值约为原图总量 4 倍 → 用 `FORWARD_MAX_NODES` / `FORWARD_MAX_BATCH_MB` 拆批，不要去掉拆批逻辑。
 - **渲染图与文本重复**：视频类内容在卡片成功时不再发文字摘要；图文仍发图集 —— 调整时要保持「不重复、不丢内容」。

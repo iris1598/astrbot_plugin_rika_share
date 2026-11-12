@@ -34,7 +34,11 @@ from .link_parser.adapters import iter_adapters
 from .link_parser.adapters._external import register_external_adapters
 from .link_parser.adapters.registry import AdapterBuildContext
 from .link_parser.config import get_config, init_config, migrate_grouped_config
-from .link_parser.constants import COVER_COMMAND_PATTERN, GENERIC_URL_PATTERN
+from .link_parser.constants import (
+    COVER_COMMAND_PATTERN,
+    GENERIC_URL_PATTERN,
+    MINIAPP_CARD_PATTERN,
+)
 from .link_parser.exceptions import (
     DownloadException,
     IgnoreException,
@@ -46,9 +50,13 @@ from .link_parser.output import (
     EventUrlWrapper,
     build_platform_output,
     error_result,
+    extract_card_link,
+    extract_card_title,
     extract_links_from_event,
     find_reply_component,
     has_json_component,
+    is_miniapp_card,
+    parse_miniapp_card,
     quoted_links,
     quoted_text,
     send_nodes_batched,
@@ -142,7 +150,7 @@ class _ContentCacheEntry:
 
 
 @register("莉卡解析", "iris1598",
-          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA|网易云(联动)", "v3.2.0")
+          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA|网易云(联动)", "v3.3.0")
 class ParserPlugin(Star):
     # 合并转发（Comp.Nodes）是 OneBot v11 独有特性，其他平台均不支持
     @staticmethod
@@ -417,6 +425,78 @@ class ParserPlugin(Star):
                 except ParseException:
                     continue
 
+    # ==================== 官方机器人分享卡片处理器 ====================
+
+    def _card_source_parser(self, source: str) -> Any | None:
+        """按卡片 ``source`` 字段挑出对应解析器（精确匹配平台名 / 展示名）。"""
+        if not source:
+            return None
+        for parser in self.parsers.values():
+            platform = getattr(parser, "platform", None)
+            if platform is not None and source in (platform.name, platform.display_name):
+                return parser
+        return None
+
+    @filter.regex(MINIAPP_CARD_PATTERN.pattern)
+    async def miniapp_card_handler(
+        self, event: AstrMessageEvent, matched: re.Match | None = None
+    ):
+        """QQ 官方机器人的分享卡片（纯文本形态）：按链接或卡片标题解析。
+
+        官方机器人收到的分享卡片是**纯文本**（字段形态见 ``output/miniapp_card.py``）：
+        「图文H5」卡片带 ``jump_url``，链接可认领时由平台 Handler 按链接解析（见上）；
+        「小程序」卡片只有标题没有链接，取 ``title`` 去对应平台搜索——目前 B站
+        适配器实现了 ``search_video_by_title``，其他平台的卡片静默跳过。
+        """
+        fields = parse_miniapp_card(event.message_str)
+        if fields is None:
+            return
+        # 「图文H5」等带 jump_url 的卡片**优先按链接解析**：链接能被已启用的平台
+        # 认领时交给平台 Handler（其 filter 已命中并先行处理），这里不再按标题
+        # 搜索，避免同一条卡片解析两次；认领不了才回退标题搜索
+        link = extract_card_link(fields)
+        if link:
+            for existing in self.parsers.values():
+                try:
+                    existing.search_url(link)
+                except Exception:
+                    continue
+            return
+        title = extract_card_title(fields)
+        if not title:
+            return
+        # 「小程序」卡片的平台字段是 source，「图文H5」卡片是 tag
+        parser = self._card_source_parser(fields.get("source") or fields.get("tag") or "")
+        search_fn = getattr(parser, "search_video_by_title", None) if parser else None
+        if search_fn is None:
+            return  # 非已支持平台的卡片，或不支持按标题搜索
+        try:
+            url = await search_fn(title)
+        except ParseException as e:
+            result = error_result(event, f"❌ 解析失败: {e.message}")
+            if result is not None:
+                yield result
+            return
+        except Exception:
+            logger.exception("小程序卡片标题搜索异常")
+            result = error_result(event, "❌ 处理出错: 标题搜索失败")
+            if result is not None:
+                yield result
+            return
+        if not url:
+            result = error_result(
+                event,
+                f"❌ 未能在{parser.platform.display_name}找到与「{title[:40]}」匹配的内容",
+            )
+            if result is not None:
+                yield result
+            return
+        logger.info(f"小程序卡片标题搜索命中: {title[:50]} → {url}")
+        # 命中后包装成链接，复用与 JSON 卡片相同的解析主干（缓存 / 渲染 / 输出全一致）
+        wrapped = EventUrlWrapper(event, url)
+        async for r in self._process_url(wrapped, parser):
+            yield r
+
     # ==================== Cloudflare 截图 Fallback ====================
 
     def _is_cloudflare_available(self) -> bool:
@@ -490,6 +570,10 @@ class ParserPlugin(Star):
             return
         # JSON 卡片由 json_card_handler 处理，避免重复
         if has_json_component(event):
+            return
+        # 官方机器人的小程序卡片（纯文本）由 miniapp_card_handler 处理：
+        # 卡片文本里的 source_logo / preview URL 不是网页，不该被截图
+        if is_miniapp_card(event.message_str):
             return
 
         # 注意：AstrBot 的 @filter.regex 不传递 match 对象给 handler

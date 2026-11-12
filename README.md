@@ -1,7 +1,7 @@
 # 莉卡解析 · astrbot_plugin_rika_share
 
 ![AstrBot Plugin](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)
-![Version](https://img.shields.io/badge/Version-v3.2.0-brightgreen?style=flat-square)
+![Version](https://img.shields.io/badge/Version-v3.3.0-brightgreen?style=flat-square)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D3.5.13-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square)
 ![Render](https://img.shields.io/badge/Render-Pillow-orange?style=flat-square)
@@ -38,6 +38,9 @@
 
 自动识别文本链接与 JSON 分享卡片，一次提取标题、正文、作者、数据统计、图集与无水印视频。
 短链会自动跟随跳转，因此 `b23.tv` / `v.douyin.com` / `xhslink.com` 等分享链接可直接使用。
+
+**QQ 官方机器人**同样可用：分享卡片以纯文本下发（`[卡片消息] …`），带 `jump_url` 的
+按链接解析，无链接的 B站「小程序」卡片自动按标题搜索匹配视频。
 
 ### 🔑 B站扫码登录与 Cookie 自动化
 
@@ -113,7 +116,7 @@
 
 | 平台 | 覆盖类型 | 可下载内容 | 备注 |
 | :--- | :--- | :--- | :--- |
-| **哔哩哔哩** | 视频 / 动态 / 图文(Opus) / 直播 / 专栏 / 收藏夹 | 高清视频、封面、图集 | 支持扫码登录、Cookie 监控与自动续期 |
+| **哔哩哔哩** | 视频 / 动态 / 图文(Opus) / 直播 / 专栏 / 收藏夹 | 高清视频、封面、图集 | 支持扫码登录、Cookie 监控与自动续期；官方机器人下的小程序卡片按标题搜索解析 |
 | **抖音** | 视频 / 图文动态 | 无水印视频、高清图集 | 支持短链解析与实况照片重建 |
 | **快手** | 视频 / 图文 | 无水印视频、高清图片 | 支持短链与网页链接 |
 | **微博** | 动态 / 文章 / 视频 | 原图图集、无水印视频 | 支持多图网格与转发引用结构 |
@@ -396,6 +399,7 @@ astrbot_plugin_rika_share/
     ├── output/                   # 输出构建
     │   ├── builder.py            #   解析结果 → 合并转发 / 纯文本消息链
     │   ├── json_card.py          #   JSON 分享卡片识别与链接提取
+    │   ├── miniapp_card.py       #   QQ 官方机器人分享卡片（纯文本）识别与字段提取
     │   ├── quoted.py             #   引用（回复）消息的文本与链接提取
     │   └── replies.py            #   统一的回复构造（错误提示等）
     ├── utils/                    # 无状态工具（cache / media / formatting / cookie / url）

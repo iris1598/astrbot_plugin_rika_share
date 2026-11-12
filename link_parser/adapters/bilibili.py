@@ -4,10 +4,17 @@ import re
 import json
 import time
 import asyncio
+import html
 from typing import ClassVar
 
 from astrbot.api import logger
-from bilibili_api import HEADERS, Credential, select_client, request_settings
+from bilibili_api import (
+    HEADERS,
+    Credential,
+    search,
+    select_client,
+    request_settings,
+)
 from bilibili_api.opus import Opus
 from bilibili_api.video import Video
 from msgspec import convert
@@ -368,6 +375,96 @@ class BilibiliParser(BaseParser):
             graphics.append(fav.desc)
         return self.result(title=favdata.title, timestamp=favdata.timestamp,
                           author=author, graphics=graphics, extra={"content_type": "收藏夹"})
+
+    # ---------- 标题搜索（官方机器人小程序卡片，见 output/miniapp_card.py） ----------
+
+    #: 搜索结果标题里的关键词高亮标签（``<em class="keyword">…</em>``）
+    _EM_TAG_RE: ClassVar[re.Pattern[str]] = re.compile(r"</?em[^>]*>")
+
+    @staticmethod
+    def _title_search_variants(title: str) -> list[str]:
+        """标题搜索的关键词变体（按命中概率排序；重复的变体会被跳过）。"""
+        variants = [title]
+        # 变体1：去掉行首 [xx/xx] 之类的活动前缀。B站搜索对带前缀的完整标题召回
+        # 很差（实测「[魔裁/绘画] …」完整标题搜不到目标视频），去掉才能命中。
+        no_prefix = re.sub(r"^\s*\[[^\[\]]{1,30}\]\s*", "", title).strip()
+        if no_prefix and no_prefix != title:
+            variants.append(no_prefix)
+        # 变体2：去掉全部 [..] / 【..】 段，只留标题主体
+        bare = re.sub(r"\[[^\[\]]{1,30}\]|【[^【】]{1,30}】", " ", title)
+        bare = re.sub(r"\s{2,}", " ", bare).strip()
+        if bare and bare not in variants:
+            variants.append(bare)
+        return variants
+
+    @classmethod
+    def _normalize_search_title(cls, title: str) -> str:
+        """搜索标题归一化：去高亮标签、反转义 HTML 实体、去空白与标点。
+
+        B站搜索结果的标题带 ``<em class="keyword">`` 高亮与 ``&quot;`` 之类的实体；
+        对比时两侧都按「只保留字母数字与 CJK」归一化。
+        """
+        cleaned = html.unescape(cls._EM_TAG_RE.sub("", title or ""))
+        return re.sub(r"[\W_]+", "", cleaned).lower()
+
+    async def _search_video_once(self, keyword: str, *, target_norm: str) -> str | None:
+        """跑一次视频搜索，返回与目标标题匹配的结果链接（没有则 ``None``）。
+
+        匹配判定：归一化标题相等优先（取位置靠前的）；都没有时接受
+        「结果标题以目标标题开头」的结果（卡片标题可能被 QQ 截断）。
+        """
+        try:
+            data = await self._call_bili_api_with_retry(
+                lambda: search.search_by_type(
+                    keyword,
+                    search_type=search.SearchObjectType.VIDEO,
+                    page_size=42,
+                ),
+                operation="标题搜索",
+            )
+        except Exception as e:
+            raise ParseException(f"B站标题搜索失败: {e}") from e
+        items = (data or {}).get("result") or []
+        if not isinstance(items, list):
+            return None
+        prefix_hit = None
+        for item in items:
+            bvid = str(item.get("bvid") or "")
+            if not bvid:
+                continue
+            result_norm = self._normalize_search_title(str(item.get("title") or ""))
+            if not result_norm:
+                continue
+            if result_norm == target_norm:
+                return f"https://www.bilibili.com/video/{bvid}"
+            if (
+                prefix_hit is None
+                and len(target_norm) >= 4
+                and result_norm.startswith(target_norm)
+            ):
+                prefix_hit = f"https://www.bilibili.com/video/{bvid}"
+        return prefix_hit
+
+    async def search_video_by_title(self, title: str) -> str | None:
+        """按标题搜索视频，返回可解析的视频链接；找不到返回 ``None``。
+
+        官方机器人的 B站 小程序卡片只有标题没有链接（QQ 开放平台把卡片转成纯文本，
+        见 ``output/miniapp_card.py``），只能以卡片 ``title`` 为关键词搜索。实测该
+        搜索接口未登录时的排序与网页不一致，且带 ``[…]`` 前缀的完整标题召回差，
+        因此逐个尝试关键词变体，以「归一化标题相等（或截断前缀相等）」为准，
+        **不盲目取第一条**——排序不稳时第一条可能是完全无关的视频。
+        """
+        keyword = (title or "").strip()
+        if not keyword:
+            return None
+        target_norm = self._normalize_search_title(keyword)
+        if not target_norm:
+            return None
+        for kw in self._title_search_variants(keyword):
+            url = await self._search_video_once(kw, target_norm=target_norm)
+            if url:
+                return url
+        return None
 
     async def extract_download_urls(self, video: Video | None = None, *, bvid: str | None = None,
                                      avid: int | None = None, page_index: int = 0):
