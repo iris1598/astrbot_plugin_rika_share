@@ -768,6 +768,9 @@ tag: 哔哩哔哩
 
 ### 5.16 网页分享（非 OneBot 平台的「合并转发转网页」，`output/webpage.py`）
 
+> 页面形态与交互设计参考 [qbob](https://github.com/Loping151/qbob)（AGPL-3.0）的同名功能；
+> **实现为独立重写，不包含其代码文本**（qbob 与本项目许可证不兼容，见第 9 节许可证条目），致谢见 README。
+
 OneBot v11 才支持 `Comp.Nodes` 合并转发；其他平台（QQ Official / Telegram / Discord /
 webchat 等）在 `_process_url` 的文本/图集发送改走**网页链接**（`main._send_text_output`
 是决策点）：把 header + 全部文本节点 + 全部图片 + 限流警告**原样**转成一个聊天记录式网页
@@ -979,6 +982,7 @@ Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复�
 - **聊天里的分享链接只能走 `/api/file/{token}`**：插件的 `register_web_api` 路由带 Dashboard 鉴权（JWT / api_key），聊天用户点不开。别把分享链接「修」到插件路由上，也别给文件服务的路由加Referer/Origin 校验之类的想法——token 即凭据。
 - **腾讯文档跳转页（docs.qq.com/scenario/link.html）是外部服务**（qbob 实测可用）：它会给目标 URL 附加 query 参数（如 `?qq_aio_chat_type=N`），`/api/file/{token}` 路由忽略多余 query 所以无碍；它不可用时关掉 `WEBPAGE_TDOCS_JUMP` 即可（QQ 系平台才默认开启，其他平台发原始链接）。`tdocs_jump` 对已是 docs.qq.com 的链接原样放行，别造成二次包装。
 - **`create_webpage` 的 `base_url` 会再剥一次尾斜杠**（防御性归一，避免拼出 `//api/file/…`）——别依赖调用方一定传干净的地址。
+- **webpage.py 是独立实现，不含 qbob 代码**：页面形态参考自 [qbob](https://github.com/Loping151/qbob)（**AGPL-3.0**），但本项目是 MIT——最初一版曾直接改写它的灯箱脚本 / CSS / autolink（强 copyleft 派生义务与 MIT 冲突），2026-11-13 已把这些表达层**全部重写为独立实现**（仅保留不可版权化的设计思路：聊天记录式页面、图片网格、暗色自适应、docs.qq.com 跳转 URL 格式）。因此 webpage.py 不构成 qbob 的派生作品，README / 本节只保留来源致谢。**别把当年那版直接改写的实现找回来**；改这块时也别去抄 qbob 的代码文本。
 - **合并转发的内存风险**：OneBot 会把节点内图片整体 base64，峰值约为原图总量 4 倍 → 用 `FORWARD_MAX_NODES` / `FORWARD_MAX_BATCH_MB` 拆批，不要去掉拆批逻辑。
 - **渲染图与文本重复**：视频类内容在卡片成功时不再发文字摘要；图文仍发图集 —— 调整时要保持「不重复、不丢内容」。
 - **缓存不区分发送者**：同一内容在同一进程内所有会话共享一条缓存与一张卡片（这是预期行为，别按会话分键）。

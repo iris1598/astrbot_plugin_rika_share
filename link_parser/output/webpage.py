@@ -1,7 +1,7 @@
 """合并转发内容 → 一个可点开的网页，群里只发一条链接通知。
 
 仅用于不支持 Comp.Nodes（合并转发）的平台：把「标题头 + 节点内容」渲染成一个
-自包含的聊天记录页（浅 / 深色自适应、图片网格、灯箱），页面与图集图片都经
+自包含的聊天记录式页面（浅/深色自适应、图片网格、灯箱），页面与图集图片都经
 AstrBot 文件服务（``/api/file/{token}``，免鉴权路由，token 即访问凭据）下发，
 链接用 AstrBot 的「对外可达的回调接口地址」（``callback_api_base``）拼出。
 
@@ -14,12 +14,15 @@ AstrBot 文件服务（``/api/file/{token}``，免鉴权路由，token 即访问
 - QQ 客户端直接打开外站链接常被拦（「如需浏览，请使用浏览器访问」），QQ 系
   平台默认经腾讯文档的外链跳转页（docs.qq.com/scenario/link.html）打开网页。
 
-布局与机制改写自 qbob-main（MIT License）的 ``core/forwardpage.py``。
+实现为独立编写；页面形态与交互设计参考 qbob（https://github.com/Loping151/qbob，
+AGPL-3.0）的同名功能，未包含其代码文本——qbob 的许可证与本项目（MIT）不兼容，
+当初借用的灯箱脚本 / CSS / autolink 已全部重写为本插件的独立实现。
 """
 
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import html
 import re
@@ -42,17 +45,18 @@ __all__ = [
     "webpage_token_expired",
 ]
 
-#: 插件方名称（页面里的说话人）与首字头像
+#: 页面里的说话人名称（解析者身份）
 BOT_NAME = "莉卡解析"
 
-# 头像色相: 按名字取, 同一人整页同色（qbob 同款）
-_HUES = (212, 160, 24, 340, 262, 188, 44, 300)
+# 头像底色候选（HSL 色相值）：按名字哈希取一个，同一名字整页同色
+_HUES = (206, 152, 28, 338, 258, 176, 40, 296)
 
-# 裸链接自动成链; 在转义后的文本上匹配, 不会匹配到标签
+# 裸链接自动成链：在「已转义」的文本上扫描，不会误入标签内部
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
-_URL_TAIL = "。，、；：！？…）】》」』.,;:!?)"
+#: URL 尾部应当剥出去的标点（中文/英文成对符号与句读）
+_URL_TRAIL = "。，、；：！？…）】》」』.,;:!?)\"'"
 
-# 腾讯文档的外链跳转页（qbob cards.DOCS_JUMP 的移植）: 经它打开的网页可在 QQ 内直接浏览
+# 腾讯文档的外链跳转页：经它打开的网页可在 QQ 内直接浏览
 DOCS_JUMP = "https://docs.qq.com/scenario/link.html?url="
 
 
@@ -75,150 +79,184 @@ def _esc(text: object) -> str:
 
 
 def _autolink(escaped: str) -> str:
-    def repl(match: re.Match) -> str:
-        url = match.group(0)
-        tail = ""
-        while url and url[-1] in _URL_TAIL:
-            tail = url[-1] + tail
-            url = url[:-1]
-        return (f'<a href="{url}" rel="noreferrer noopener" target="_blank">{url}</a>'
-                + tail)
+    """把已转义文本里的裸 http(s) 链接替换成 <a>。
 
-    return _URL_RE.sub(repl, escaped)
+    链接尾部粘住的句读/收尾括号剥到 <a> 外面；转义产生的 ``&amp;`` 等实体
+    不会被正则截断（排除集里没有 ``&``，查询串里的 ``&`` 是合法成分）。
+    """
+    pieces: list[str] = []
+    cursor = 0
+    for match in _URL_RE.finditer(escaped):
+        raw = match.group(0)
+        url = raw.rstrip(_URL_TRAIL)
+        tail = raw[len(url):]
+        pieces.append(escaped[cursor:match.start()])
+        pieces.append(
+            f'<a href="{url}" rel="noreferrer noopener" target="_blank">{url}</a>{tail}'
+        )
+        cursor = match.end()
+    pieces.append(escaped[cursor:])
+    return "".join(pieces)
 
 
-def _hue_index(name: str) -> int:
-    return hashlib.sha1(name.encode("utf-8")).digest()[0] % len(_HUES)
+def _hue_of(name: str) -> int:
+    """名字 → _HUES 下标（CRC32 取模，稳定且分布均匀）。"""
+    return binascii.crc32(name.encode("utf-8")) % len(_HUES)
 
 
-def _hue_style() -> str:
-    light = "".join(f".a{i}{{--ab:hsl({h} 60% 91%);--af:hsl({h} 45% 38%)}}"
-                    for i, h in enumerate(_HUES))
-    dark = "".join(f".a{i}{{--ab:hsl({h} 28% 24%);--af:hsl({h} 55% 74%)}}"
-                   for i, h in enumerate(_HUES))
+def _tone_styles() -> str:
+    """每个色相候选的头像底色（浅/深各一套）。"""
+    light = "".join(
+        f".tone-{i}{{--avatar-bg:hsl({h} 58% 92%);--avatar-fg:hsl({h} 44% 36%)}}"
+        for i, h in enumerate(_HUES)
+    )
+    dark = "".join(
+        f".tone-{i}{{--avatar-bg:hsl({h} 30% 26%);--avatar-fg:hsl({h} 56% 76%)}}"
+        for i, h in enumerate(_HUES)
+    )
     return f"{light}@media(prefers-color-scheme:dark){{{dark}}}"
 
 
 _STYLE = """
-:root{color-scheme:light dark;--bg:#f2f2f7;--ink:#1c1c1e;--mute:#8e8e93;
---line:rgba(60,60,67,.12);--tile:#e9e9ee;--hatch:#dcdce2;--link:#0a7aff;
---bar:rgba(242,242,247,.84);
---pane:hsl(var(--h1,212) 52% 98%);--gsh:0 1px 2px rgba(15,23,42,.05),0 8px 24px rgba(15,23,42,.06)}
-@media(prefers-color-scheme:dark){:root{--bg:#000;--ink:#f2f2f7;--mute:#8e8e93;
---line:rgba(84,84,88,.48);--tile:#2c2c2e;--hatch:#3a3a3c;--link:#409cff;
---bar:rgba(0,0,0,.72);
---pane:hsl(var(--h1,212) 15% 12%);--gsh:0 8px 24px rgba(0,0,0,.4)}}
+:root{color-scheme:light dark;--page:#eef1f6;--card:#fff;--fg:#242830;--dim:#828b98;
+--hair:rgba(36,40,48,.1);--chip:#e7eaf1;--chip-2:#d5d9e2;--accent:#2f7cf6;
+--top:rgba(240,243,248,.86);--shadow:0 1px 3px rgba(18,22,30,.06),0 12px 30px rgba(18,22,30,.08);
+--avatar-bg:var(--chip);--avatar-fg:var(--dim)}
+@media(prefers-color-scheme:dark){:root{--page:#0e1013;--card:#1d2026;--fg:#e7e9ee;--dim:#8b93a1;
+--hair:rgba(231,233,238,.09);--chip:#2a2e36;--chip-2:#343945;--accent:#5c9dff;
+--top:rgba(14,16,19,.78);--shadow:0 12px 30px rgba(0,0,0,.45)}}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font:15.5px/1.6 -apple-system,
-"PingFang SC","HarmonyOS Sans SC","MiSans","Noto Sans CJK SC","Microsoft YaHei",
-system-ui,sans-serif;-webkit-font-smoothing:antialiased}
-.top{position:sticky;top:0;z-index:2;background:var(--bar);-webkit-backdrop-filter:
-saturate(180%) blur(14px);backdrop-filter:saturate(180%) blur(14px);
-border-bottom:1px solid var(--line)}
-.bar{max-width:680px;margin:0 auto;padding:12px 16px;display:flex;align-items:baseline;
-gap:10px}
-h1{font-size:17px;font-weight:600;margin:0;letter-spacing:-.01em}
-.cnt{color:var(--mute);font-size:13px;font-variant-numeric:tabular-nums;margin-left:auto}
-.sheet{max-width:680px;margin:12px auto 0;background:var(--pane);border-radius:18px;
-padding:4px 0;overflow:hidden;box-shadow:var(--gsh)}
-@media(max-width:700px){.sheet{margin:8px 8px 0}}
-.day{display:table;margin:12px auto 2px;padding:2px 12px;border-radius:999px;background:var(--tile);
-color:var(--mute);font-size:12px;font-variant-numeric:tabular-nums}
-.g{display:flex;gap:12px;padding:12px 16px;border-top:1px solid var(--line)}
-.day+.g,.sheet>.g:first-child{border-top:0;padding-top:8px}
-.av{flex:none;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;
-justify-content:center;font-size:15px;font-weight:600;background:var(--ab,var(--tile));
-color:var(--af,var(--mute));user-select:none;overflow:hidden}
-.bd{flex:1;min-width:0}
-.name{font-size:13px;font-weight:600;color:var(--af,var(--ink));line-height:20px}
-.m{position:relative;padding:2px 0}
-.m+.m{margin-top:4px}
-.txt{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
-.txt a{color:var(--link);text-decoration:none}
-.pics{display:grid;gap:3px;margin:6px 0 2px}
-.pics.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
-.pics.c3{grid-template-columns:repeat(3,minmax(0,1fr))}
-.pics a{display:block;min-width:0;border-radius:10px;overflow:hidden;background:var(--tile)
-center/cover no-repeat;box-shadow:inset 0 0 0 1px var(--line)}
-.pics a:focus-visible{outline:2px solid var(--link);outline-offset:2px}
-.pics img{display:block;width:100%;height:100%;object-fit:cover;aspect-ratio:1}
-.pics.c1{grid-template-columns:minmax(0,1fr)}
-.pics.c1 a{width:fit-content;max-width:100%;min-width:96px;min-height:96px}
-.pics.c1 img{width:auto;max-width:100%;height:auto;aspect-ratio:auto;object-fit:fill;
-background:var(--tile)}
-.gone{display:flex;align-items:center;justify-content:center;margin:6px 0 2px;height:84px;
-border-radius:10px;color:var(--mute);font-size:13px;background:repeating-linear-gradient(
-135deg,var(--tile) 0 8px,var(--hatch) 8px 9px)}
-.pics .gone{margin:0;height:auto;aspect-ratio:1}
-.pics.c1 .gone{aspect-ratio:auto;height:84px}
-.ft{padding:20px 16px 28px;color:var(--mute);font-size:12px;text-align:center;
+body{margin:0;background:var(--page);color:var(--fg);
+font:15.5px/1.65 -apple-system,"PingFang SC","HarmonyOS Sans SC","MiSans",
+"Noto Sans CJK SC","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.topbar{position:sticky;top:0;z-index:3;background:var(--top);
+-webkit-backdrop-filter:blur(16px) saturate(1.6);backdrop-filter:blur(16px) saturate(1.6);
+border-bottom:1px solid var(--hair)}
+.topbar-in{max-width:660px;margin:0 auto;padding:12px 18px;display:flex;
+align-items:baseline;gap:10px}
+h1{margin:0;font-size:16.5px;font-weight:650;letter-spacing:-.01em}
+.meta{margin-left:auto;color:var(--dim);font-size:12.5px;white-space:nowrap;
 font-variant-numeric:tabular-nums}
-.empty{padding:44px 16px;text-align:center;color:var(--mute)}
-.lb{position:fixed;inset:0;z-index:9;background:#000;display:flex;align-items:center;
-justify-content:center;touch-action:none;overflow:hidden}
-.lb[hidden]{display:none}
-.lb img{max-width:100vw;max-height:100vh;object-fit:contain;user-select:none;
--webkit-user-drag:none;transition:transform .16s ease-out;will-change:transform}
-.lb .cnt{position:fixed;top:14px;left:0;right:0;
-text-align:center;color:#9a9a9e;font-size:13px;margin:0;pointer-events:none}
-.lb button{position:fixed;z-index:1;border:0;background:rgba(0,0,0,.45);color:#f2f2f7;
-font:20px/1 system-ui;width:40px;height:40px;border-radius:20px;cursor:pointer}
-.lb button:focus-visible{outline:2px solid #fff}
-.lb .x{top:10px;right:12px}
-.lb .p,.lb .n{top:50%;margin-top:-20px}
-.lb .p{left:10px}.lb .n{right:10px}
-.lb.one .p,.lb.one .n{display:none}
-.lbopen{overflow:hidden}
-@media(prefers-reduced-motion:reduce){.lb img{transition:none}}
+.card{max-width:660px;margin:14px auto 0;background:var(--card);border-radius:16px;
+padding:6px 0 10px;box-shadow:var(--shadow)}
+@media(max-width:700px){.card{margin:8px 8px 0}}
+.notice{display:table;margin:10px auto 0;padding:2px 12px;border-radius:999px;
+background:var(--chip);color:var(--dim);font-size:12px}
+.thread{display:flex;gap:12px;padding:12px 18px 6px}
+.avatar{flex:none;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;
+justify-content:center;font-weight:600;font-size:15px;background:var(--avatar-bg);
+color:var(--avatar-fg);user-select:none}
+.thread-main{flex:1;min-width:0}
+.who{display:block;font-size:12.5px;font-weight:600;color:var(--avatar-fg);margin-bottom:2px}
+.bubble{padding:3px 0}
+.bubble+.bubble{margin-top:6px}
+.bubble-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.bubble-text a{color:var(--accent);text-decoration:none}
+.img-grid{display:grid;gap:4px;margin:6px 0 2px}
+.img-grid.cols-2{grid-template-columns:1fr 1fr}
+.img-grid.cols-3{grid-template-columns:1fr 1fr 1fr}
+.img-grid a.shot{display:block;min-width:0;border-radius:10px;overflow:hidden;
+background:var(--chip) center/cover no-repeat;box-shadow:inset 0 0 0 1px var(--hair)}
+.img-grid a.shot:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.img-grid img{display:block;width:100%;height:100%;object-fit:cover;aspect-ratio:1}
+.img-grid.cols-1 a.shot{width:fit-content;max-width:100%;min-width:96px;min-height:96px}
+.img-grid.cols-1 img{width:auto;max-width:100%;height:auto;aspect-ratio:auto;
+object-fit:fill;background:var(--chip)}
+.img-lost{display:flex;align-items:center;justify-content:center;height:82px;
+border-radius:10px;color:var(--dim);font-size:12.5px;background:repeating-linear-gradient(
+135deg,var(--chip) 0 8px,var(--chip-2) 8px 9px)}
+.img-grid .img-lost{height:auto;aspect-ratio:1}
+.img-grid.cols-1 .img-lost{aspect-ratio:auto;height:82px}
+.colophon{padding:18px 16px 30px;color:var(--dim);font-size:12px;text-align:center;
+font-variant-numeric:tabular-nums}
+.viewer{position:fixed;inset:0;z-index:9;display:none;background:#000}
+.viewer.open{display:flex;align-items:center;justify-content:center;touch-action:none}
+.viewer-img{max-width:100vw;max-height:100vh;object-fit:contain;user-select:none;
+-webkit-user-drag:none;transition:transform .18s ease-out;will-change:transform}
+.viewer-count{position:fixed;top:14px;left:0;right:0;text-align:center;color:#98999e;
+font-size:13px;pointer-events:none}
+.viewer button{position:fixed;z-index:2;border:0;background:rgba(20,20,22,.5);color:#f1f2f4;
+font:20px/1 system-ui;width:42px;height:42px;border-radius:21px;cursor:pointer}
+.viewer button:focus-visible{outline:2px solid #fff}
+.viewer-close{top:12px;right:14px}
+.viewer-prev,.viewer-next{top:50%;margin-top:-21px}
+.viewer-prev{left:12px}.viewer-next{right:12px}
+.viewer.single .viewer-prev,.viewer.single .viewer-next{display:none}
+@media(prefers-reduced-motion:reduce){.viewer-img{transition:none}}
 """.strip()
 
-# 灯箱: 滑动/方向键切图, 双击或双指放大, 点背景或 × 关闭(点图不关, 免得误关双击).
-# touchmove 一律 preventDefault: iOS 上 overflow:hidden 拦不住底层页面滚动.
-# CSP 哈希在运行时按内容计算, 改脚本无需手动更新.（qbob 同款脚本）
+# 灯箱：点图开全屏层，左右按钮/方向键/横滑切图，双击缩放，点背景或 × 关闭。
+# CSP 哈希在运行时按内容计算，改脚本无需手动更新。
 _SCRIPT = """
-(function(){var L=[].slice.call(document.querySelectorAll('a.img'));if(!L.length)return;
-var lb=document.getElementById('lb'),im=lb.querySelector('img'),c=lb.querySelector('.cnt'),
-i=0,s=1,bs=1,tx=0,ty=0,tap=0,t0=null,d0=0,s0=1,mv=false,ld=null,drag=null,bk=0;
-if(L.length<2)lb.className+=' one';
-function ap(){im.style.transform='translate('+tx+'px,'+ty+'px) scale('+s+')'}
-function reset(){s=1;bs=1;tx=ty=0;im.style.width=im.style.height=im.style.maxWidth=im.style.maxHeight='';ap()}
-function clamp(){var mx=Math.max(0,(im.offsetWidth*s-lb.clientWidth)/2),
-my=Math.max(0,(im.offsetHeight*s-lb.clientHeight)/2);
-tx=Math.min(mx,Math.max(-mx,tx));ty=Math.min(my,Math.max(-my,ty))}
-function zoom(ns,x,y){ns=Math.min(8/bs,Math.max(1/bs,ns));var cx=lb.clientWidth/2,cy=lb.clientHeight/2,k=ns/s;
-tx=(x-cx)-k*((x-cx)-tx);ty=(y-cy)-k*((y-cy)-ty);s=ns;clamp();ap()}
-function bake(){clearTimeout(bk);if(s===1)return;if(Math.abs(bs*s-1)<.01)return reset();
-var w=im.offsetWidth*s;bs*=s;s=1;im.style.transition='none';im.style.maxWidth=im.style.maxHeight='none';
-im.style.width=w+'px';im.style.height='auto';ap();requestAnimationFrame(function(){im.style.transition=''})}
-function later(){clearTimeout(bk);bk=setTimeout(bake,200)}
-function toggle(x,y){if(s>1||bs>1)reset();else{zoom(Math.max(2.5,lb.clientWidth/im.offsetWidth),x,y);later()}}
-function go(n){i=(n+L.length)%L.length;reset();var a=L[i];im.src=a.href;
-c.textContent=(i+1)+' / '+L.length;lb.hidden=false;document.body.classList.add('lbopen')}
-function off(){lb.hidden=true;im.removeAttribute('src');document.body.classList.remove('lbopen');L[i].focus()}
-L.forEach(function(a,n){a.addEventListener('click',function(e){e.preventDefault();go(n)})});
-lb.addEventListener('click',function(e){var b=e.target.closest('button');
-if(b){b.className==='p'?go(i-1):b.className==='n'?go(i+1):off();return}
-if(e.target!==im&&!mv)off()});
-im.addEventListener('dblclick',function(e){e.preventDefault();toggle(e.clientX,e.clientY)});
-lb.addEventListener('wheel',function(e){e.preventDefault();zoom(s*(e.deltaY<0?1.2:1/1.2),e.clientX,e.clientY);later()},{passive:false});
-im.addEventListener('mousedown',function(e){if(s*bs>1){drag={x:e.clientX,y:e.clientY,tx:tx,ty:ty};e.preventDefault()}});
-window.addEventListener('mousemove',function(e){if(!drag)return;im.style.transition='none';
-tx=drag.tx+e.clientX-drag.x;ty=drag.ty+e.clientY-drag.y;clamp();ap();mv=true});
-window.addEventListener('mouseup',function(){drag=null;im.style.transition='';setTimeout(function(){mv=false},0)});
-document.addEventListener('keydown',function(e){if(lb.hidden)return;
-if(e.key==='Escape')off();else if(e.key==='ArrowLeft')go(i-1);else if(e.key==='ArrowRight')go(i+1)});
-function dist(t){var dx=t[0].clientX-t[1].clientX,dy=t[0].clientY-t[1].clientY;return Math.sqrt(dx*dx+dy*dy)}
-lb.addEventListener('touchstart',function(e){var t=e.touches;mv=false;im.style.transition='none';
-if(t.length===2){d0=dist(t);s0=s;t0=null}else t0={x:t[0].clientX,y:t[0].clientY,tx:tx,ty:ty}},{passive:true});
-lb.addEventListener('touchmove',function(e){var t=e.touches;e.preventDefault();
-if(t.length===2){zoom(s0*dist(t)/d0,(t[0].clientX+t[1].clientX)/2,(t[0].clientY+t[1].clientY)/2);mv=true}
-else if(s*bs>1&&t0){tx=t0.tx+t[0].clientX-t0.x;ty=t0.ty+t[0].clientY-t0.y;clamp();ap();mv=true}},{passive:false});
-lb.addEventListener('touchend',function(e){im.style.transition='';if(e.touches.length)return;
-if(s!==1)bake();var ch=e.changedTouches[0];
-if(t0&&s*bs===1&&!mv){var dx=ch.clientX-t0.x;if(Math.abs(dx)>48){mv=true;go(dx<0?i+1:i-1);t0=null;return}}
-if(!mv&&e.target===im){var now=Date.now();if(now-tap<320){e.preventDefault();toggle(ch.clientX,ch.clientY);tap=0}else tap=now}
-t0=null});
+(function () {
+  var shots = [].slice.call(document.querySelectorAll('a.shot'));
+  var box = document.getElementById('viewer');
+  if (!shots.length || !box) return;
+  var pic = box.querySelector('.viewer-img');
+  var counter = box.querySelector('.viewer-count');
+  var current = 0;
+  var zoomed = false;
+
+  function show(n) {
+    current = (n + shots.length) % shots.length;
+    pic.src = shots[current].getAttribute('href');
+    counter.textContent = (current + 1) + ' / ' + shots.length;
+    box.classList.add('open');
+    document.documentElement.style.overflow = 'hidden';
+  }
+  function resetZoom() {
+    if (!zoomed) return;
+    zoomed = false;
+    pic.style.transform = '';
+  }
+  function close() {
+    box.classList.remove('open');
+    pic.removeAttribute('src');
+    document.documentElement.style.overflow = '';
+  }
+  function move(delta) {
+    resetZoom();
+    show(current + delta);
+  }
+
+  shots.forEach(function (a, index) {
+    a.addEventListener('click', function (event) {
+      event.preventDefault();
+      resetZoom();
+      show(index);
+    });
+  });
+  box.addEventListener('click', function (event) {
+    var button = event.target.closest('button');
+    if (button) {
+      if (button.classList.contains('viewer-prev')) move(-1);
+      else if (button.classList.contains('viewer-next')) move(1);
+      else close();
+      return;
+    }
+    if (event.target !== pic) close();
+  });
+  document.addEventListener('keydown', function (event) {
+    if (!box.classList.contains('open')) return;
+    if (event.key === 'Escape') close();
+    else if (event.key === 'ArrowLeft') move(-1);
+    else if (event.key === 'ArrowRight') move(1);
+  });
+  pic.addEventListener('dblclick', function (event) {
+    event.preventDefault();
+    zoomed = !zoomed;
+    pic.style.transform = zoomed ? 'scale(2.5)' : '';
+  });
+  var touchX = 0;
+  box.addEventListener('touchstart', function (event) {
+    touchX = event.touches[0].clientX;
+  }, { passive: true });
+  box.addEventListener('touchend', function (event) {
+    var dx = event.changedTouches[0].clientX - touchX;
+    if (Math.abs(dx) > 60) move(dx < 0 ? 1 : -1);
+  }, { passive: true });
+  if (shots.length === 1) box.classList.add('single');
 })();
 """.strip()
 
@@ -226,9 +264,9 @@ t0=null});
 def _csp(script: str) -> str:
     """只放行指定哈希的脚本。
 
-    与 qbob 的差别：页面经 AstrBot 文件服务下发，没有响应头可用，CSP 由
-    ``<meta>`` 标签承载（frame-ancestors 在 meta 里会被忽略，干脆不写）；
-    ``callback_api_base`` 允许填 http://（内网 / 未配 TLS），所以 img-src 也放开 http:。
+    页面经 AstrBot 文件服务下发，没有响应头可用，CSP 由 ``<meta>`` 标签承载
+    （frame-ancestors 在 meta 里会被忽略，干脆不写）；``callback_api_base`` 允许
+    填 http://（内网 / 未配 TLS），所以 img-src 也放开 http:。
     """
     digest = base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
     return ("default-src 'none'; img-src https: http: data:; "
@@ -244,19 +282,30 @@ def _summarize(total_items: int, n_pics: int) -> str:
     return " · ".join(parts)
 
 
+def summarize_items(text_items: list[list]) -> str:
+    """一行摘要, 如 "5 条内容 · 8 张图片"（复用链接时也要拼通知文案, 故公开）。"""
+    n_pics = sum(
+        1
+        for item in text_items
+        for kind, _ in _collect_blocks(item)
+        if kind == "pic"
+    )
+    return _summarize(len(text_items), n_pics)
+
+
 def _render_pics(urls: list[str]) -> str:
-    """相邻图片排成一格: 1 张满栏不限高, 2/4 张两列, 其余三列. 空串 = 已失效占位。"""
+    """相邻图片排成一格：1 张满栏不限高，2/4 张两列，其余三列。空串 = 已失效占位。"""
     cols = 1 if len(urls) == 1 else 2 if len(urls) in (2, 4) else 3
     cells: list[str] = []
     for url in urls:
         if url:
             # decoding=async: 大图解码不阻塞滚动
-            cells.append(f'<a class="img" href="{_esc(url)}">'
+            cells.append(f'<a class="shot" href="{_esc(url)}">'
                          f'<img src="{_esc(url)}" alt="" loading="lazy" '
                          f'decoding="async"></a>')
         else:
-            cells.append('<div class="gone">图片 · 已失效</div>')
-    return f'<div class="pics c{cols}">{"".join(cells)}</div>'
+            cells.append('<span class="img-lost">图片 · 已失效</span>')
+    return f'<div class="img-grid cols-{cols}">{"".join(cells)}</div>'
 
 
 def _collect_blocks(item: list) -> list[tuple[str, str]]:
@@ -287,7 +336,7 @@ def _collect_blocks(item: list) -> list[tuple[str, str]]:
 
 
 def _render_item(blocks: list[tuple[str, str]], urls: dict[str, str]) -> str:
-    """单个节点 -> 气泡内容; 相邻图片并成一格。"""
+    """单个节点 -> 气泡内容；相邻图片并成一格。"""
     out: list[str] = []
     pic_buf: list[str] = []
 
@@ -301,13 +350,13 @@ def _render_item(blocks: list[tuple[str, str]], urls: dict[str, str]) -> str:
             pic_buf.append(urls.get(value, "") if value else "")
             continue
         flush_pics()
-        out.append(f'<p class="txt">{_autolink(_esc(value))}</p>')
+        out.append(f'<p class="bubble-text">{_autolink(_esc(value))}</p>')
     flush_pics()
     return "".join(out)
 
 
-def _shell(body: str, title: str, script: str, hue: int) -> str:
-    csp = _csp(script)
+def _shell(body: str, title: str) -> str:
+    csp = _csp(_SCRIPT)
     return (
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
         # 不开 viewport-fit=cover, 页面无需铺到刘海下
@@ -316,8 +365,8 @@ def _shell(body: str, title: str, script: str, hue: int) -> str:
         # 经 AstrBot 文件服务下发, CSP 只能写在 meta 里
         f'<meta http-equiv="Content-Security-Policy" content="{_esc(csp)}">'
         f"<title>{_esc(title)}</title>"
-        f"<style>{_STYLE}{_hue_style()}:root{{--h1:{hue};}}</style></head>"
-        f"<body>{body}<script>{script}</script></body></html>"
+        f"<style>{_STYLE}{_tone_styles()}</style></head>"
+        f"<body>{body}<script>{_SCRIPT}</script></body></html>"
     )
 
 
@@ -329,34 +378,33 @@ def render_share_page(
     ttl_hours: int,
 ) -> str:
     """整页 HTML（不含图片地址解析，纯同步）。"""
-    hue = _hue_index(BOT_NAME)
-    rows = "".join(f'<div class="m">{part}</div>' for part in items_html)
-    group = (
-        f'<section class="g a{hue}"><div class="av">{_esc(BOT_NAME[:1])}</div>'
-        f'<div class="bd"><div class="name">{_esc(BOT_NAME)}</div>{rows}</div></section>'
+    hue = _hue_of(BOT_NAME)
+    bubbles = "".join(f'<div class="bubble">{part}</div>' for part in items_html)
+    thread = (
+        f'<section class="thread tone-{hue}">'
+        f'<span class="avatar">{_esc(BOT_NAME[:1])}</span>'
+        f'<div class="thread-main"><span class="who">{_esc(BOT_NAME)}</span>{bubbles}</div>'
+        f"</section>"
     )
-    parts: list[str] = []
-    if gone_pics:
-        # 页顶统一说明一次失效, 单个图格内另有占位
-        parts.append('<div class="day">部分图片已失效</div>')
-    parts.append(group)
+    notice = '<div class="notice">部分图片已失效</div>' if gone_pics else ""
     made = time.strftime("%Y-%m-%d %H:%M")
     if int(ttl_hours) > 0:
         ttl_note = f"链接约 {int(ttl_hours)} 小时内有效"
     else:
         ttl_note = "链接在 AstrBot 重启前有效"
     body = (
-        '<header class="top"><div class="bar">'
+        '<header class="topbar"><div class="topbar-in">'
         f"<h1>{_esc(header or BOT_NAME)}</h1>"
-        f'<span class="cnt">{_esc(summary)}</span></div></header>'
-        f'<main class="sheet">{"".join(parts)}</main>'
-        f'<footer class="ft">{made} 生成 · {ttl_note}</footer>'
-        '<div class="lb" id="lb" hidden><p class="cnt"></p><img alt="" draggable="false">'
-        '<button class="p" aria-label="上一张">‹</button>'
-        '<button class="n" aria-label="下一张">›</button>'
-        '<button class="x" aria-label="关闭">×</button></div>'
+        f'<span class="meta">{_esc(summary)}</span></div></header>'
+        f'<main class="card">{notice}{thread}</main>'
+        f'<footer class="colophon">{made} 生成 · {ttl_note}</footer>'
+        '<div class="viewer" id="viewer"><span class="viewer-count"></span>'
+        '<img class="viewer-img" alt="" draggable="false">'
+        '<button class="viewer-prev" aria-label="上一张">‹</button>'
+        '<button class="viewer-next" aria-label="下一张">›</button>'
+        '<button class="viewer-close" aria-label="关闭">×</button></div>'
     )
-    return _shell(body, title=header or BOT_NAME, script=_SCRIPT, hue=hue)
+    return _shell(body, title=header or BOT_NAME)
 
 
 def _file_token_service():
@@ -386,17 +434,6 @@ def _wants_tdocs(event: AstrMessageEvent) -> bool:
     except Exception:
         return False
     return "qq" in name
-
-
-def summarize_items(text_items: list[list]) -> str:
-    """一行摘要, 如 "5 条内容 · 8 张图片"（复用链接时也要拼通知文案, 故公开）。"""
-    n_pics = sum(
-        1
-        for item in text_items
-        for kind, _ in _collect_blocks(item)
-        if kind == "pic"
-    )
-    return _summarize(len(text_items), n_pics)
 
 
 def _token_ttl_seconds(ttl_hours: int) -> float:

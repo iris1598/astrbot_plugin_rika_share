@@ -271,6 +271,8 @@ AstrBot 系统配置里把它填成外部可访问的地址（如 `https://examp
 | `WEBPAGE_FALLBACK_ENABLED` | bool | `true` | 非 OneBot 平台把合并转发内容转成网页链接发送；生成失败自动回退纯文本 |
 | `WEBPAGE_TDOCS_JUMP` | bool | `true` | QQ 系平台（QQ 官方机器人 / QQ 频道等）的链接经腾讯文档外链跳转页（docs.qq.com）打开，可在 QQ 内直接浏览；其他平台始终发原始链接 |
 
+> 网页的形态与交互设计参考自 [qbob](https://github.com/Loping151/qbob)（AGPL-3.0）的同名功能，实现为独立重写（不含其代码），致谢见文末。
+
 ### 7. Cloudflare 基础设置
 
 | 配置项 | 类型 | 默认值 | 说明 |
@@ -570,6 +572,7 @@ B站 给出的可用清晰度，是判断登录态是否生效最直接的证据
 
 - [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser) —— 原 NoneBot2 插件的优秀思路与解析逻辑。
 - [astrbot_plugin_denia_share](https://github.com/xiaoxi2760/astrbot_plugin_denia_share) —— 本插件的网页设置页来自该项目；该项目的卡片渲染最初源自本项目。
+- [qbob](https://github.com/Loping151/qbob)（AGPL-3.0）—— 非 OneBot 平台「合并转发转网页」的形态与交互设计参考自该项目的 `core/forwardpage.py`（实现为独立重写，不含其代码）。
 - [bilibili-api-python](https://github.com/Nemo2011/bilibili-api) —— B站接口封装与扫码登录实现。
 - [AstrBot](https://github.com/AstrBotDevs/AstrBot) —— 强大的多平台机器人框架。
 
