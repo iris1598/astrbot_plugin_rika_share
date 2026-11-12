@@ -28,6 +28,7 @@ CONFIG_GROUPS: tuple[tuple[str, str], ...] = (
     ("B站设置", "B站 Cookie、下载清晰度与 Cookie 监控"),
     ("缓存设置", "缓存文件过期与自动清理策略"),
     ("解析图片渲染", "将解析结果渲染为精美卡片图片发送（Pillow 实现，无需浏览器）"),
+    ("网页分享设置", "非 OneBot 平台把合并转发内容转成网页链接发送（借由 AstrBot 的对外回调地址）"),
     ("Cloudflare 基础设置", "Cloudflare 网页截图兜底的开关、凭据与缓存"),
     ("Cloudflare 截图设置", "页面渲染与截图参数（视窗、等待策略、格式等）"),
     ("调试设置", "日志与调试选项"),
@@ -263,6 +264,27 @@ CONFIG_META: tuple[dict[str, Any], ...] = (
         "type": "bool",
         "default": False,
         "hint": "开启后不再裁剪封面图片，而是按封面原始宽高比完整展示",
+    },
+    # ---------------- 网页分享设置 ---------------- #
+    {
+        "key": "WEBPAGE_FALLBACK_ENABLED",
+        "group": "网页分享设置",
+        "label": "合并转发转网页",
+        "type": "bool",
+        "default": True,
+        "hint": "开启后，非 OneBot 平台（QQ Official / Telegram / Discord 等）不再把图集拆成多条消息，"
+        "而是全部内容转成一个网页、聊天里只发链接；未配置 AstrBot「对外可达的回调接口地址」"
+        "（callback_api_base）或生成失败时自动回退纯文本输出。"
+        "网页链接有效期与缓存共用「缓存设置的 CACHE_TTL_HOURS」",
+    },
+    {
+        "key": "WEBPAGE_TDOCS_JUMP",
+        "group": "网页分享设置",
+        "label": "腾讯文档跳转",
+        "type": "bool",
+        "default": True,
+        "hint": "QQ 系平台（QQ 官方机器人 / QQ 频道等）的网页链接经腾讯文档的外链跳转页"
+        "（docs.qq.com）打开，可在 QQ 内直接浏览；其他平台始终发原始链接",
     },
     # ---------------- Cloudflare 基础设置 ---------------- #
     {
@@ -932,6 +954,18 @@ class ParserConfig:
     def RENDER_COVER_FULL_SIZE(self) -> bool:
         """是否启用封面全尺寸模式（不裁剪封面）"""
         return bool(self._cfg_get("RENDER_COVER_FULL_SIZE", False))
+
+    # ==================== 网页分享 ====================
+
+    @property
+    def WEBPAGE_FALLBACK_ENABLED(self) -> bool:
+        """非 OneBot 平台是否把合并转发内容转成网页链接发送"""
+        return bool(self._cfg_get("WEBPAGE_FALLBACK_ENABLED", True))
+
+    @property
+    def WEBPAGE_TDOCS_JUMP(self) -> bool:
+        """QQ 系平台的网页链接是否经腾讯文档外链跳转页打开"""
+        return bool(self._cfg_get("WEBPAGE_TDOCS_JUMP", True))
 
     @property
     def BILI_QUALITY(self) -> str:

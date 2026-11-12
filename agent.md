@@ -102,7 +102,8 @@ astrbot_plugin_rika_share/
     │   ├── live_photo.py         # 实况照片合成（主图 JPEG + XMP 索引 + 尾部 MP4）
     │   └── bilibili_account.py   # B站扫码登录 / Cookie 加密持久化 / 定时监控 / 自动应用
     ├── output/                   # 输出构建
-    │   ├── builder.py            # 分平台构建节点内容 + 合并转发 / 纯文本发送 + 媒体单独发送
+    │   ├── builder.py            # 分平台构建节点内容 + 合并转发 / 网页链接 / 纯文本发送 + 媒体单独发送
+    │   ├── webpage.py            # 非 OneBot 平台「合并转发转网页」：页面渲染 + 文件服务注册 + 腾讯文档跳转（见 5.16）
     │   ├── json_card.py          # JSON 卡片识别、链接提取、EventUrlWrapper
     │   ├── miniapp_card.py       # QQ 官方机器人分享卡片（纯文本形态）识别与字段提取（见 5.15）
     │   ├── quoted.py             # 引用（回复）消息的文本与链接提取（见 5.13）
@@ -133,12 +134,13 @@ astrbot_plugin_rika_share/
 | `cache/` | 下载的图片/视频/音频、渲染卡片 `card_<md5>.png` | `StreamDownloader`、`ShareCardRenderer` |
 | `cache/cloudflare_screenshots/` | 网页截图 | `main._do_cloudflare_fallback` |
 | `cache/debug/` | 链接调试报告 `debug_<时间>_<token>.log` | `services/debug_probe.py`（见 5.11） |
+| `webpage/` | 网页分享的 HTML 页面（`<时间戳>-<uuid8>.html`，图片不复制、经文件服务热链缓存目录原文件） | `output/webpage.py`（见 5.16） |
 | `config/bilibili_cookies.json` | B站凭证（`Credential` cookies） | `adapters/bilibili.py` 的 `_save_credential` |
 | `bili_cookie_encrypted.json` | Fernet 加密后的 B站 Cookie | `services/bilibili_account.py` |
 | `bili_cookie_status.json` | 上次检测状态 / 是否曾失效 | 同上 |
 | `.bili_cookie_key` | Fernet 密钥（权限尽量 0600） | 同上 |
 
-缓存清理：`initialize()` 起定时任务（`CACHE_TTL_HOURS` / `CACHE_CLEANUP_INTERVAL_MINUTES`），清理后**同时清空内存缓存** `_content_cache` / `_identity_cache`；`/clear_cache` 做同样的事。**新增任何内存缓存都要挂到这两处清理点。**
+缓存清理：`initialize()` 起定时任务（`CACHE_TTL_HOURS` / `CACHE_CLEANUP_INTERVAL_MINUTES`），清理后**同时清空内存缓存** `_content_cache` / `_identity_cache`，并按**同一 TTL** 一并清理 `webpage/`（网页链接时效与缓存共用，见 5.16）；`/clear_cache` 做同样的事（含 `webpage/` 与网页复用表）。**新增任何内存缓存都要挂到这两处清理点。**
 
 内存缓存的另一层失效机制是**按平台声明的 TTL**（`BaseParser.CACHE_TTL_SECONDS`）：磁盘清理是「按小时回收文件」，TTL 是「按秒判断结果是否还准确」，两者互不替代。
 
@@ -172,7 +174,10 @@ astrbot_plugin_rika_share/
         视频：不再发文字摘要；图文/动态：仍发 header + 图集
       无卡片：文本输出，并把 extra["limit_warnings"] 逐条追加为文本
    5. 文本/图集发送：OneBot → send_nodes_batched（按预算拆多条）
-                     其他平台 → send_plain_output
+                     其他平台 → 网页链接：create_webpage + format_share_message
+                     （全部内容转网页、只发链接通知；同一内容复用同一链接，见 5.16。
+                     未配置 callback_api_base / 文件服务不可用 / 生成失败
+                     → 回退 send_plain_output，与旧版行为一致）
    6. try_send_media：单独发视频/音频（图片已在节点里，不重复发）
    7. 异常 → SilentException 静默 / IgnoreException ℹ️ / ParseException ❌
              / DownloadException ⚠️ / 其他 ❌（error_result 受 SEND_ERROR_MESSAGES 控制）
@@ -761,6 +766,42 @@ tag: 哔哩哔哩
 （`is_miniapp_card` 守卫）——卡片文本里的图床 URL 不是网页，截图无意义；带
 `jump_url` 的卡片本来就由平台 Handler 按链接解析。**不要**把这个跳过「修」掉。
 
+### 5.16 网页分享（非 OneBot 平台的「合并转发转网页」，`output/webpage.py`）
+
+OneBot v11 才支持 `Comp.Nodes` 合并转发；其他平台（QQ Official / Telegram / Discord /
+webchat 等）在 `_process_url` 的文本/图集发送改走**网页链接**（`main._send_text_output`
+是决策点）：把 header + 全部文本节点 + 全部图片 + 限流警告**原样**转成一个聊天记录式网页
+（`create_webpage`），聊天里只发一条链接通知（`format_share_message`：
+`header` + `📄 N 条内容 · M 张图片，点击查看：链接`）。
+视频/音频本就不在合并转发里，仍由 `try_send_media` 按平台消息原样发送；渲染卡片图照发。
+
+| 环节 | 位置 | 说明 |
+| :--- | :--- | :--- |
+| 链接承载 | AstrBot **文件服务** `/api/file/{token}`（免鉴权路由） | 页面与图集图片都 `register_file(..., timeout=TTL*3600, single_use=False)` 注册；token 即访问凭据，`FileResponse` 按扩展名推断 Content-Type（`.html` 直接渲染） |
+| 链接时效 | **与缓存共用 `CACHE_TTL_HOURS`** | 图集图片在缓存目录里，共用 TTL 保证「图片必然活得和链接一样久」；`0`（缓存永不清理）= 链接到 AstrBot 重启为止（token 用 10 年顶格），页面文件也不清理 |
+| 链接前缀 | AstrBot 顶层配置 **`callback_api_base`**（「对外可达的回调接口地址」） | `main._get_callback_base()` 读 `context.get_config()`；空串 = 未配置 → 直接回退纯文本输出 |
+| 链接复用 | `main._webpage_links`（`cache_key → (原始链接, 页面 token)`，上限 2048 整体清空） | 同一内容在链接有效期内重复分享**发同一个链接**（qbob「多群广播只建一页」同款思路）。复用判定靠 `webpage_token_expired(token)` 自校验——页面与页内图片同批同时效注册，页面 token 有效即整页可看——所以**不随 `_content_cache` 清空**，失效自动重建 |
+| 页面渲染 | `webpage.render_share_page` | 自包含 HTML（无外部资源）：浅/深色自适应、单一说话人「莉卡解析」头像气泡、相邻图片并网格（1 满栏 / 2·4 两列 / 其余三列）、灯箱（脚本经 CSP sha256 放行，CSP 写在 `<meta>` 里——文件服务无响应头可用，`img-src` 因此放开 http:）、`noindex,nofollow`、页脚「生成时间 · 链接约 N 小时内有效 / 重启前有效」 |
+| 文本安全 | `html.escape` + `_autolink` | 裸 http(s) 链接自转链（借鉴 qbob，尾标点剥离）；图片 src 只用自构的 token URL |
+| 腾讯文档跳转 | `webpage.tdocs_jump` + `format_share_message` 发送时现判 | 移植 qbob `cards.docs_jump`：`docs.qq.com/scenario/link.html?url=<quote(safe="")>`；QQ 系平台（平台名含 `qq`，覆盖 qq_official / qq_official_webhook / qqguild / qq——`aiocqhttp` 不含该子串且不走此路径）默认开启（`WEBPAGE_TDOCS_JUMP`），其他平台发原始链接。**复用的原始链接存的是未包装形态**，包装在每次发送时按平台现做。QQ 客户端直接打开外站常被拦，经此跳转页可直接浏览 |
+| 配置 | 「网页分享设置」组 | `WEBPAGE_FALLBACK_ENABLED`（总开关）/ `WEBPAGE_TDOCS_JUMP`（链接时效无独立项，跟缓存走） |
+| 存储 | `data/plugin_data/astrbot_plugin_rika_share/webpage/` | 只有页面 `.html`；**图片不复制**，热链缓存目录里的原文件 |
+| 清理 | 发送前机会式 + `initialize()` 定时 + `/clear_cache` | 按 `CACHE_TTL_HOURS` 清页面文件（复用 `utils/cache.cleanup_cache_dir`）；`/clear_cache` 同时清空 `_webpage_links` |
+
+**回退链**（逐级兜底，别改成直接报错）：未启用 → 未配置 `callback_api_base` → 文件服务
+缺失（老版本 AstrBot，函数内惰性 import 抛错）→ 页面写入/注册失败 → 一律回退
+`send_plain_output`（纯文本 + 图片链，与 v3.3.0 行为一致）并打一条 WARNING。
+
+**三个硬约束**（坑，见第 9 节）：
+
+1. **token 是内存态**：AstrBot 重启后所有旧链接失效（404）。这是文件服务的属性，不是 bug。
+2. **页面是快照**：复用同一链接意味着页内内容定格在首次建页时刻——B站这类实时数据
+   （`extra["online"]` 等）重新解析出 fresh 数据后，**旧链接上的页面不会更新**。
+   这是「同一内容 = 同一链接」的固有属性（qbob 内容哈希 token 同款），别试图热更新已发链接。
+3. **聊天链接只能走 `/api/file`**：插件自己的 `register_web_api` 路由挂在
+   `/api/v1/plugins/extensions/...` 下，带 Dashboard 鉴权（JWT / api_key），聊天用户点不开——
+   不要把分享链接「修」到插件路由上。
+
 ---
 
 ## 6. 「我要做 X，改哪里」速查表
@@ -793,6 +834,7 @@ tag: 哔哩哔哩
 | 调字体 / 颜文字回退 | `card_render/fonts.py` | 用 `scripts/kaomoji_render_test.py` 验证 |
 | 调文本清洗 / 统计解析 | `card_render/text.py` | 被 renderer 复用，注意别影响 `short_url` 截断 |
 | 调「哪个平台发什么」 | `output/builder.py` 的分平台分支 | 保持 header 形如 `莉卡解析 | 平台 - 类型` |
+| 调非 OneBot 平台的输出形态 / 网页分享样式 | `output/webpage.py`（渲染 + 编排）+ `main._send_text_output`（决策点，含复用表） | 见 5.16；回退链与 `/api/file` 约束不能破坏；链接时效跟 `CACHE_TTL_HOURS` 走 |
 | 调媒体下载 / 重试 / 分片 | `services/downloader.py` | httpx 优先 → 失败回退 curl_cffi；空响应视作失败 |
 | 调 ffmpeg（合流 / 抽帧 / 转 GIF） | `utils/media.py` | ffmpeg 缺失要能降级，别让它抛到用户面前 |
 | 调实况照片合成 | `services/live_photo.py` | **不要改 XMP 字段名**，相册靠它定位尾部视频 |
@@ -893,7 +935,7 @@ print("handlers       :", len(handlers))      # 应为 16
 assert not bad and len(handlers) == 15
 ```
 
-期望基线（2026-11-12 实测）：模块导入 **67/67**（`main.py` + `link_parser/` 下 66 个模块）、适配器 **8 个**（`adapter_names()` 顺序 = priority 10→80）、Handler **16 个**（8 平台 + JSON 卡片 + 分享卡片 + 兜底 + 封面下载 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **45 项 / 8 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
+期望基线（2026-11-13 实测）：模块导入 **70/70**（`main.py` + `link_parser/` 下 69 个模块）、适配器 **8 个**（`adapter_names()` 顺序 = priority 10→80）、Handler **16 个**（8 平台 + JSON 卡片 + 分享卡片 + 兜底 + 封面下载 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **47 项 / 9 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
 
 > 上述基线按**未安装外部解析器插件**的环境计。装着 `astrbot_plugin_multincm` 时，
 > `_external.register_external_adapters()` 会在导入阶段多注册 `netease` 平台：
@@ -931,7 +973,12 @@ Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复�
 - **`@filter.regex` 不把 match 传进 Handler**：需要 URL 时自己从 `event.message_str` 重新 `search`（`cloudflare_fallback_handler` 就是这么做的）。
 - **`json_card_handler` 使用 `@filter.regex(r".*")`**，所有消息都会进它，第一件事就是 `has_json_component` 早退，别在里面加重活。
 - **官方机器人卡片（`[卡片消息]` 纯文本）由 `miniapp_card_handler` 处理，`cloudflare_fallback_handler` 对它一律跳过**：卡片文本里的 `source_logo` / `preview` 是图床 URL，截图无意义；带 `jump_url` 的卡片由平台 Handler 按链接解析。见 5.15——别把 CF 的跳过当 bug「修」回去，也别让标题搜索与链接解析同时触发（会重复发送同一条内容）。
-- **OneBot 才支持合并转发**：`Comp.Nodes` 仅 OneBot v11（`aiocqhttp`）可用；其他平台走 `send_plain_output` + 主动发送（避免 AstrBot「回复时 @」污染图片 markdown）。
+- **OneBot 才支持合并转发**：`Comp.Nodes` 仅 OneBot v11（`aiocqhttp`）可用；其他平台走网页链接（见 5.16）+ 主动发送（避免 AstrBot「回复时 @」污染图片 markdown）。
+- **网页分享的 token 是内存态**（见 5.16）：AstrBot 重启后所有旧链接失效——这是文件服务的属性，别试图持久化。链接时效与缓存**共用 `CACHE_TTL_HOURS`**（0 = 不清理也不过期，token 用 10 年顶格），图集图片在缓存目录里、必然活得和链接一样久——这是当初把两个 TTL 合成一个的原因，别再拆成两个旋钮。
+- **`_webpage_links` 不随 `_content_cache` 清空**：它以 `webpage_token_expired()` 自校验（失效即重建），这样跨清理周期重复分享仍复用同一链接；上限 2048 整体清空（与 `_identity_cache` 同款）。复用意味着**页面是快照**——B站重新解析出 fresh 数据后旧链接上的页面不会更新，这是「同一内容 = 同一链接」的固有属性。
+- **聊天里的分享链接只能走 `/api/file/{token}`**：插件的 `register_web_api` 路由带 Dashboard 鉴权（JWT / api_key），聊天用户点不开。别把分享链接「修」到插件路由上，也别给文件服务的路由加Referer/Origin 校验之类的想法——token 即凭据。
+- **腾讯文档跳转页（docs.qq.com/scenario/link.html）是外部服务**（qbob 实测可用）：它会给目标 URL 附加 query 参数（如 `?qq_aio_chat_type=N`），`/api/file/{token}` 路由忽略多余 query 所以无碍；它不可用时关掉 `WEBPAGE_TDOCS_JUMP` 即可（QQ 系平台才默认开启，其他平台发原始链接）。`tdocs_jump` 对已是 docs.qq.com 的链接原样放行，别造成二次包装。
+- **`create_webpage` 的 `base_url` 会再剥一次尾斜杠**（防御性归一，避免拼出 `//api/file/…`）——别依赖调用方一定传干净的地址。
 - **合并转发的内存风险**：OneBot 会把节点内图片整体 base64，峰值约为原图总量 4 倍 → 用 `FORWARD_MAX_NODES` / `FORWARD_MAX_BATCH_MB` 拆批，不要去掉拆批逻辑。
 - **渲染图与文本重复**：视频类内容在卡片成功时不再发文字摘要；图文仍发图集 —— 调整时要保持「不重复、不丢内容」。
 - **缓存不区分发送者**：同一内容在同一进程内所有会话共享一条缓存与一张卡片（这是预期行为，别按会话分键）。

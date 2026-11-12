@@ -228,6 +228,29 @@
       }
     }
   },
+  "网页分享设置": {
+    "type": "object",
+    "description": "非 OneBot 平台把合并转发内容转成网页链接发送（借由 AstrBot 的对外回调地址）",
+    "invisible": true,
+    "items": {
+      "WEBPAGE_FALLBACK_ENABLED": {
+        "description": "合并转发转网页",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，非 OneBot 平台（QQ Official / Telegram / Discord 等）不再把图集拆成多条消息，而是全部内容转成一个网页、聊天里只发链接；未配置 AstrBot「对外可达的回调接口地址」（callback_api_base）或生成失败时自动回退纯文本输出。网页链接有效期与缓存共用 CACHE_TTL_HOURS",
+        "obvious_hint": true,
+        "invisible": true
+      },
+      "WEBPAGE_TDOCS_JUMP": {
+        "description": "腾讯文档跳转",
+        "type": "bool",
+        "default": true,
+        "hint": "QQ 系平台（QQ 官方机器人 / QQ 频道等）的网页链接经腾讯文档的外链跳转页（docs.qq.com）打开，可在 QQ 内直接浏览；其他平台始终发原始链接",
+        "obvious_hint": true,
+        "invisible": true
+      }
+    }
+  },
   "Cloudflare 基础设置": {
     "type": "object",
     "description": "Cloudflare 网页截图兜底的开关、凭据与缓存",

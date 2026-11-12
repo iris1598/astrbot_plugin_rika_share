@@ -49,11 +49,13 @@ from .link_parser.models import ParseResult, VideoContent
 from .link_parser.output import (
     EventUrlWrapper,
     build_platform_output,
+    create_webpage,
     error_result,
     extract_card_link,
     extract_card_title,
     extract_links_from_event,
     find_reply_component,
+    format_share_message,
     has_json_component,
     is_miniapp_card,
     parse_miniapp_card,
@@ -62,6 +64,7 @@ from .link_parser.output import (
     send_nodes_batched,
     send_plain_output,
     try_send_media,
+    webpage_token_expired,
 )
 from .link_parser.services.bilibili_account import BiliAccountService
 from .link_parser.services.card_render import ShareCardRenderer
@@ -126,6 +129,9 @@ _PLATFORM_HANDLERS: dict[str, Any] = {
 #: 「原始链接 → 内容标识」记忆上限，超过则整体清空（避免长跑无限累积）
 _IDENTITY_MEMO_MAX = 2048
 
+#: 「内容标识 → (网页原始链接, 页面 token)」复用表上限，超过则整体清空（同上）
+_WEBPAGE_LINKS_MAX = 2048
+
 
 @dataclass
 class _ContentCacheEntry:
@@ -150,7 +156,7 @@ class _ContentCacheEntry:
 
 
 @register("莉卡解析", "iris1598",
-          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA|网易云(联动)", "v3.3.0")
+          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA|网易云(联动)", "v3.4.0")
 class ParserPlugin(Star):
     # 合并转发（Comp.Nodes）是 OneBot v11 独有特性，其他平台均不支持
     @staticmethod
@@ -177,6 +183,13 @@ class ParserPlugin(Star):
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.config_dir = data_dir / "config"
         self.config_dir.mkdir(parents=True, exist_ok=True)
+        # 网页分享的 HTML 页面（仅页面本体；图片不复制, 经文件服务热链缓存目录里的原文件）
+        self.webpage_dir = data_dir / "webpage"
+        self.webpage_dir.mkdir(parents=True, exist_ok=True)
+        # 内容标识 → (网页原始链接, 页面 token)：同一内容在链接有效期内复用同一网页。
+        # 不随 _content_cache 一起清空——它的有效性由 token 自校验（失效即重建），
+        # 这样跨清理周期重复分享拿到的仍是同一个链接
+        self._webpage_links: dict[str, tuple[str, str]] = {}
 
         pconfig = init_config(config, self.cache_dir, self.config_dir)
 
@@ -371,6 +384,8 @@ class ParserPlugin(Star):
                 try:
                     while True:
                         await cleanup_cache_dir(self.cache_dir, ttl_hours=ttl)
+                        # 网页分享的页面文件与缓存共用同一 TTL（链接时效也由它决定）
+                        await cleanup_cache_dir(self.webpage_dir, ttl_hours=ttl)
                         # 文件清理后同步清空内存缓存（解析结果 + 卡片路径 + 内容标识）
                         self._content_cache.clear()
                         self._identity_cache.clear()
@@ -784,13 +799,15 @@ class ParserPlugin(Star):
                     text_items.append([Comp.Plain(w)])
 
             if text_items:
-                # 按平台规则发送剩余内容：OneBot 使用合并转发，其他平台直接发送
+                # 按平台规则发送剩余内容：OneBot 使用合并转发，其他平台转网页链接
                 if self._is_onebot(event):
                     async for r in send_nodes_batched(event, header_text, text_items):
                         yield r
                 else:
-                    # 其他平台（QQ Official / Telegram 等）：拆分为独立消息
-                    async for r in send_plain_output(event, header_text, text_items):
+                    # 其他平台（QQ Official / Telegram 等）：内容全部转网页，聊天里只发链接
+                    async for r in self._send_text_output(
+                        event, header_text, text_items, cache_key
+                    ):
                         yield r
 
             # 音乐卡片在解析卡片之后发送（两者都保留），并替代音频
@@ -827,6 +844,62 @@ class ParserPlugin(Star):
             result = error_result(event, f"❌ 处理出错: {str(e)[:100]}")
             if result is not None:
                 yield result
+
+    # ==================== 网页分享（非 OneBot 平台的合并转发替代） ====================
+
+    async def _send_text_output(
+        self,
+        event: AstrMessageEvent,
+        header: str,
+        text_items: list[list],
+        cache_key: str,
+    ) -> AsyncGenerator[MessageEventResult, None]:
+        """非 OneBot 平台的文本输出：合并转发内容全部转网页，聊天里只发一条链接通知。
+
+        同一内容（同 ``cache_key``）在链接有效期内复用同一网页——token 失效自动重建；
+        通知文案里的原始链接按当前平台现判是否经腾讯文档跳转页包装。
+        未启用 / 未配置「对外可达的回调接口地址」（callback_api_base）/ 生成失败时，
+        回退到 :func:`send_plain_output` 的纯文本 + 图片链（与旧版行为一致）。
+        """
+        try:
+            pconfig = get_config()
+            if pconfig.WEBPAGE_FALLBACK_ENABLED:
+                base_url = self._get_callback_base()
+                if base_url:
+                    cached = self._webpage_links.get(cache_key)
+                    if cached and not await webpage_token_expired(cached[1]):
+                        url = cached[0]
+                    else:
+                        url, token = await create_webpage(
+                            event,
+                            header,
+                            text_items,
+                            page_dir=self.webpage_dir,
+                            base_url=base_url,
+                            ttl_hours=pconfig.CACHE_TTL_HOURS,
+                        )
+                        if len(self._webpage_links) >= _WEBPAGE_LINKS_MAX:
+                            self._webpage_links.clear()
+                        self._webpage_links[cache_key] = (url, token)
+                    yield event.plain_result(
+                        format_share_message(event, header, text_items, url)
+                    )
+                    return
+        except Exception:
+            logger.warning("[link_parser] 合并转发转网页失败，回退纯文本输出", exc_info=True)
+        async for r in send_plain_output(event, header, text_items):
+            yield r
+
+    def _get_callback_base(self) -> str:
+        """AstrBot「对外可达的回调接口地址」（顶层配置键 ``callback_api_base``）。
+
+        空串表示未配置——链接发出去也打不开，此时直接回退纯文本输出。
+        """
+        try:
+            cfg = self.context.get_config()
+            return str(cfg.get("callback_api_base") or "").strip().rstrip("/")
+        except Exception:
+            return ""
 
     # ==================== 封面下载（引用回复触发） ====================
 
@@ -967,8 +1040,10 @@ class ParserPlugin(Star):
         """手动清理插件缓存。"""
         try:
             cleaned = await clear_cache_dir(self.cache_dir)
+            cleaned += await clear_cache_dir(self.webpage_dir)
             self._content_cache.clear()
             self._identity_cache.clear()
+            self._webpage_links.clear()
             yield event.plain_result(f"✅ 莉卡解析缓存清理完成，共清理 {cleaned} 个文件")
         except Exception as exc:
             logger.exception("手动清理莉卡解析缓存失败")

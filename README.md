@@ -1,7 +1,7 @@
 # 莉卡解析 · astrbot_plugin_rika_share
 
 ![AstrBot Plugin](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)
-![Version](https://img.shields.io/badge/Version-v3.3.0-brightgreen?style=flat-square)
+![Version](https://img.shields.io/badge/Version-v3.4.0-brightgreen?style=flat-square)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D3.5.13-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square)
 ![Render](https://img.shields.io/badge/Render-Pillow-orange?style=flat-square)
@@ -58,7 +58,10 @@
 ### ⚡ 跨平台发送适配
 
 - **OneBot v11**：自动构建节点合并转发（`Nodes`），避免消息刷屏，并按节点数 / 图片体积自动拆批。
-- **QQ Official / Telegram 等**：自动拆分消息并采用主动发送，避免被「回复时引用」格式干扰。
+- **QQ Official / Telegram 等**：整条解析内容（标题、简介、图集全部图片）转成一个**聊天记录式网页**，
+  聊天里只发一条链接通知，点开即是排版好的完整内容；网页由 AstrBot 的文件服务提供，
+  链接基于「对外可达的回调接口地址」生成。QQ 系平台默认经腾讯文档的外链跳转页打开，
+  可在 QQ 内直接浏览。未配置回调地址或生成失败时自动回退为拆分消息发送。
 
 ### 🖼️ 引用回复下载封面
 
@@ -99,14 +102,14 @@
 
 页面来自 [astrbot_plugin_denia_share](https://github.com/xiaoxi2760/astrbot_plugin_denia_share)。
 
-插件自带一个 Dashboard 页面（插件详情页里打开），把 45 项配置按 8 个分组收在一处：
+插件自带一个 Dashboard 页面（插件详情页里打开），把 47 项配置按 9 个分组收在一处：
 
 - 左侧分组导航 + 顶部搜索，长配置表不再靠滚动找；
 - Cookie / Token 默认遮罩，可一键显示核对；
 - 底部保存条实时显示「已修改 N 项」，支持放弃更改、恢复默认与批量保存；
 - 保存后即时生效，卡片渲染、解析器开关、截图凭据都会自动热更新。
 
-全部 45 项配置都在页面里维护，原生插件配置面板不再展示配置项；
+全部 47 项配置都在页面里维护，原生插件配置面板不再展示配置项；
 页面顶部的「解析器开关」按适配器注册表动态生成，**新增平台会自动多出一个开关**，
 不用改配置也不用改代码。
 
@@ -178,7 +181,7 @@
 
 ## ⚙️ 配置说明
 
-配置按逻辑划分为 **8 个分组**，共 45 项，**全部在插件网页设置页里维护**：
+配置按逻辑划分为 **9 个分组**，共 47 项，**全部在插件网页设置页里维护**：
 WebUI 侧边栏「插件」→ 莉卡解析 → 插件详情页 → 打开页面。
 页面支持搜索、分组折叠、Cookie 遮罩、批量保存与恢复默认，
 另外带一个「链接调试」视图用于排查解析问题。
@@ -251,7 +254,24 @@ WebUI 侧边栏「插件」→ 莉卡解析 → 插件详情页 → 打开页面
 | `RENDER_COVER_FULL_SIZE` | bool | `false` | 封面按原始宽高比完整展示，不做中心裁剪 |
 | `RENDER_FONT_PATH` | string | `""` | 自定义字体文件或目录（`.ttf/.ttc/.otf`），留空自动探测系统字体 |
 
-### 6. Cloudflare 基础设置
+### 6. 网页分享设置
+
+非 OneBot 平台（QQ Official / Telegram / Discord 等）的解析内容默认**全部转成一个网页**、
+聊天里只发链接通知（OneBot v11 仍走合并转发）。网页由 AstrBot 的文件服务（`/api/file/{token}`）
+提供，链接前缀取 AstrBot 的**对外可达的回调接口地址**（`callback_api_base`）——请先在
+AstrBot 系统配置里把它填成外部可访问的地址（如 `https://example.com:6185`），
+否则此功能不生效、自动回退为拆分消息。
+
+链接有效期与缓存共用 `CACHE_TTL_HOURS`（网页页脚会写明），图集图片必然活得和链接一样久；
+链接 token 在内存里，**AstrBot 重启后旧链接失效**（`CACHE_TTL_HOURS=0` 时链接到重启前一直有效、
+页面文件不清理）。同一内容在链接有效期内重复分享会**复用同一个链接**，不会重复建页。
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `WEBPAGE_FALLBACK_ENABLED` | bool | `true` | 非 OneBot 平台把合并转发内容转成网页链接发送；生成失败自动回退纯文本 |
+| `WEBPAGE_TDOCS_JUMP` | bool | `true` | QQ 系平台（QQ 官方机器人 / QQ 频道等）的链接经腾讯文档外链跳转页（docs.qq.com）打开，可在 QQ 内直接浏览；其他平台始终发原始链接 |
+
+### 7. Cloudflare 基础设置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -262,7 +282,7 @@ WebUI 侧边栏「插件」→ 莉卡解析 → 插件详情页 → 打开页面
 | `CLOUDFLARE_CACHE_TTL` | int | `0` | 截图缓存时长（秒），`0` 表示不缓存、每次重新渲染 |
 | `CLOUDFLARE_BLACKLIST` | list | `[]` | 截图黑名单，支持完整域名、`*.example.com` 通配符、路径前缀或无点关键词 |
 
-### 7. Cloudflare 截图设置
+### 8. Cloudflare 截图设置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -282,7 +302,7 @@ WebUI 侧边栏「插件」→ 莉卡解析 → 插件详情页 → 打开页面
 | `CLOUDFLARE_EXTRA_HEADERS` | text | `""` | 加载页面时附加的 HTTP 头（JSON），如 `{"Authorization":"..."}` |
 | `CLOUDFLARE_COOKIES` | text | `""` | 页面附加 Cookie（JSON 数组），如 `[{"name":"session","value":"..."}]` |
 
-### 8. 调试设置
+### 9. 调试设置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -397,7 +417,8 @@ astrbot_plugin_rika_share/
     │   ├── live_photo.py         #   实况照片（主图 + 短视频）单文件合成
     │   └── bilibili_account.py   #   B站扫码登录 / Cookie 监控与自动应用
     ├── output/                   # 输出构建
-    │   ├── builder.py            #   解析结果 → 合并转发 / 纯文本消息链
+    │   ├── builder.py            #   解析结果 → 合并转发 / 网页链接 / 纯文本消息链
+    │   ├── webpage.py            #   非 OneBot 平台「合并转发转网页」（页面渲染 + 文件服务注册 + 腾讯文档跳转）
     │   ├── json_card.py          #   JSON 分享卡片识别与链接提取
     │   ├── miniapp_card.py       #   QQ 官方机器人分享卡片（纯文本）识别与字段提取
     │   ├── quoted.py             #   引用（回复）消息的文本与链接提取
