@@ -469,13 +469,40 @@ ADAPTER = register_adapter(
 
 ### 外部插件作为解析器（联动）
 
-解析器也可以来自**其他插件**：在 `link_parser/adapters/_external.py` 的
-`EXTERNAL_ADAPTERS` 清单里登记一行 `(插件目录名, 桥接模块名)`，本插件启动时
-（生成平台 Handler 之前）会尝试导入该桥接模块并调用其 `register()`——桥接模块内
-定义一个继承 `BaseParser` 的解析器并注册进适配器注册表即可，其余环节（事件过滤器、
-解析器实例化、设置页开关）与内置平台完全一致。外部插件未安装时就没有这个解析器，
-仅记一条 DEBUG 日志。网易云音乐的解析正是这样由
-[astrbot_plugin_multincm](https://github.com/iris1598/astrbot_plugin_multincm) 联动提供的。
+解析器也可以来自**其他插件**。其它插件在自己目录下放一个 `rikashare_bridge.py`，
+暴露 `register(api)` 即可——插件启动时（生成平台 Handler 之前）会自动发现并调用它：
+
+```python
+def register(api):
+    parser = api.parser(
+        name="foo",                  # 小写标识符：注册表键名 / 设置页开关
+        display_name="Foo 视频",      # 设置页展示名
+        url_pattern=r"foo\.com",     # 事件过滤器正则
+    )
+
+    @parser.handle("foo.com", r"foo\.com/video/(?P<vid>\d+)")   # 命名分组 = 缓存标识
+    async def _parse(ctx):
+        return ctx.result(
+            title=f"视频 {ctx.group('vid')}",
+            url=ctx.matched,
+            graphics=[ctx.image("https://foo.com/cover.jpg")],
+            extra={"content_type": "视频"},
+        )
+
+    parser.register()
+```
+
+`api` 是注入的 SDK 句柄（`link_parser/external.py`），外部插件**不需要 import 本插件的
+任何内部模块**。SDK 提供 `api.parser(...)` / `@parser.handle(...)` / `parser.register()`，
+以及 `ctx.result / author / image / images / audio / video`、`ctx.group / groups / matched`、
+`ctx.parse_redirect`，和 `api.ParseResult / ParseException / SilentException` 等类型与异常。
+注册后其余环节（事件过滤器、解析器实例化、设置页开关、卡片渲染）与内置平台完全一致。
+外部插件未安装时就没有这个解析器，仅记一条 DEBUG 日志。
+
+> 桥接模块名按约定（`rikashare_bridge.py`）即可被自动发现；需要别的文件名或固定接入顺序时，
+> 再登记到 `link_parser/adapters/_external.py` 的 `EXTERNAL_ADAPTERS` 清单。
+> 网易云音乐的解析正是这样由
+> [astrbot_plugin_multincm](https://github.com/iris1598/astrbot_plugin_multincm) 联动提供的。
 
 若平台返回结构较复杂，在 `link_parser/models/platforms/<平台名>/` 下新建子包：
 模块名按接口命名（如 `video_info.py`、`status.py`），并在子包 `__init__.py` 中导出

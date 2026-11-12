@@ -74,12 +74,13 @@ astrbot_plugin_rika_share/
     │                             #   └─ registered_platforms()：平台清单从适配器注册表动态读
     ├── constants.py              # 请求头/超时常量、PlatformEnum、GENERIC_URL_PATTERN
     ├── exceptions.py             # 异常体系（见 5.4）
+    ├── external.py               # 外部解析器 SDK（ParserAPI / ParseContext / 注入给 register(api)，见 5.14）
     ├── webui.py                  # 页面后端接口（config 读取/保存/恢复默认 + 调试运行/日志下载）
     ├── adapters/                 # 平台解析适配器
     │   ├── __init__.py           # 自动发现：导入本目录全部适配器模块（新增平台无需在这里登记）
     │   ├── registry.py           # AdapterSpec(含 priority) / AdapterBuildContext / register_adapter / iter_adapters
     │   ├── base.py               # BaseParser 基类 + @handle 装饰器 + 解析结果构造工具
-    │   ├── _external.py          # 外部解析器插件接入点（探针清单 + 导入桥接模块并调其 register()，见 5.14）
+    │   ├── _external.py          # 外部解析器接入点（显式清单 + 自动发现桥接模块，注入 SDK 调其 register(api)，见 5.14）
     │   └── bilibili.py · douyin.py · kuaishou.py · weibo.py
     │       xiaohongshu.py · twitter.py · nga.py · acfun.py
     ├── models/                   # 数据类型
@@ -590,28 +591,65 @@ OneBot 关掉「获取引用消息」时也能用），老版本 AstrBot 没有�
 
 ---
 
-### 5.14 外部解析器插件（网易云 = astrbot_plugin_multincm 联动）
+### 5.14 外部解析器插件（`link_parser/external.py` SDK）
 
-解析器可以来自**其他插件**：`adapters/_external.py`（下划线前缀 = 自动发现跳过）持有
-`EXTERNAL_ADAPTERS = ((插件目录名, 桥接模块名), ...)` 清单；`main.py` 在生成
-`_PLATFORM_HANDLERS` **之前**调用 `register_external_adapters()`，逐个导入外部插件的
-桥接模块并调用其 `register()`——桥接模块向注册表注册一个继承 `BaseParser` 的解析器，
-其余环节（事件过滤器、`_init_parsers`、设置页开关）与内置平台完全一致。
+解析器可以来自**其他插件**：外部插件在自己的目录下放一个桥接模块
+`rikashare_bridge.py`，暴露 `register(api)`——`api` 是注入的 SDK 句柄
+（`link_parser/external.py::ParserAPI`），**外部插件不需要 import 本插件的任何内部模块**
+（模块根是 `data.plugins.<目录名>`，写死路径容易随版本失效）。
+
+```python
+# <外部插件>/rikashare_bridge.py
+def register(api):
+    parser = api.parser(
+        name="foo",                       # 小写标识符：注册表键名 / 设置页开关 / Handler 名
+        display_name="Foo 视频",           # 设置页「解析器开关」的展示名
+        url_pattern=r"foo\.com",          # 事件过滤器正则
+        description="视频（联动 astrbot_plugin_foo）",
+    )
+
+    @parser.handle("foo.com", r"foo\.com/video/(?P<vid>\d+)")
+    async def _parse(ctx):                # ctx: ParseContext
+        return ctx.result(
+            title=f"视频 {ctx.group('vid')}",
+            url=ctx.matched,
+            graphics=[ctx.image(f"https://foo.com/cover/{ctx.group('vid')}.jpg")],
+            extra={"content_type": "视频"},
+        )
+
+    parser.register()                     # 完成注册（同键覆盖，可重复调用）
+```
+
+| SDK 能力 | 说明 |
+| :--- | :--- |
+| `api.parser(name, display_name, url_pattern, …)` | 声明解析器，返回构建器；`priority` / `short_link_keywords` / `cache_ttl_seconds` 与 `AdapterSpec` 同义 |
+| `@parser.handle(keyword, pattern)` | 与内置 `@handle` 语义一致；**命名分组自动成为缓存内容标识**（同一内容不同链接共用缓存） |
+| `parser.register()` | 注册进适配器注册表；无处理函数时抛 `ValueError` |
+| `ctx.group/ctx.groups/ctx.matched/ctx.text` | 取分组、命名分组、匹配片段、原始消息文本 |
+| `ctx.result/author/image/images/audio/video` | 构造结果与媒体（媒体惰性下载，解析阶段不阻塞） |
+| `ctx.parse_redirect(url)` | 跟随跳转后重新匹配解析（短链用）；或声明 `short_link_keywords` 交给 `cache_identity` 处理 |
+| `api.ParseResult / Author / ImageContent / AudioContent / VideoContent` | 数据类型 |
+| `api.ParseException / IgnoreException / SilentException` | 异常语义（见 5.4，决定用户看到什么） |
+
+处理函数返回非 `ParseResult` 时抛 `ParseException`（不会被静默吞掉）。
 
 | 环节 | 位置 | 说明 |
 | :--- | :--- | :--- |
-| 探测清单 | `adapters/_external.py::EXTERNAL_ADAPTERS` | 目前仅 `("astrbot_plugin_multincm", "rikashare_bridge")` |
+| SDK | `link_parser/external.py` | `ParserAPI` / `ParseContext` / `ExternalParserBuilder`；模块级单例 `API` |
+| 探测清单 | `adapters/_external.py::EXTERNAL_ADAPTERS` | 显式登记 `(插件目录名, 桥接模块名)`，优先接入（目前含 `astrbot_plugin_multincm`） |
+| 自动发现 | `adapters/_external.py::_discover_bridges()` | 扫 `data/plugins/*/rikashare_bridge.py`（有 `metadata.yaml` 的常规插件目录，跳过本插件与 `.`/`_` 前缀）；只查文件存在、**不导入**，坏文件不拖垮加载 |
 | 接入时机 | `main.py` 的 `register_external_adapters()` | **必须在 `_PLATFORM_HANDLERS` 之前**（注册表是 Handler 生成的输入） |
-| 桥接模块 | `<multincm>/rikashare_bridge.py` | `NeteaseParser(BaseParser)` + `register()`；平台名 `netease` |
+| 旧桥接兼容 | `_call_register` | `register` 无参数时按旧契约调用并记 DEBUG（`inspect.signature` 判断，不靠捕 `TypeError`——那会吞掉桥接内部的真实错误） |
 | 模块根候选 | 两侧各自的 `_MODULE_ROOTS` / `_RIKA_ROOTS` | `data.plugins.<名>` → `astrbot.builtin_stars.<名>` → 裸包名（开发脚本） |
 
-**三种未接入形态**（都只影响这一个平台，不连累本插件加载）：
+**四种未接入形态**（都只影响这一个平台，不连累本插件加载）：
 
 | 情形 | 表现 |
 | :--- | :--- |
-| 外部插件未安装 | DEBUG 日志「未检测到」，没有这个解析器（用户要求的行为） |
+| 外部插件未安装 | DEBUG 日志「未安装，跳过」，没有这个解析器（用户要求的行为） |
 | 插件在但桥接模块缺失 / 依赖缺失 / `register()` 异常 | WARNING 日志，跳过接入 |
 | 外部插件被停用（inactivated） | 照常注册，但桥接解析器在解析时查 `sp.global_get("inactivated_plugins")`，命中则抛 `SilentException` 静默跳过（停用 = 联动停用，无需重载本插件） |
+| `register` 无参数（旧版桥接） | 按旧契约调用，功能正常，只记一条 DEBUG 建议升级 |
 
 **为什么是本插件「拉取」而不是外部插件「推送」**：注册表驱动平台 Handler 生成，而 Handler
 在本插件入口模块导入时就按注册表快照生成完毕；外部插件加载顺序不受本插件控制（可能晚于
@@ -630,7 +668,10 @@ OneBot 关掉「获取引用消息」时也能用），老版本 AstrBot 没有�
 逻辑陈旧，重载本插件即恢复；multincm 的 `terminate()` 会重建 netease 会话，所以卸载
 multincm 后旧解析器也不会悬空崩溃。
 
-**`netease` 的注册细节**：`AdapterSpec(priority=100)` 默认排在内置平台之后；
+**`netease` 的接入现状**：multincm 的桥接模块目前仍用内部 API（直接 import
+`link_parser.adapters.base` 等，见其 `_RIKA_ROOTS`）实现 `register()`，功能完全等价；
+迁移到 `register(api)` SDK 只是把「取 BaseParser / 注册表」换成 `api.parser(...)`，
+不影响已注册的平台与缓存标识。`AdapterSpec(priority=100)` 默认排在内置平台之后；
 短链 `163cn.tv` 的 `@handle` **不捕获命名分组**，让 `cache_identity` 走短链展开阶梯
 （同一首歌的不同短链共用缓存）；内容标识形如 `netease:id=<id>&type=<type>`；
 与其它内容不变的平台一样使用默认缓存（`CACHE_TTL_SECONDS = None`，不设有效期）；
@@ -665,7 +706,7 @@ VIP 歌曲拿不到播放地址时降级为仅卡片并写 `extra["limit_warning
 | 任务 | 改动位置 | 注意 |
 | :--- | :--- | :--- |
 | 新增平台解析 | **只新建 `adapters/<平台>.py`**（可选：`models/platforms/<平台>/` 子包、`theme.py` 配色、`builder.py` 定制分支） | 见 5.1；不用改 `main.py` / `constants.py` / `adapters/__init__.py`，开关与 Handler 都自动生成 |
-| 接入 / 下线外部解析器插件（联动） | `adapters/_external.py` 的 `EXTERNAL_ADAPTERS` 清单；桥接契约见对方仓库的 `rikashare_bridge.py` | 见 5.14；探测在 `main.py` 生成 Handler 之前，未安装 = 没有该解析器 |
+| 接入 / 下线外部解析器插件（联动） | 外部插件放 `rikashare_bridge.py`（`register(api)`，自动发现）；桥接模块名不叫这个时才登记 `adapters/_external.py` 的 `EXTERNAL_ADAPTERS` | 见 5.14；SDK 在 `link_parser/external.py`；探测在 `main.py` 生成 Handler 之前，未安装 = 没有该解析器 |
 | 调整平台先后顺序 | 对应适配器的 `AdapterSpec(priority=…)` | 见 5.1；`_init_parsers` / 设置页开关 / 拼串顺序都跟着变 |
 | 改哪些平台被启用 | 网页设置页的「解析器开关」→ `DISABLED_PLATFORMS` 逗号串 | 开关由 `iter_adapters()` 动态渲染，见 5.6 |
 | 修某平台解析失效 | `adapters/<平台>.py`（+ `models/platforms/<平台>/`） | 先确认是接口变了还是模型字段变了 |
@@ -866,12 +907,19 @@ Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复�
 - **`@filter.regex` 不要求唤醒**：`cover_command_handler` 因此会在没 @ 机器人时也触发。
   它第一件事是确认「有没有引用消息」，没有就只在 `is_at_or_wake_command` 时提示用法——
   去掉这个判断，群里任何人打出「下载封面」都会被插件插一句话。
-- **外部解析器插件（5.14）的两个时序坑**：
+- **外部解析器插件（5.14）的三个时序 / 契约坑**：
   ① `register_external_adapters()` 必须留在 `_PLATFORM_HANDLERS` 生成之前——挪到后面
   外部平台就没有事件入口，静默失效；
   ② 外部桥接模块**不能改成顶层自注册**——本插件重载后注册表是新的，而桥接模块在
-  `sys.modules` 里是旧的，只有显式调用其 `register()` 才能重新注册。
+  `sys.modules` 里是旧的，只有显式调用其 `register()` 才能重新注册；
+  ③ 判断「插件未安装」不能只比 `exc.name == 插件包名`——第一个候选根
+  `data.plugins` 不存在时 `exc.name` 是 `data`（父包），会被误判成「桥接缺失」并刷 WARNING。
+  现在按「缺的是候选根自身或其前缀」判定换下一个根。
   另外 `_external.py` 以下划线开头不是装饰：它是基础设施，自动发现必须继续跳过它。
+- **SDK 是外部插件的唯一稳定依赖面**（`link_parser/external.py`）：外部插件只认
+  `register(api)` 与 `ParserAPI` 的属性，**不要**在文档或桥接里教人 `import
+  data.plugins.astrbot_plugin_rika_share.link_parser...`——模块根随 AstrBot 版本与目录名变化，
+  multincm 的旧桥接正是靠三候选根兜底才稳。改 SDK 属对外契约变更，要记 `CHANGELOG.md`。
 
 ---
 
@@ -899,7 +947,7 @@ Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复�
 16. 「按设计跳过」与「失败」的判定口径变化（→ 第 5.4、5.11 节）
 17. 日志的实现方式变化：日志器来源、是否拦截/改动框架日志（→ 第 5.12 节、第 8 节、第 9 节）
 18. 封面下载变化：触发词、链接来源（只认被引用消息）、封面取法、提示文案（→ 第 5.13 节、第 4 节、第 6 节、第 9 节）
-19. 外部解析器接入点变化：探测清单、桥接契约、指令让出规则、停用判定（→ 第 5.14 节、第 6 节、第 7 节、第 9 节）
+19. 外部解析器接入点或 SDK 变化：探测清单、自动发现规则、`ParserAPI` 契约、指令让出规则、停用判定（→ 5.14、6、7、9）
 
 ### 10.2 更新方式
 

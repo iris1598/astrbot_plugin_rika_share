@@ -8,6 +8,9 @@
                 以及 ``models/platforms/<平台>/`` 下各平台接口返回模型。
 - ``services``  有状态服务：流式下载、卡片渲染（``card_render``）、网页截图、
                 实况照片合成、B站账号（扫码登录 / Cookie 监控）。
+- ``exceptions``  异常体系。
+- ``external``    **外部解析器 SDK**：其它插件通过 ``register(api)`` 注入解析器，
+                不需要 import 本包的任何内部模块（见 ``adapters/_external.py``）。
 - ``output``    解析结果 → AstrBot 消息链的输出构建（合并转发 / 纯文本 / JSON 卡片）。
 - ``utils``     无状态工具函数（缓存、媒体、文本格式化、Cookie）。
 
