@@ -48,6 +48,7 @@ from .link_parser.exceptions import (
 from .link_parser.models import ParseResult, VideoContent
 from .link_parser.output import (
     EventUrlWrapper,
+    build_official_card_assets,
     build_platform_output,
     create_webpage,
     error_result,
@@ -856,9 +857,12 @@ class ParserPlugin(Star):
     ) -> AsyncGenerator[MessageEventResult, None]:
         """非 OneBot 平台的文本输出：合并转发内容全部转网页，聊天里只发一条链接通知。
 
-        同一内容（同 ``cache_key``）在链接有效期内复用同一网页——token 失效自动重建；
-        通知文案里的原始链接按当前平台现判是否经腾讯文档跳转页包装。
-        未启用 / 未配置「对外可达的回调接口地址」（callback_api_base）/ 生成失败时，
+        QQ 官方平台的三级形态（详见 5.16）：
+        ① 图文卡片（仅 qq_official_full 适配器有 msg_type=8 通道；卡片不能带引用，
+           走主动发送）；② markdown 链接（use_markdown，机器人无 md 权限时适配器
+           自动降级纯文本）；③ 纯文本。其他平台为纯文本链接。
+        同一内容（同 ``cache_key``）在链接有效期内复用同一网页——token 失效自动重建。
+        未启用 / 未配置「对外可达的回调接口地址」（callback_api_base）/ 全链失败时，
         回退到 :func:`send_plain_output` 的纯文本 + 图片链（与旧版行为一致）。
         """
         try:
@@ -881,8 +885,52 @@ class ParserPlugin(Star):
                         if len(self._webpage_links) >= _WEBPAGE_LINKS_MAX:
                             self._webpage_links.clear()
                         self._webpage_links[cache_key] = (url, token)
-                    yield event.plain_result(
-                        format_share_message(event, header, text_items, url)
+
+                    try:
+                        platform = (event.get_platform_name() or "").lower()
+                    except Exception:
+                        platform = ""
+                    is_qq_official = "qq_official" in platform
+                    is_qq_full = "qq_official_full" in platform
+
+                    # ① 图文卡片：仅 qq_official_full 有 msg_type=8 通道。
+                    #    卡片不能带引用（带引用客户端会显示「请使用新版手机QQ查看」），
+                    #    所以走主动发送，与解析卡片图同一模式
+                    if is_qq_full:
+                        try:
+                            card = await build_official_card_assets(
+                                event,
+                                header,
+                                text_items,
+                                page_url=url,
+                                page_dir=self.webpage_dir,
+                                base_url=base_url,
+                                ttl_hours=pconfig.CACHE_TTL_HOURS,
+                            )
+                            if card is not None:
+                                sent = await self.context.send_message(
+                                    event.unified_msg_origin,
+                                    MessageChain(
+                                        chain=[Comp.Json(data={"msg_type": 8, "card": card})]
+                                    ),
+                                )
+                                if sent:
+                                    return
+                                logger.info(
+                                    "[link_parser] 图文卡片主动发送未匹配到会话，回退 markdown/纯文本"
+                                )
+                        except Exception as e:
+                            logger.warning(
+                                f"[link_parser] 图文卡片发送失败，回退 markdown/纯文本: {e}"
+                            )
+
+                    # ② markdown 链接（QQ 官方；无 md 权限时适配器自动降级纯文本）
+                    # ③ 其他平台 / 非官方形态：纯文本
+                    msg = format_share_message(
+                        event, header, text_items, url, markdown=is_qq_official
+                    )
+                    yield event.plain_result(msg).use_markdown(
+                        True if is_qq_official else None
                     )
                     return
         except Exception:

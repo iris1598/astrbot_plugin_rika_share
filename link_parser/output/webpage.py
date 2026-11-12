@@ -11,8 +11,10 @@ AstrBot 文件服务（``/api/file/{token}``，免鉴权路由，token 即访问
   AstrBot 重启后旧链接失效。
 - 同一内容复用同一网页：调用方以「内容标识 → (原始链接, 页面 token)」做复用表，
   token 失效自动重建（:func:`webpage_token_expired` 自校验）。
-- QQ 客户端直接打开外站链接常被拦（「如需浏览，请使用浏览器访问」），QQ 系
-  平台默认经腾讯文档的外链跳转页（docs.qq.com/scenario/link.html）打开网页。
+- QQ 官方平台（qq_official_full 适配器）把通知做成**原生图文卡片**（msg_type=8，
+  经 ``Comp.Json`` raw 透传，卡片 url 经腾讯文档跳转页包装，封面取图集第一张压制），
+  失败回退 markdown 链接（``use_markdown(True)``，无权限时适配器自动降级纯文本），
+  再回退纯文本。其他平台发纯文本链接。
 
 实现为独立编写；页面形态与交互设计参考 qbob（https://github.com/Loping151/qbob，
 AGPL-3.0）的同名功能，未包含其代码文本——qbob 的许可证与本项目（MIT）不兼容，
@@ -21,6 +23,7 @@ AGPL-3.0）的同名功能，未包含其代码文本——qbob 的许可证与�
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -39,6 +42,8 @@ from ..config import get_config
 from ..utils.cache import cleanup_cache_dir
 
 __all__ = [
+    "build_official_card",
+    "build_official_card_assets",
     "create_webpage",
     "format_share_message",
     "tdocs_jump",
@@ -58,6 +63,15 @@ _URL_TRAIL = "。，、；：！？…）】》」』.,;:!?)\"'"
 
 # 腾讯文档的外链跳转页：经它打开的网页可在 QQ 内直接浏览
 DOCS_JUMP = "https://docs.qq.com/scenario/link.html?url="
+
+# QQ 官方图文卡片（card.type=tuwen）字段口径：四项必填，title/desc 按字符计
+CARD_TITLE_MAX = 50
+CARD_DESC_MAX = 200
+# 封面高宽比夹在这个范围：再长只取顶部（图集长图很常见，不硬塞全图），再宽取中间
+COVER_MAX_RATIO = 4 / 3
+COVER_MIN_RATIO = 1 / 2
+# 封面压小些：平台发送时当场下载转存 pic_url，字节越少越稳
+COVER_MAX_WIDTH = 800
 
 
 def tdocs_jump(url: str) -> str:
@@ -511,19 +525,147 @@ async def create_webpage(
 
 
 def format_share_message(
-    event: AstrMessageEvent, header: str, text_items: list[list], url: str
+    event: AstrMessageEvent,
+    header: str,
+    text_items: list[list],
+    url: str,
+    *,
+    markdown: bool = False,
 ) -> str:
     """聊天里的链接通知文案。
 
     ``url`` 必须传**原始链接**（复用与新建都一样）：QQ 系平台在发送时现判并经
     腾讯文档跳转页包装，其他平台原样发出——同一链接在不同平台能以各自合适的形态出现。
+
+    ``markdown=True``（QQ 官方平台）：链接拼成 ``[文案](链接)``，配
+    ``MessageChain.use_markdown(True)`` 走 msg_type=2，QQ 内可直接点开；
+    markdown 链接的文案里不能有 ``[ ] ( )``，先洗掉。
     """
     link = tdocs_jump(url) if _wants_tdocs(event) else url
+    summary = summarize_items(text_items)
+    if markdown:
+        label = _clip_line(f"📄 {summary}，点击查看", 60)
+        label = re.sub(r"[\[\]()]", " ", label).strip() or "点击查看"
+        lines = [p for p in [header] if p]
+        lines.append(f"[{label}]({link})")
+        return "\n".join(lines)
     lines = []
     if header:
         lines.append(header)
-    lines.append(f"📄 {summarize_items(text_items)}，点击查看：{link}")
+    lines.append(f"📄 {summary}，点击查看：{link}")
     return "\n".join(lines)
+
+
+def _clip_line(text: str, limit: int) -> str:
+    """压成一行（换行在卡片上不显示），超长截断补省略号。"""
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def build_official_card(title: str, desc: str, url: str, pic_url: str) -> dict | None:
+    """QQ 官方 msg_type=8 图文卡片（``card.type=tuwen``）的 ``card`` 请求体。
+
+    口径（实测）：四项必填；title ≤50、desc ≤200（按字符计）；**url 必须 https**
+    （http 报 40011021）；pic_url 必须有——平台发送时当场下载转存，下不到整卡被拒
+    （40034141）。条件不满足返回 None，由调用方回退 markdown / 纯文本。
+    """
+    url = str(url or "").strip()
+    pic_url = str(pic_url or "").strip()
+    if not url.startswith("https://"):
+        return None
+    if not pic_url.startswith(("https://", "http://")):
+        return None
+    title = _clip_line(title, CARD_TITLE_MAX) or BOT_NAME
+    desc = _clip_line(desc, CARD_DESC_MAX) or "点击查看"
+    return {
+        "type": "tuwen",
+        "content": {"title": title, "description": desc, "url": url, "pic_url": pic_url},
+    }
+
+
+def _make_cover_jpeg(src: str, out_dir: Path) -> Path | None:
+    """任意图片 → 卡片封面 JPEG（同步，走线程池）。
+
+    动图取首帧；高宽比夹到 [1/2, 4/3]（长图只取顶部，宽图取中间）；宽度压到
+    800。文件名按来源稳定派生（同源复用），失败返回 None。
+    """
+    try:
+        from PIL import Image
+    except Exception:  # noqa: BLE001 - Pillow 缺失（理论上不会，渲染依赖它）
+        return None
+    try:
+        src_path = Path(src)
+        digest = hashlib.md5(f"{src}:{src_path.stat().st_size}".encode()).hexdigest()[:12]
+        out = Path(out_dir) / f"cover-{digest}.jpg"
+        if out.exists():
+            return out
+        with Image.open(src_path) as im:
+            if getattr(im, "n_frames", 1) > 1:
+                im.seek(0)  # 动图取首帧
+            frame = im.convert("RGB")
+            w, h = frame.size
+            if w <= 0 or h <= 0:
+                return None
+            if h / w > COVER_MAX_RATIO:  # 太长：只取顶部
+                frame = frame.crop((0, 0, w, max(int(w * COVER_MAX_RATIO), 1)))
+            elif h / w < COVER_MIN_RATIO:  # 太宽：取中间
+                nh = max(int(w * COVER_MIN_RATIO), 1)
+                top = max((h - nh) // 2, 0)
+                frame = frame.crop((0, top, w, top + nh))
+            if frame.width > COVER_MAX_WIDTH:
+                frame = frame.resize(
+                    (COVER_MAX_WIDTH, max(int(frame.height * COVER_MAX_WIDTH / frame.width), 1)),
+                    Image.LANCZOS,
+                )
+            out_dir.mkdir(parents=True, exist_ok=True)
+            frame.save(out, "JPEG", quality=85)
+            return out
+    except Exception as e:  # noqa: BLE001 - 封面做不出来就退级，不抛
+        logger.warning(f"[link_parser] 卡片封面压制失败: {e}")
+        return None
+
+
+async def build_official_card_assets(
+    event: AstrMessageEvent,
+    header: str,
+    text_items: list[list],
+    *,
+    page_url: str,
+    page_dir: Path,
+    base_url: str,
+    ttl_hours: int,
+) -> dict | None:
+    """为网页链接构建 QQ 官方图文卡片（msg_type=8），条件不满足返回 None。
+
+    封面取图集第一张可用图片（缓存目录里的原文件），压制后经文件服务下发——
+    平台发送时当场下载转存，因此 ``callback_api_base`` 必须公网可达；
+    页面链接必须 https 且经腾讯文档跳转页包装（QQ 内直接浏览）。
+    """
+    page_url = str(page_url or "").strip()
+    if not page_url.startswith("https://"):
+        return None  # 卡片跳转只认 https（http 报 40011021），callback_api_base 须配 https
+
+    cover_src = ""
+    for item in text_items:
+        for kind, value in _collect_blocks(item):
+            if kind == "pic" and value and Path(value).is_file():
+                cover_src = value
+                break
+        if cover_src:
+            break
+    if not cover_src:
+        return None  # 没图：把文字渲成封面成本太高，直接退级
+    cover_path = await asyncio.to_thread(_make_cover_jpeg, cover_src, Path(page_dir))
+    if cover_path is None:
+        return None
+
+    service = _file_token_service()
+    token = await service.register_file(
+        str(cover_path), timeout=_token_ttl_seconds(ttl_hours), single_use=False
+    )
+    pic_url = f"{base_url.rstrip('/')}/api/file/{token}"
+    jump = tdocs_jump(page_url) if _wants_tdocs(event) else page_url
+    return build_official_card(header, summarize_items(text_items), jump, pic_url)
 
 
 async def webpage_token_expired(token: str) -> bool:

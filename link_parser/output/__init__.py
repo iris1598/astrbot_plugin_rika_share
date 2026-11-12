@@ -33,6 +33,7 @@ from .quoted import (
 )
 from .replies import error_result
 from .webpage import (
+    build_official_card_assets,
     create_webpage,
     format_share_message,
     webpage_token_expired,
@@ -40,6 +41,7 @@ from .webpage import (
 
 __all__ = [
     "EventUrlWrapper",
+    "build_official_card_assets",
     "build_platform_output",
     "create_webpage",
     "error_result",

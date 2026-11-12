@@ -266,6 +266,11 @@ AstrBot 系统配置里把它填成外部可访问的地址（如 `https://examp
 链接 token 在内存里，**AstrBot 重启后旧链接失效**（`CACHE_TTL_HOURS=0` 时链接到重启前一直有效、
 页面文件不清理）。同一内容在链接有效期内重复分享会**复用同一个链接**，不会重复建页。
 
+在 QQ 官方平台还有更进一步的形态：使用 [astrbot_plugin_qqofficial_full](https://github.com/iris1598/astrbot_plugin_qqofficial_full)（≥v0.5.1）
+适配器时，通知会做成**原生图文卡片**——标题/摘要/封面（取图集第一张压制）+ 腾讯文档包装的
+跳转链接，点卡片直接在 QQ 内打开网页；无封面、`callback_api_base` 非 https 或发送被拒时
+依次回退 markdown 链接、纯文本（markdown 需机器人有原生 Markdown 权限，没有时自动降级）。
+
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `WEBPAGE_FALLBACK_ENABLED` | bool | `true` | 非 OneBot 平台把合并转发内容转成网页链接发送；生成失败自动回退纯文本 |

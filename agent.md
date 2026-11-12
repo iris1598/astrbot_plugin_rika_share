@@ -774,26 +774,41 @@ tag: 哔哩哔哩
 OneBot v11 才支持 `Comp.Nodes` 合并转发；其他平台（QQ Official / Telegram / Discord /
 webchat 等）在 `_process_url` 的文本/图集发送改走**网页链接**（`main._send_text_output`
 是决策点）：把 header + 全部文本节点 + 全部图片 + 限流警告**原样**转成一个聊天记录式网页
-（`create_webpage`），聊天里只发一条链接通知（`format_share_message`：
-`header` + `📄 N 条内容 · M 张图片，点击查看：链接`）。
+（`create_webpage`），聊天里只发一条链接通知。
 视频/音频本就不在合并转发里，仍由 `try_send_media` 按平台消息原样发送；渲染卡片图照发。
+
+**QQ 官方平台的通知三级形态**（其余平台为纯文本链接）：
+
+1. **图文卡片**（仅 `qq_official_full` 适配器——AstrBot 内置 qqofficial 只有 msg_type 0/2/7，
+   没有 8；`Comp.Json(data={"msg_type": 8, "card": …})` 经该适配器的 raw 通道透传，
+   且它的 `_build_send_payload` 必须尊重 raw 显式 msg_type——v0.5.1 起支持）。
+   `build_official_card_assets` 构建：title=header（≤50 字，换行折叠）、description=摘要、
+   url=腾讯文档包装链接（**必须 https**，http 报 40011021）、pic_url=图集第一张压制出的
+   封面 JPEG（长图裁顶/宽图取中、≤800 宽，`_make_cover_jpeg`；无图/压制失败 → 不发卡片）。
+   **走 `context.send_message` 主动发送**——卡片不能带引用（带引用客户端显示
+   「请使用新版手机QQ查看」）。卡片被 QQ 拒绝（40034141 封面下不到等）→ 回退 ②
+2. **markdown 链接**：`format_share_message(markdown=True)` 拼成 `[文案](腾讯文档包装链接)`
+   + `MessageChain.use_markdown(True)`（msg_type=2）——QQ 内可直接点开；机器人无 md 权限
+   时适配器自动降级纯文本（内置与 full 适配器都有该回退），不会丢消息
+3. **纯文本链接**（其他平台 / 以上全部失败）
 
 | 环节 | 位置 | 说明 |
 | :--- | :--- | :--- |
 | 链接承载 | AstrBot **文件服务** `/api/file/{token}`（免鉴权路由） | 页面与图集图片都 `register_file(..., timeout=TTL*3600, single_use=False)` 注册；token 即访问凭据，`FileResponse` 按扩展名推断 Content-Type（`.html` 直接渲染） |
 | 链接时效 | **与缓存共用 `CACHE_TTL_HOURS`** | 图集图片在缓存目录里，共用 TTL 保证「图片必然活得和链接一样久」；`0`（缓存永不清理）= 链接到 AstrBot 重启为止（token 用 10 年顶格），页面文件也不清理 |
-| 链接前缀 | AstrBot 顶层配置 **`callback_api_base`**（「对外可达的回调接口地址」） | `main._get_callback_base()` 读 `context.get_config()`；空串 = 未配置 → 直接回退纯文本输出 |
+| 链接前缀 | AstrBot 顶层配置 **`callback_api_base`**（「对外可达的回调接口地址」） | `main._get_callback_base()` 读 `context.get_config()`；空串 = 未配置 → 直接回退纯文本输出。**卡片封面要求平台能当场下载 pic_url，所以 callback_api_base 还得公网 https 可达** |
 | 链接复用 | `main._webpage_links`（`cache_key → (原始链接, 页面 token)`，上限 2048 整体清空） | 同一内容在链接有效期内重复分享**发同一个链接**（qbob「多群广播只建一页」同款思路）。复用判定靠 `webpage_token_expired(token)` 自校验——页面与页内图片同批同时效注册，页面 token 有效即整页可看——所以**不随 `_content_cache` 清空**，失效自动重建 |
 | 页面渲染 | `webpage.render_share_page` | 自包含 HTML（无外部资源）：浅/深色自适应、单一说话人「莉卡解析」头像气泡、相邻图片并网格（1 满栏 / 2·4 两列 / 其余三列）、灯箱（脚本经 CSP sha256 放行，CSP 写在 `<meta>` 里——文件服务无响应头可用，`img-src` 因此放开 http:）、`noindex,nofollow`、页脚「生成时间 · 链接约 N 小时内有效 / 重启前有效」 |
 | 文本安全 | `html.escape` + `_autolink` | 裸 http(s) 链接自转链（借鉴 qbob，尾标点剥离）；图片 src 只用自构的 token URL |
-| 腾讯文档跳转 | `webpage.tdocs_jump` + `format_share_message` 发送时现判 | 移植 qbob `cards.docs_jump`：`docs.qq.com/scenario/link.html?url=<quote(safe="")>`；QQ 系平台（平台名含 `qq`，覆盖 qq_official / qq_official_webhook / qqguild / qq——`aiocqhttp` 不含该子串且不走此路径）默认开启（`WEBPAGE_TDOCS_JUMP`），其他平台发原始链接。**复用的原始链接存的是未包装形态**，包装在每次发送时按平台现做。QQ 客户端直接打开外站常被拦，经此跳转页可直接浏览 |
+| 腾讯文档跳转 | `webpage.tdocs_jump` + 卡片/markdown 发送时现判 | 移植 qbob `cards.docs_jump`：`docs.qq.com/scenario/link.html?url=<quote(safe="")>`；QQ 系平台（平台名含 `qq`，覆盖 qq_official / qq_official_webhook / qqguild / qq——`aiocqhttp` 不含该子串且不走此路径）默认开启（`WEBPAGE_TDOCS_JUMP`），其他平台发原始链接。**复用的原始链接存的是未包装形态**，包装在每次发送时按平台现做。QQ 客户端直接打开外站常被拦，经此跳转页可直接浏览 |
 | 配置 | 「网页分享设置」组 | `WEBPAGE_FALLBACK_ENABLED`（总开关）/ `WEBPAGE_TDOCS_JUMP`（链接时效无独立项，跟缓存走） |
-| 存储 | `data/plugin_data/astrbot_plugin_rika_share/webpage/` | 只有页面 `.html`；**图片不复制**，热链缓存目录里的原文件 |
+| 存储 | `data/plugin_data/astrbot_plugin_rika_share/webpage/` | 页面 `.html` + 卡片封面 `cover-<md5>.jpg`；**图集图片不复制**，热链缓存目录里的原文件 |
 | 清理 | 发送前机会式 + `initialize()` 定时 + `/clear_cache` | 按 `CACHE_TTL_HOURS` 清页面文件（复用 `utils/cache.cleanup_cache_dir`）；`/clear_cache` 同时清空 `_webpage_links` |
 
 **回退链**（逐级兜底，别改成直接报错）：未启用 → 未配置 `callback_api_base` → 文件服务
 缺失（老版本 AstrBot，函数内惰性 import 抛错）→ 页面写入/注册失败 → 一律回退
 `send_plain_output`（纯文本 + 图片链，与 v3.3.0 行为一致）并打一条 WARNING。
+QQ 官方内部还有一层：卡片（无封面/非 https/发送被拒）→ markdown →（无 md 权限，适配器降级）纯文本。
 
 **三个硬约束**（坑，见第 9 节）：
 
@@ -981,6 +996,13 @@ Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复�
 - **`_webpage_links` 不随 `_content_cache` 清空**：它以 `webpage_token_expired()` 自校验（失效即重建），这样跨清理周期重复分享仍复用同一链接；上限 2048 整体清空（与 `_identity_cache` 同款）。复用意味着**页面是快照**——B站重新解析出 fresh 数据后旧链接上的页面不会更新，这是「同一内容 = 同一链接」的固有属性。
 - **聊天里的分享链接只能走 `/api/file/{token}`**：插件的 `register_web_api` 路由带 Dashboard 鉴权（JWT / api_key），聊天用户点不开。别把分享链接「修」到插件路由上，也别给文件服务的路由加Referer/Origin 校验之类的想法——token 即凭据。
 - **腾讯文档跳转页（docs.qq.com/scenario/link.html）是外部服务**（qbob 实测可用）：它会给目标 URL 附加 query 参数（如 `?qq_aio_chat_type=N`），`/api/file/{token}` 路由忽略多余 query 所以无碍；它不可用时关掉 `WEBPAGE_TDOCS_JUMP` 即可（QQ 系平台才默认开启，其他平台发原始链接）。`tdocs_jump` 对已是 docs.qq.com 的链接原样放行，别造成二次包装。
+- **图文卡片只认 `qq_official_full`**：内置 qqofficial 适配器的 `_parse_to_qqofficial`
+  不认 `Comp.Json`（**静默丢弃，不报错**）——Json-only 链在那上面发出去等于什么都没发，
+  所以卡片路由用平台名含 `qq_official_full` 判定，**别放宽成所有 qq_official**。
+  卡片还依赖 [astrbot_plugin_qqofficial_full](https://github.com/iris1598/astrbot_plugin_qqofficial_full)
+  **v0.5.1+** 的 raw msg_type 透传（旧版在群聊/c2c 会把 raw msg_type 覆盖成 2/0，卡片静默变 markdown/文本）。
+  卡片封面要求平台能当场下载 pic_url → `callback_api_base` 必须公网 https 可达；
+  卡片不能带引用（带引用客户端显示「请使用新版手机QQ查看」）——所以走主动发送。
 - **`create_webpage` 的 `base_url` 会再剥一次尾斜杠**（防御性归一，避免拼出 `//api/file/…`）——别依赖调用方一定传干净的地址。
 - **webpage.py 是独立实现，不含 qbob 代码**：页面形态参考自 [qbob](https://github.com/Loping151/qbob)（**AGPL-3.0**），但本项目是 MIT——最初一版曾直接改写它的灯箱脚本 / CSS / autolink（强 copyleft 派生义务与 MIT 冲突），2026-11-13 已把这些表达层**全部重写为独立实现**（仅保留不可版权化的设计思路：聊天记录式页面、图片网格、暗色自适应、docs.qq.com 跳转 URL 格式）。因此 webpage.py 不构成 qbob 的派生作品，README / 本节只保留来源致谢。**别把当年那版直接改写的实现找回来**；改这块时也别去抄 qbob 的代码文本。
 - **合并转发的内存风险**：OneBot 会把节点内图片整体 base64，峰值约为原图总量 4 倍 → 用 `FORWARD_MAX_NODES` / `FORWARD_MAX_BATCH_MB` 拆批，不要去掉拆批逻辑。
