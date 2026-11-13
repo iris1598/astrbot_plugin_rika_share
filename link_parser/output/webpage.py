@@ -639,11 +639,14 @@ async def build_official_card_assets(
 
     封面取图集第一张可用图片（缓存目录里的原文件），压制后经文件服务下发——
     平台发送时当场下载转存，因此 ``callback_api_base`` 必须公网可达；
-    页面链接必须 https 且经腾讯文档跳转页包装（QQ 内直接浏览）。
+    跳转链接经腾讯文档包装后须 https（原始页 http 也行，包装后外层即 https）。
     """
     page_url = str(page_url or "").strip()
-    if not page_url.startswith("https://"):
-        return None  # 卡片跳转只认 https（http 报 40011021），callback_api_base 须配 https
+    # 卡片跳转只认 https（http 报 40011021）。经腾讯文档跳转页包装后外层已是
+    # https://docs.qq.com/…，故校验包装后的 jump，原始页 http 也能成卡。
+    jump = tdocs_jump(page_url) if _wants_tdocs(event) else page_url
+    if not jump.startswith("https://"):
+        return None
 
     cover_src = ""
     for item in text_items:
@@ -664,7 +667,6 @@ async def build_official_card_assets(
         str(cover_path), timeout=_token_ttl_seconds(ttl_hours), single_use=False
     )
     pic_url = f"{base_url.rstrip('/')}/api/file/{token}"
-    jump = tdocs_jump(page_url) if _wants_tdocs(event) else page_url
     return build_official_card(header, summarize_items(text_items), jump, pic_url)
 
 
