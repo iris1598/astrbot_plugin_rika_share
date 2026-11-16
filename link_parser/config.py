@@ -215,27 +215,28 @@ CONFIG_META: tuple[dict[str, Any], ...] = (
     {
         "key": "RENDER_THEME",
         "group": "解析图片渲染",
-        "label": "卡片主题",
+        "label": "卡片配色",
         "type": "select",
         "default": "dark",
         "options": ["dark", "light"],
         "labels": ["dark 深色", "light 浅色"],
-        "hint": "深色 / 浅色两套主题",
+        "hint": "卡片样式的深 / 浅两套配色；固定配色的样式会忽略它",
     },
     {
-        "key": "RENDER_LAYOUT",
+        "key": "RENDER_STYLE",
         "group": "解析图片渲染",
-        "label": "卡片布局",
+        "label": "卡片样式",
         "type": "select",
         "default": "standard",
         "options": ["standard", "magazine", "immersive", "feed"],
         "labels": [
-            "standard 标准横幅（全宽封面）",
-            "magazine 双栏杂志（封面左置）",
-            "immersive 沉浸全屏（无图自动回退标准）",
-            "feed 社交动态（作者优先，媒体内嵌）",
+            "标准横幅（顶部全宽封面 + 纵向信息流）",
+            "双栏杂志（封面左置、标题作者右置）",
+            "沉浸全屏（封面铺满整卡，无图回退标准）",
+            "社交动态（作者优先，媒体内嵌）",
         ],
-        "hint": "无封面内容在 immersive 布局下会自动回退到 standard",
+        "options_from": "styles",
+        "hint": "选择完整卡片样式（布局 + 组件重排）。样式清单来自 card_render/styles 注册表，新增样式会自动出现；所选样式不可用时回退 standard",
     },
     {
         "key": "RENDER_WIDTH",
@@ -533,6 +534,58 @@ _MAX_TEXT_LENGTH = 8000
 CONTROL_PLATFORMS = "platforms"
 
 
+#: 样式注册表不可用时，设置页仍可展示的内置回退清单
+_BUILTIN_STYLE_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("standard", "standard · 标准横幅（顶部全宽封面 + 纵向信息流）"),
+    ("magazine", "magazine · 双栏杂志（封面左置、标题作者右置）"),
+    ("immersive", "immersive · 沉浸全屏（封面铺满整卡，无图回退标准）"),
+    ("feed", "feed · 社交动态（作者优先，媒体内嵌）"),
+)
+
+
+def registered_styles() -> list[tuple[str, str]]:
+    """从样式注册表读取 ``(样式名, 展示文案)`` 列表。
+
+    清单**只来自注册表**，因此新增 ``card_render/styles/<name>.py`` 后设置页
+    自动多一个选项，不需要改 `CONFIG_META` 或前端。运行期才 import，避免
+    config 与渲染子系统形成模块级循环导入；注册表不可用时回退内置 4 项。
+    """
+    try:
+        from .services.card_render.styles import iter_styles
+    except Exception:  # noqa: BLE001 - 注册表不可用不该拖垮整个页面
+        from astrbot.api import logger
+
+        logger.warning(
+            "[link_parser] 读取卡片样式注册表失败，使用内置样式清单", exc_info=True
+        )
+        return list(_BUILTIN_STYLE_OPTIONS)
+
+    pairs: list[tuple[str, str]] = []
+    for spec in iter_styles():
+        pairs.append((spec.name, spec.label))
+    return pairs or list(_BUILTIN_STYLE_OPTIONS)
+
+
+def _effective_options(item: dict[str, Any]) -> list[str]:
+    """取某个 select 项当前可用的选项值（支持样式注册表动态清单）。"""
+    if item.get("options_from") == "styles":
+        names = [name for name, _ in registered_styles()]
+        if names:
+            return names
+    return list(item.get("options") or [])
+
+
+def _dynamic_item(item: dict[str, Any]) -> dict[str, Any]:
+    """复制配置项，并按 ``options_from`` 填入选项目前生效的 options / labels。"""
+    result = dict(item)
+    if item.get("options_from") == "styles":
+        pairs = registered_styles()
+        if pairs:
+            result["options"] = [name for name, _ in pairs]
+            result["labels"] = [label for _, label in pairs]
+    return result
+
+
 def config_meta_payload() -> dict[str, Any]:
     """返回供网页设置页渲染的配置元数据（分组 + 全部配置项定义）。"""
     return {
@@ -544,7 +597,7 @@ def config_meta_payload() -> dict[str, Any]:
             }
             for name, description in CONFIG_GROUPS
         ],
-        "items": [dict(item) for item in CONFIG_META],
+        "items": [_dynamic_item(item) for item in CONFIG_META],
     }
 
 
@@ -611,7 +664,7 @@ def coerce_value(item: dict[str, Any], raw: Any) -> tuple[Any, str | None]:
     text = "" if raw is None else str(raw).strip()
 
     if kind == "select":
-        options = item.get("options") or []
+        options = _effective_options(item)
         if text and text not in options:
             return None, f"{label}：只能是 {' / '.join(options)} 之一"
         return text, None
@@ -635,7 +688,9 @@ def verify_schema_alignment(schema: dict[str, Any]) -> list[str]:
     会在下次重载时静默丢失，因此必须显式比对。
 
     schema 底部的旧版扁平条目（``invisible`` 且不在任何分组里）是迁移契约，
-    不参与本校验。
+    不参与本校验；分组内标了 ``legacy: true`` 的条目（如旧 ``RENDER_LAYOUT``）
+    同样是迁移契约——它必须留在 schema 里防止 AstrBot 剔除用户旧值，但不是
+    页面配置项，因此也不参与键集合比对。
 
     还会校验**分组可见性**：AstrBot 渲染插件配置时（``AstrBotConfig.vue``）组标题
     只看 ``type === 'object'``，不检查组内是否还有可见项，所以组内条目全被隐藏时
@@ -651,7 +706,9 @@ def verify_schema_alignment(schema: dict[str, Any]) -> list[str]:
     for group, node in schema.items():
         if not isinstance(node, dict) or not isinstance(node.get("items"), dict):
             continue  # 旧版扁平条目：不是分组，跳过
-        for key in node["items"]:
+        for key, item in node["items"].items():
+            if isinstance(item, dict) and item.get("legacy") is True:
+                continue
             schema_keys.add(key)
             schema_group_of[key] = group
         if group not in CONFIG_GROUP_KEYS:
@@ -659,7 +716,9 @@ def verify_schema_alignment(schema: dict[str, Any]) -> list[str]:
 
         # 分组可见性必须与「组内是否有可见条目」一致，否则不是空标题就是误藏
         has_visible = any(
-            item.get("invisible") is not True for item in node["items"].values()
+            item.get("invisible") is not True
+            for item in node["items"].values()
+            if not (isinstance(item, dict) and item.get("legacy") is True)
         )
         if has_visible == (node.get("invisible") is True):
             if has_visible:
@@ -741,6 +800,43 @@ def migrate_grouped_config(config: Any) -> bool:
                 config[key] = default
                 changed = True
     return changed
+
+
+#: ``RENDER_STYLE`` 所在分组与旧键（``RENDER_LAYOUT``）的名字
+_STYLE_GROUP = "解析图片渲染"
+_STYLE_KEY = "RENDER_STYLE"
+_LEGACY_STYLE_KEY = "RENDER_LAYOUT"
+
+
+def migrate_card_style(config: Any) -> bool:
+    """把旧 ``RENDER_LAYOUT`` 的值迁移到 ``RENDER_STYLE``，返回是否发生变更。
+
+    旧键仍留在 ``_conf_schema.json`` 的分组里（标记 ``legacy``），否则 AstrBot
+    加载配置时会先把用户旧选择剔掉，迁移就永远读不到值。仅在
+    ``RENDER_STYLE`` 仍是默认 ``standard`` 且旧值是可用的样式名时迁移，
+    因此重复调用是幂等的。
+    """
+    group = config.get(_STYLE_GROUP)
+    if not isinstance(group, dict):
+        group = {}
+        config[_STYLE_GROUP] = group
+
+    current = str(group.get(_STYLE_KEY, "standard") or "standard").strip().lower()
+    if current and current != "standard":
+        return False
+
+    nested_legacy = str(group.get(_LEGACY_STYLE_KEY, "standard") or "standard").strip().lower()
+    flat_legacy = str(config.get(_LEGACY_STYLE_KEY, "standard") or "standard").strip().lower()
+    candidate = nested_legacy if nested_legacy != "standard" else flat_legacy
+    if candidate == "standard":
+        return False
+    if candidate not in {name for name, _ in registered_styles()}:
+        return False
+
+    group[_STYLE_KEY] = candidate
+    group[_LEGACY_STYLE_KEY] = "standard"
+    config[_LEGACY_STYLE_KEY] = "standard"
+    return True
 
 
 class ParserConfig:
@@ -935,10 +1031,34 @@ class ParserConfig:
         return val if val in {"dark", "light"} else "dark"
 
     @property
+    def RENDER_STYLE(self) -> str:
+        """卡片样式名（来自 ``card_render/styles`` 注册表）。
+
+        配置值不可用时按「旧 ``RENDER_LAYOUT`` → standard → 第一个可用样式」
+        回退，保证删除/改名样式后仍能出图。
+        """
+        names = {name for name, _ in registered_styles()}
+        val = str(self._cfg_get(_STYLE_KEY, "standard")).strip().lower()
+        if val and val in names:
+            return val
+
+        legacy = str(self._cfg_get(_LEGACY_STYLE_KEY, "standard")).strip().lower()
+        group = self._cfg.get(_STYLE_GROUP)
+        if isinstance(group, dict):
+            nested = str(group.get(_LEGACY_STYLE_KEY, "standard") or "standard").strip().lower()
+            if nested != "standard":
+                legacy = nested
+        if legacy in names:
+            return legacy
+
+        if "standard" in names:
+            return "standard"
+        return next(iter(names)) if names else "standard"
+
+    @property
     def RENDER_LAYOUT(self) -> str:
-        """卡片布局：standard / magazine / immersive / feed"""
-        val = str(self._cfg_get("RENDER_LAYOUT", "standard")).strip().lower()
-        return val if val in {"standard", "magazine", "immersive", "feed"} else "standard"
+        """Deprecated：旧字段名，等价于 :attr:`RENDER_STYLE`。"""
+        return self.RENDER_STYLE
 
     @property
     def RENDER_WIDTH(self) -> int:

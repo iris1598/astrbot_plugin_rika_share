@@ -151,6 +151,8 @@ class Theme:
         border_alpha: int,
         placeholder_top: tuple[int, int, int],
         placeholder_bottom: tuple[int, int, int],
+        is_dark: bool,
+        divider_alpha: int,
     ):
         self.gradient_top = hex_to_rgb(gradient_top)
         self.gradient_bottom = hex_to_rgb(gradient_bottom)
@@ -169,6 +171,8 @@ class Theme:
         self.border_alpha = border_alpha
         self.placeholder_top = placeholder_top
         self.placeholder_bottom = placeholder_bottom
+        self.is_dark = is_dark
+        self.divider_alpha = divider_alpha
 
 
 THEMES = {
@@ -191,6 +195,8 @@ THEMES = {
         border_alpha=24,
         placeholder_top=(44, 51, 71),
         placeholder_bottom=(20, 24, 35),
+        is_dark=True,
+        divider_alpha=14,
     ),
     # 浅色：干净近白底 + 极轻品牌色光晕
     "light": Theme(
@@ -211,9 +217,7 @@ THEMES = {
         border_alpha=14,
         placeholder_top=(228, 233, 242),
         placeholder_bottom=(243, 246, 251),
+        is_dark=False,
+        divider_alpha=12,
     ),
 }
-
-# 可选卡片布局：standard 标准横幅 / magazine 双栏杂志 /
-# immersive 沉浸全屏 / feed 社交动态流
-LAYOUT_NAMES = ("standard", "magazine", "immersive", "feed")

@@ -33,7 +33,12 @@ from astrbot.api.star import Context, Star, register, StarTools
 from .link_parser.adapters import iter_adapters
 from .link_parser.adapters._external import register_external_adapters
 from .link_parser.adapters.registry import AdapterBuildContext
-from .link_parser.config import get_config, init_config, migrate_grouped_config
+from .link_parser.config import (
+    get_config,
+    init_config,
+    migrate_card_style,
+    migrate_grouped_config,
+)
 from .link_parser.constants import (
     COVER_COMMAND_PATTERN,
     GENERIC_URL_PATTERN,
@@ -196,7 +201,11 @@ class ParserPlugin(Star):
 
         # 将旧版扁平配置迁移到分组配置，避免设置页整理后已有设置丢失
         try:
-            if migrate_grouped_config(config):
+            changed = migrate_grouped_config(config)
+            if migrate_card_style(config):
+                changed = True
+                logger.info("已迁移旧版 RENDER_LAYOUT 到 RENDER_STYLE")
+            if changed:
                 save = getattr(config, "save_config", None)
                 if callable(save):
                     save()
@@ -221,8 +230,8 @@ class ParserPlugin(Star):
         self._renderer_sig = self._renderer_signature()
         if self._renderer.enabled:
             logger.info(
-                f"解析图片渲染已启用 (主题: {pconfig.RENDER_THEME}, "
-                f"布局: {pconfig.RENDER_LAYOUT}, "
+                f"解析图片渲染已启用 (配色: {pconfig.RENDER_THEME}, "
+                f"样式: {pconfig.RENDER_STYLE}, "
                 f"封面全尺寸: {pconfig.RENDER_COVER_FULL_SIZE}, "
                 f"宽度: {pconfig.RENDER_WIDTH}px)"
             )
@@ -343,7 +352,7 @@ class ParserPlugin(Star):
             width=pconfig.RENDER_WIDTH,
             theme=pconfig.RENDER_THEME,
             font_path=pconfig.RENDER_FONT_PATH or None,
-            layout=pconfig.RENDER_LAYOUT,
+            style=pconfig.RENDER_STYLE,
             cover_full_size=pconfig.RENDER_COVER_FULL_SIZE,
         )
 
@@ -355,7 +364,7 @@ class ParserPlugin(Star):
             pconfig.RENDER_WIDTH,
             pconfig.RENDER_THEME,
             pconfig.RENDER_FONT_PATH,
-            pconfig.RENDER_LAYOUT,
+            pconfig.RENDER_STYLE,
             pconfig.RENDER_COVER_FULL_SIZE,
         )
 

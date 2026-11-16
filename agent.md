@@ -65,7 +65,7 @@ astrbot_plugin_rika_share/
 ├── scripts/                      # 开发辅助脚本（见第 8 节）
 │   ├── dev_logger.py             #   开发脚本用的最小日志桩（不依赖内置日志模块）
 │   ├── dev_smoke_test.py         #   独立冒烟测试：B站扫码登录 + 链接解析（自带 astrbot 桩）
-│   ├── preview_layouts.py        #   卡片布局回归（4 布局 × 2 主题 × 全尺寸）
+│   ├── preview_layouts.py        #   卡片样式回归（全部样式 × 2 配色 × 全尺寸）
 │   ├── kaomoji_render_test.py    #   颜文字字体回退回归
 │   └── font_coverage_probe.py    #   字体覆盖探测
 └── link_parser/                  # 实现主体
@@ -93,10 +93,15 @@ astrbot_plugin_rika_share/
     │   ├── downloader.py         # StreamDownloader：httpx 流式下载，失败回退 curl_cffi；m3u8 分片
     │   ├── cover.py              # 封面选取与落盘（视频封面 → 图文首图 → 动图·实况静态图）
     │   ├── card_render/          # 卡片渲染子系统
-    │   │   ├── renderer.py       #   ShareCardRenderer + 4 种布局实现
-    │   │   ├── theme.py          #   L / THEMES / PLATFORM_COLORS / LAYOUT_NAMES / Pillow 探测
+    │   │   ├── renderer.py       #   ShareCardRenderer：缓存 / 取图 / 样式分发 / 异常回退
+    │   │   ├── toolkit.py        #   FontBook（字体缓存）+ DrawingKit（绘图工具与组件）
+    │   │   ├── theme.py          #   L / THEMES / PLATFORM_COLORS / Pillow 探测
     │   │   ├── fonts.py          #   中文字体探测 + 符号回退字体链（fontTools / fc-list）
-    │   │   └── text.py           #   文本清洗、统计行解析、链接与时间格式化
+    │   │   ├── text.py           #   文本清洗、统计行解析、链接与时间格式化
+    │   │   └── styles/           #   卡片样式（自动发现 + 自注册，见 5.17）
+    │   │       ├── registry.py   #     StyleSpec / register_style / iter_styles / style_names
+    │   │       ├── base.py       #     CardStyle 基类
+    │   │       └── standard.py · magazine.py · immersive.py · feed.py
     │   ├── debug_probe.py        # 链接调试探针（逐步跑主流程 + 记事件 + 打码出报告）
     │   ├── web_screenshot.py     # Cloudflare Browser Rendering 网页截图客户端
     │   ├── live_photo.py         # 实况照片合成（主图 JPEG + XMP 索引 + 尾部 MP4）
@@ -328,6 +333,12 @@ JSON 卡片里「哪个平台先认领链接」= 设置页开关排列 = `DISABL
      组内条目全隐藏时**组对象本身也要加 `invisible: true`**，见下文）
   4. `_conf_schema.json` 底部的旧版扁平条目（`invisible: true`，迁移用；历史上存在的键才需要）
   5. README 配置表
+- **动态选项**：`select` 项可加 `options_from: "styles"`，
+  `config_meta_payload()` 与 `coerce_value()` 会从 `registered_styles()` 取清单
+  （样式注册表不可用时回退内置 4 项）。新增卡片样式**不需要**改 `CONFIG_META`。
+- **legacy 键**：分组内标 `legacy: true` 的条目（如旧 `RENDER_LAYOUT`）保留在 schema
+  里防止 AstrBot 剔除旧值，但**不计入 `CONFIG_META` 键集合**；`verify_schema_alignment()`
+  会跳过它。迁移逻辑见 5.17。
 - **维护入口分工**：`_conf_schema.json` 里**所有条目与所有分组都标 `invisible`**，
   原生配置面板不展示任何配置项——它只作**存储契约**（AstrBot 按它保留配置键），
   维护入口统一是插件网页设置页。这是**有意为之的终态**，别把 `invisible` 去掉「修好」它；
@@ -820,6 +831,45 @@ QQ 官方内部还有一层：卡片（无封面/非 https/发送被拒）→ ma
    `/api/v1/plugins/extensions/...` 下，带 Dashboard 鉴权（JWT / api_key），聊天用户点不开——
    不要把分享链接「修」到插件路由上。
 
+### 5.17 卡片样式注册表（`card_render/styles/`）
+
+卡片版式从 `renderer.py` 拆成独立模块，**一个样式 = `styles/<name>.py` 里一个
+`CardStyle` 子类 + 模块末尾 `register_style(...)`**。与平台适配器同构：
+`styles/__init__.py` 自动发现并导入本目录全部模块（`_` 前缀、`base`、`registry` 除外），
+单个模块导入失败只跳过该样式并记 `ERROR`。
+
+| 环节 | 位置 | 说明 |
+| :--- | :--- | :--- |
+| 样式基类 | `styles/base.py::CardStyle(DrawingKit)` | 元信息 + 每渲染实例上下文 + `render()` 抽象 |
+| 注册表 | `styles/registry.py` | `StyleSpec(style_cls, priority)` / `register_style` / `iter_styles` / `style_names` |
+| 内置样式 | `styles/standard.py` · `magazine.py` · `immersive.py` · `feed.py` | priority 10/20/30/40；`immersive.fallback = "standard"` |
+| 绘图工具 | `card_render/toolkit.py` | `FontBook`（字体缓存，跨渲染复用）+ `DrawingKit`（图片/光影/组件） |
+| 编排 | `card_render/renderer.py::ShareCardRenderer` | 缓存 / 取图 / 解析样式 / 调 `style.render()` / 保存 / 异常回退 |
+| 配置 | `config.RENDER_STYLE` + `registered_styles()` | 设置页下拉由注册表动态生成；`_conf_schema.json` 只作存储契约 |
+| 旧键 | `RENDER_LAYOUT` | schema 里标 `legacy: true` 保留旧值，启动时 `migrate_card_style()` 迁移到 `RENDER_STYLE` |
+
+**样式契约**：
+
+- 类属性：`name`（小写标识符）/ `display_name` / `description` / `version`（改视觉 +1）/
+  `priority`（默认 100）/ `fallback` / `palettes`（`None`=支持 dark/light，`()`=固定配色）。
+- `self.data`：标准化字段（`platform_text` / `content_type` / `ts` / `title` / `text` /
+  `author` / `name` / `author_desc` / `stats` / `online_text` / `warnings` / `hero` / `grid` /
+  `is_video_hero`），由 `DrawingKit.prepare()` 惰性计算。
+- `render()` 必须返回已写入的 `self.out_path`；失败抛异常，由渲染器记日志并回退文本。
+- 每次渲染新建样式实例；**只有 `FontBook` 的字体缓存跨渲染共享**，避免并发渲染互相覆盖状态。
+
+**回退链**：`RENDER_STYLE` 指向未知样式 → `standard` → 第一个已注册样式；样式
+`can_render()` 为假 → `style.fallback`（`immersive` 无图时回退 `standard`）。
+全部样式不可用 → `ShareCardRenderer.enabled = False`，回退文本输出。
+
+**缓存**：`_output_path()` 的摘要输入是
+`style_name | style_version | theme_name | width | cover_full_size | payload | warnings`。
+改样式视觉后必须 `version += 1`，否则同名旧卡片会被 `render()` 直接复用（或 `/clear_cache`）。
+
+**配置动态项**：`CONFIG_META` 里 `RENDER_STYLE` 带 `options_from: "styles"`；
+`config_meta_payload()` 用 `registered_styles()` 填充 `options` / `labels`，
+`coerce_value()` 也按动态清单校验。新增样式文件后，设置页自动多一项，无需改 JS。
+
 ---
 
 ## 6. 「我要做 X，改哪里」速查表
@@ -847,8 +897,9 @@ QQ 官方内部还有一层：卡片（无封面/非 https/发送被拒）→ ma
 | 加日志 / 改日志方式 | 只用 `from astrbot.api import logger`；开发脚本用 `scripts/dev_logger.py::StubLogger` | **不得引入内置日志模块**，见 5.12 |
 | 调链接调试页界面 | `pages/rika/views/debug.js` | 流程全在后端，页面只摆结果 |
 | 新增一个插件页面视图 | `pages/rika/views/<名字>.js` + `app.js` 的 `VIEW_FACTORIES` 与 `navEntries` | 每个视图一个 holder，切换只切 `hidden` |
-| 新增卡片布局 | `card_render/renderer.py`（`_render_<layout>` + `_render_sync` 分发）+ `card_render/theme.py`（`LAYOUT_NAMES`）+ `_conf_schema.json`（`RENDER_LAYOUT.options` 两处）+ README | 无封面场景必须能回退（参考 `_render_immersive`） |
-| 新增主题 / 平台配色 | `card_render/theme.py`（`THEMES` / `PLATFORM_COLORS`） | 主题名要同步 schema 的 options 与 `ParserConfig.RENDER_THEME` 白名单 |
+| 新增 / 修改卡片样式 | **只新建 `card_render/styles/<name>.py`**（`CardStyle` 子类 + 末尾 `register_style`） | 见 5.17；不用改 renderer / 配置 / 页面；无封面场景必须能降级，必要时声明 `fallback` |
+| 调整内置配色 / 平台配色 | `card_render/theme.py`（`THEMES` / `PLATFORM_COLORS`） | `RENDER_THEME` 只认 `dark` / `light`；样式可用 `palettes=()` 固定配色 |
+| 迁移旧 `RENDER_LAYOUT` | `config.migrate_card_style` + `_conf_schema.json` 的 `legacy: true` | 旧键必须留在分组 schema 里，否则 AstrBot 会先剔除旧值，迁移读不到 |
 | 调字体 / 颜文字回退 | `card_render/fonts.py` | 用 `scripts/kaomoji_render_test.py` 验证 |
 | 调文本清洗 / 统计解析 | `card_render/text.py` | 被 renderer 复用，注意别影响 `short_url` 截断 |
 | 调「哪个平台发什么」 | `output/builder.py` 的分平台分支 | 保持 header 形如 `莉卡解析 | 平台 - 类型` |
@@ -900,7 +951,8 @@ QQ 官方内部还有一层：卡片（无封面/非 https/发送被拒）→ ma
 grep -rnE "(import|from)[[:space:]]+logging|logging\.[A-Za-z]|getLogger|basicConfig|(File|Stream)Handler" --include=*.py .
 grep -rnE "logger\.(setLevel|addHandler|removeHandler|handlers|propagate|filters)" --include=*.py .
 
-# 3) 渲染回归：4 布局 × 2 主题 × 全尺寸 = 96 张，必须全部成功
+# 3) 渲染回归：全部样式 × 2 配色 × 全尺寸 × 6 样例
+#    内置 4 个样式时 96 张，必须全部成功；新增样式会自动纳入
 <PY> scripts/preview_layouts.py        # 末行应为「共渲染 96 张，全部成功」
 <PY> scripts/kaomoji_render_test.py    # 颜文字字体回退
 
@@ -950,10 +1002,10 @@ handlers = star_handlers_registry.get_handlers_by_module_name(
 print("imports_failed :", bad)
 print("adapters       :", adapter_names())    # 应为 8 个，顺序固定
 print("handlers       :", len(handlers))      # 应为 16
-assert not bad and len(handlers) == 15
+assert not bad and len(handlers) == 16
 ```
 
-期望基线（2026-11-13 实测）：模块导入 **70/70**（`main.py` + `link_parser/` 下 69 个模块）、适配器 **8 个**（`adapter_names()` 顺序 = priority 10→80）、Handler **16 个**（8 平台 + JSON 卡片 + 分享卡片 + 兜底 + 封面下载 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **47 项 / 9 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功。
+期望基线（2026-11-16 实测）：模块导入 **78/78**（`main.py` + `link_parser/` 下 77 个模块，含 `card_render/toolkit.py` 1 个与 `styles/` 7 个）、适配器 **8 个**（`adapter_names()` 顺序 = priority 10→80）、Handler **16 个**（8 平台 + JSON 卡片 + 分享卡片 + 兜底 + 封面下载 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **47 项 / 9 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功、样式注册表 **4 项**（`style_names()`）。
 
 > 上述基线按**未安装外部解析器插件**的环境计。装着 `astrbot_plugin_multincm` 时，
 > `_external.register_external_adapters()` 会在导入阶段多注册 `netease` 平台：
@@ -965,6 +1017,12 @@ assert not bad and len(handlers) == 15
 **不改任何其他文件**），跑上面的冒烟脚本，应当看到 `adapter_names()` 多出 `probe`、
 Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复跑回到 8/16。
 这一步是防止自动发现 / 动态 Handler 被人「修回去」的唯一护栏。
+
+**「新增样式零改动」回归**：往 `link_parser/services/card_render/styles/` 里临时丢一个
+最小样式模块（继承 `CardStyle` + 实现 `render()` + 末尾 `register_style(...)`，
+**不改任何其他文件**），重新导入后 `style_names()` 多出一项、设置页 payload 的
+`RENDER_STYLE.options` 多出一项、`preview_layouts.py` 多渲染一组；删掉文件后回到 4 项。
+这一步是防止样式注册表被人「修回去」的护栏。
 
 **插件页面**没有随仓库的自动化回归（它跑在受限 iframe 里），改完 `pages/rika/` 后两条路一起走：
 
@@ -1085,6 +1143,7 @@ Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复�
 17. 日志的实现方式变化：日志器来源、是否拦截/改动框架日志（→ 第 5.12 节、第 8 节、第 9 节）
 18. 封面下载变化：触发词、链接来源（只认被引用消息）、封面取法、提示文案（→ 第 5.13 节、第 4 节、第 6 节、第 9 节）
 19. 外部解析器接入点或 SDK 变化：探测清单、自动发现规则、`ParserAPI` 契约、指令让出规则、停用判定（→ 5.14、6、7、9）
+20. 卡片样式契约变化：`CardStyle` 字段、`DrawingKit` 公开方法、注册表规则、`RENDER_STYLE` 动态选项、旧 `RENDER_LAYOUT` 迁移（→ 5.17、5.6、6、8、9）
 
 ### 10.2 更新方式
 

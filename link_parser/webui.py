@@ -62,6 +62,28 @@ def _plugin_version() -> str:
     return ""
 
 
+def _ensure_current_style(payload: dict[str, Any], current: Any) -> None:
+    """若当前样式不在动态下拉里（已删除/改名），补一条「未注册」选项。
+
+    下拉的 options 来自注册表；配置里残留的样式名不在其中时，浏览器会显示空白，
+    用户看不出到底选中了什么。补一个只用于展示的选项，保存后渲染器仍会回退。
+    """
+    name = str(current or "").strip()
+    if not name:
+        return
+    for item in payload.get("items") or []:
+        if item.get("key") != "RENDER_STYLE":
+            continue
+        options = item.setdefault("options", [])
+        if name in options:
+            return
+        options.append(name)
+        item.setdefault("labels", []).append(
+            f"{name}（未注册，渲染时回退 standard）"
+        )
+        return
+
+
 def read_schema_problems() -> list[str]:
     """读 ``_conf_schema.json`` 并自检它与 CONFIG_META 是否一致。"""
     try:
@@ -104,6 +126,7 @@ class WebUIApi:
         pconfig = get_config()
         payload = config_meta_payload()
         payload["values"] = pconfig.current_values()
+        _ensure_current_style(payload, payload["values"].get("RENDER_STYLE"))
         payload["problems"] = read_schema_problems()
         payload["version"] = _plugin_version()
         # 解析器开关的平台清单来自适配器注册表，新增平台自动出现

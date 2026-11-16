@@ -666,7 +666,7 @@ async def parse_one(url: str, download: bool) -> dict:
             width=pconfig.RENDER_WIDTH,
             theme=pconfig.RENDER_THEME,
             font_path=pconfig.RENDER_FONT_PATH or None,
-            layout=pconfig.RENDER_LAYOUT,
+            style=pconfig.RENDER_STYLE,
             cover_full_size=pconfig.RENDER_COVER_FULL_SIZE,
         )
         card = await renderer.render(result, cache_key=f"devsmoke:{url[:48]}")

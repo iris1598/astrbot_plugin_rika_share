@@ -59,7 +59,7 @@ async def main() -> None:
             enabled=True,
             width=800,
             theme=theme,
-            layout="standard",
+            style="standard",
         )
         result = make_result(title, text)
         path = await renderer.render(result, cache_key=f"kaomoji_test_{theme}")
@@ -67,8 +67,8 @@ async def main() -> None:
 
     print("\n回退字体链:")
     r = ShareCardRenderer(out_dir, enabled=True)
-    r._font(20)  # 触发字体加载
-    for p, cmap in r._load_fallbacks():
+    r._font_book.font(20)  # 触发字体加载
+    for p, cmap in r._font_book.load_fallbacks():
         print(f"  {p}  ({len(cmap)} 码点)")
 
 

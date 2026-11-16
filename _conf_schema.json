@@ -172,19 +172,19 @@
         "invisible": true
       },
       "RENDER_THEME": {
-        "description": "卡片主题",
+        "description": "卡片配色",
         "type": "string",
         "default": "dark",
         "options": [
           "dark",
           "light"
         ],
-        "hint": "深色 / 浅色两套主题",
+        "hint": "卡片样式的深 / 浅两套配色；固定配色的样式会忽略它",
         "obvious_hint": true,
         "invisible": true
       },
       "RENDER_LAYOUT": {
-        "description": "卡片布局",
+        "description": "卡片布局(已废弃)",
         "type": "string",
         "default": "standard",
         "options": [
@@ -193,7 +193,22 @@
           "immersive",
           "feed"
         ],
-        "hint": "standard 标准横幅(全宽封面) / magazine 双栏杂志(封面左置) / immersive 沉浸全屏(封面铺满,无图内容自动回退标准) / feed 社交动态(作者优先,媒体内嵌)",
+        "hint": "已由 RENDER_STYLE 取代，仅用于旧配置迁移；保留在 schema 中避免 AstrBot 剔除用户旧值",
+        "obvious_hint": false,
+        "invisible": true,
+        "legacy": true
+      },
+      "RENDER_STYLE": {
+        "description": "卡片样式",
+        "type": "string",
+        "default": "standard",
+        "options": [
+          "standard",
+          "magazine",
+          "immersive",
+          "feed"
+        ],
+        "hint": "选择完整卡片样式；清单来自 card_render/styles 注册表，新增样式自动出现",
         "obvious_hint": true,
         "invisible": true
       },
@@ -607,19 +622,19 @@
     "invisible": true
   },
   "RENDER_THEME": {
-    "description": "卡片主题",
+    "description": "卡片配色",
     "type": "string",
     "default": "dark",
     "options": [
       "dark",
       "light"
     ],
-    "hint": "深色 / 浅色",
+    "hint": "卡片样式的深 / 浅两套配色",
     "obvious_hint": true,
     "invisible": true
   },
   "RENDER_LAYOUT": {
-    "description": "卡片布局",
+    "description": "卡片布局(已废弃)",
     "type": "string",
     "default": "standard",
     "options": [
@@ -628,7 +643,21 @@
       "immersive",
       "feed"
     ],
-    "hint": "standard 标准横幅 / magazine 双栏杂志 / immersive 沉浸全屏 / feed 社交动态",
+    "hint": "已由 RENDER_STYLE 取代，仅用于旧配置迁移",
+    "obvious_hint": false,
+    "invisible": true
+  },
+  "RENDER_STYLE": {
+    "description": "卡片样式",
+    "type": "string",
+    "default": "standard",
+    "options": [
+      "standard",
+      "magazine",
+      "immersive",
+      "feed"
+    ],
+    "hint": "选择完整卡片样式；清单来自 card_render/styles 注册表",
     "obvious_hint": true,
     "invisible": true
   },

@@ -1,8 +1,8 @@
-"""全布局 × 全类型 渲染回归与预览（一次性脚本）
+"""全部卡片样式 × 全类型 渲染回归与预览（一次性脚本）
 
-使用插件内置 ShareCardRenderer(layout=...) 渲染
-4 布局 × dark/light × 5 类样例（B站视频 / 小红书多图 / 微博转发 / 抖音无封面 / 单图），
-共 40 张 PNG，验证各解析结果类型在所有布局下均正常。
+使用插件内置 ShareCardRenderer(style=...) 渲染
+内置样式 × dark/light × 全尺寸开关 × 6 类样例，验证各解析结果类型在
+所有样式下均正常；新增样式文件后这里会自动多遍历一项。
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 from link_parser.models import Author, ImageContent, ParseResult, Platform, VideoContent  # noqa: E402
 from link_parser.models.task import PathTask  # noqa: E402
-from link_parser.services.card_render import LAYOUT_NAMES, ShareCardRenderer  # noqa: E402
+from link_parser.services.card_render import ShareCardRenderer, style_names  # noqa: E402
 
 OUT_DIR = PLUGIN_ROOT / "scripts" / "preview_out" / "layouts"
 ASSET_DIR = PLUGIN_ROOT / "scripts" / "preview_out" / "assets"
@@ -125,15 +125,23 @@ def build_samples() -> list[tuple[str, ParseResult]]:
 async def main() -> None:
     samples = build_samples()
     total = 0
-    for layout in LAYOUT_NAMES:
+    for style in style_names():
         for theme in ("dark", "light"):
             for full_size in (False, True):
-                renderer = ShareCardRenderer(OUT_DIR, width=800, theme=theme, layout=layout, cover_full_size=full_size)
+                renderer = ShareCardRenderer(
+                    OUT_DIR,
+                    width=800,
+                    theme=theme,
+                    style=style,
+                    cover_full_size=full_size,
+                )
                 for slug, res in samples:
-                    out = await renderer.render(res, cache_key=f"lay3-{layout}-{theme}-full{full_size}-{slug}")
-                    assert out and out.exists(), (layout, theme, full_size, slug)
+                    out = await renderer.render(
+                        res, cache_key=f"style-{style}-{theme}-full{full_size}-{slug}"
+                    )
+                    assert out and out.exists(), (style, theme, full_size, slug)
                     total += 1
-                    print(f"[{layout}/{theme}/full={full_size}] {slug}: {out.name}")
+                    print(f"[{style}/{theme}/full={full_size}] {slug}: {out.name}")
     print(f"\n共渲染 {total} 张，全部成功")
 
 

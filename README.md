@@ -27,8 +27,9 @@
 | [📦 安装与部署](#-安装与部署) | [🛠️ 指令说明](#️-指令说明) |
 | [⚙️ 配置说明](#️-配置说明) | [🎨 解析卡片渲染](#-解析卡片渲染) |
 | [🔐 Cookie 获取指南](#-cookie-获取指南) | [📁 项目结构](#-项目结构) |
-| [🧩 扩展：新增一个平台](#-扩展新增一个平台) | [🧑‍💻 开发与验证](#-开发与验证) |
-| [🙏 致谢](#-致谢) | [📄 开源许可](#-开源许可) |
+| [🧩 扩展：新增一个平台](#-扩展新增一个平台) | [🎨 扩展：新增卡片样式](#-扩展新增卡片样式) |
+| [🧑‍💻 开发与验证](#-开发与验证) | [🙏 致谢](#-致谢) |
+| [📄 开源许可](#-开源许可) | |
 
 ---
 
@@ -52,8 +53,9 @@
 
 ### 🎨 Pillow 纯 Headless 卡片渲染
 
-不依赖浏览器，毫秒级输出。提供 4 种卡片布局与深 / 浅两套主题，支持全尺寸封面、
-品牌光晕与毛玻璃徽章；渲染失败时自动回退为文本输出。
+不依赖浏览器，毫秒级输出。提供 4 种内置卡片样式与深 / 浅两套配色，支持全尺寸封面、
+品牌光晕与毛玻璃徽章；**样式是独立模块**，往 `card_render/styles/` 放一个文件即可新增
+完整版式（不是换配色），渲染失败时自动回退为文本输出。
 
 ### ⚡ 跨平台发送适配
 
@@ -110,8 +112,9 @@
 - 保存后即时生效，卡片渲染、解析器开关、截图凭据都会自动热更新。
 
 全部 47 项配置都在页面里维护，原生插件配置面板不再展示配置项；
-页面顶部的「解析器开关」按适配器注册表动态生成，**新增平台会自动多出一个开关**，
-不用改配置也不用改代码。
+页面顶部的「解析器开关」按适配器注册表动态生成，**新增平台会自动多出一个开关**；
+「卡片样式」下拉同样按 `card_render/styles` 注册表动态生成，**新增样式会自动多出一项**，
+两处都不用改配置或代码。
 
 ---
 
@@ -248,11 +251,14 @@ WebUI 侧边栏「插件」→ 莉卡解析 → 插件详情页 → 打开页面
 | 配置项 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `RENDER_ENABLED` | bool | `true` | 是否启用卡片渲染（失败自动回退文本） |
-| `RENDER_THEME` | string | `"dark"` | 主题：`dark` / `light` |
-| `RENDER_LAYOUT` | string | `"standard"` | 布局：`standard` / `magazine` / `immersive` / `feed` |
+| `RENDER_THEME` | string | `"dark"` | 卡片配色：`dark` / `light`（固定配色的样式会忽略它） |
+| `RENDER_STYLE` | string | `"standard"` | 卡片样式：清单来自 `card_render/styles` 注册表，新增样式自动出现 |
 | `RENDER_WIDTH` | int | `800` | 卡片宽度（px，范围 520–1080） |
 | `RENDER_COVER_FULL_SIZE` | bool | `false` | 封面按原始宽高比完整展示，不做中心裁剪 |
 | `RENDER_FONT_PATH` | string | `""` | 自定义字体文件或目录（`.ttf/.ttc/.otf`），留空自动探测系统字体 |
+
+> 旧配置键 `RENDER_LAYOUT` 已废弃，启动时自动迁移到 `RENDER_STYLE`；
+> 它仍保留在 schema 里用于读取旧值，但不再出现在设置页。
 
 ### 6. 网页分享设置
 
@@ -322,22 +328,28 @@ AstrBot 系统配置里把它填成外部可访问的地址（如 `https://examp
 
 开启 `RENDER_ENABLED` 后，解析结果会渲染为现代视觉风格的分享卡片并单独发送。
 
-### 布局总览
+### 内置卡片样式
 
 ![渲染样式总览](docs/previews/overview-layouts.png)
 
-| 布局 (`RENDER_LAYOUT`) | 特点与适用场景 |
+| 样式 (`RENDER_STYLE`) | 特点与适用场景 |
 | :--- | :--- |
 | **`standard`** 标准横幅 *(默认)* | 顶部全宽封面 + 纵向信息流，大气平衡，适合绝大多数视频与动态 |
 | **`magazine`** 双栏杂志 | 封面左置、标题作者右置，适合长文本与文章 |
 | **`immersive`** 沉浸全屏 | 封面高斯模糊铺满整卡，文字浮于渐变遮罩上（无图时自动回退 `standard`） |
 | **`feed`** 社交动态 | 头像与作者信息行置顶，媒体内嵌为圆角多图，原生 App 社交流风格 |
 
-### 主题
+每个样式都是一个独立模块，**新增样式不需要改渲染器、配置或页面**，
+详见下文「[扩展：新增卡片样式](#-扩展新增卡片样式)」。
+
+### 配色
 
 支持 **深色 (`dark`)** 与 **浅色 (`light`)** 两套配色：
 
 ![浅色主题示例](docs/previews/layout-standard-light.png)
+
+> `RENDER_THEME` 只是配色轴；样式可以读取 `self.theme` 使用这两套 token，
+> 也可以完全忽略它、使用固定配色（见 `CardStyle.palettes`）。
 
 ### 字体与颜文字
 
@@ -391,10 +403,10 @@ astrbot_plugin_rika_share/
 │   ├── ui.js                     #   零依赖 DOM / 表单小工具
 │   ├── app.js                    #   框架层：bridge 就绪 → 建导航 → 切换视图
 │   └── views/                    #   settings.js（设置）· debug.js（链接调试）
-├── docs/previews/                # 卡片渲染与布局预览图
+├── docs/previews/                # 卡片样式与配色预览图
 ├── scripts/                      # 开发辅助脚本
 │   ├── dev_smoke_test.py         #   独立冒烟测试：扫码登录 + 链接解析（自带 astrbot 桩）
-│   ├── preview_layouts.py        #   卡片布局回归（4 布局 × 2 主题 × 全尺寸）
+│   ├── preview_layouts.py        #   卡片样式回归（全部样式 × 配色 × 全尺寸）
 │   ├── kaomoji_render_test.py    #   颜文字字体回退回归
 │   └── font_coverage_probe.py    #   字体覆盖探测
 └── link_parser/                  # 插件实现（按职责分层）
@@ -415,10 +427,17 @@ astrbot_plugin_rika_share/
     │       ├── kuaishou/         #     init_state.py
     │       ├── weibo/            #     status.py · video_show.py · article.py
     │       └── xiaohongshu/      #     note.py · explore_page.py · discovery_page.py
-    ├── services/                 # 有状态服务（一个服务一个模块）
+    ├── services/                 #   有状态服务（一个服务一个模块）
     │   ├── downloader.py         #   异步流式媒体下载
     │   ├── cover.py              #   封面选取与落盘（视频封面 / 图文首图 / 动图静态图）
-    │   ├── card_render/          #   卡片渲染子系统（theme / fonts / text / renderer）
+    │   ├── card_render/          #   卡片渲染子系统
+    │   │   ├── renderer.py       #     编排：缓存 / 取图 / 样式分发 / 异常回退
+    │   │   ├── toolkit.py        #     FontBook（字体缓存）+ DrawingKit（绘图工具与组件）
+    │   │   ├── theme.py          #     L / THEMES / PLATFORM_COLORS / 颜色工具
+    │   │   └── styles/           #     卡片样式包（一个文件 = 一个完整样式，自注册）
+    │   │       ├── registry.py   #       StyleSpec / register_style / iter_styles
+    │   │       ├── base.py       #       CardStyle 基类
+    │   │       └── standard.py · magazine.py · immersive.py · feed.py
     │   ├── debug_probe.py        #   链接调试探针（逐步跑主流程 + 打码出报告）
     │   ├── web_screenshot.py     #   Cloudflare Browser Rendering 网页截图
     │   ├── live_photo.py         #   实况照片（主图 + 短视频）单文件合成
@@ -549,6 +568,150 @@ def register(api):
 
 ---
 
+## 🎨 扩展：新增卡片样式
+
+卡片版式是**自动发现 + 自注册**的：在 `link_parser/services/card_render/styles/`
+下新建一个 `.py`，它就会成为一个可选样式——不用改 `renderer.py`、配置清单、
+设置页或 `main.py`。一个样式负责整张卡片的布局，不是只换配色。
+
+### 目录与注册
+
+```text
+link_parser/services/card_render/styles/
+├── __init__.py      # 自动导入本目录全部模块（_ 前缀、base、registry 除外）
+├── registry.py      # StyleSpec / register_style / get_style / iter_styles / style_names
+├── base.py          # CardStyle 基类（继承 DrawingKit）
+├── standard.py      # 内置：标准横幅（priority 10）
+├── magazine.py      # 内置：双栏杂志（priority 20）
+├── immersive.py     # 内置：沉浸全屏（priority 30，fallback=standard）
+└── feed.py          # 内置：社交动态（priority 40）
+```
+
+- `name` 必须是小写标识符（`^[a-z][a-z0-9_]*$`），它同时是注册表键名和 `RENDER_STYLE` 的取值。
+- `priority` 决定设置页下拉顺序与 `preview_layouts.py` 遍历顺序；内置样式占 10–40，新样式默认 100 排在末尾。
+- 单个样式模块导入失败只会跳过该样式并记 `ERROR`，不影响其他样式与插件加载。
+
+### `CardStyle` 元信息
+
+| 字段 | 说明 |
+| :--- | :--- |
+| `name` | 小写标识符，注册表键名 / `RENDER_STYLE` 取值 |
+| `display_name` | 设置页展示名 |
+| `description` | 设置页一句话说明 |
+| `version` | 视觉版本，改动版式时 `+1`（参与卡片文件名摘要） |
+| `priority` | 排序权重，默认 100 |
+| `fallback` | `can_render()` 为假时回退到哪个样式；内置 `immersive` 为 `"standard"` |
+| `palettes` | 支持的配色：`None` = `dark` / `light` 都支持；`()` = 固定配色，忽略 `RENDER_THEME` |
+
+`CardStyle` 继承 `DrawingKit`，所以样式里可以直接用：
+
+- **上下文**：`self.width` / `self.pad` / `self.inner_w` / `self.theme` / `self.theme_name` /
+  `self.accent` / `self.accent_rgb` / `self.result` / `self.images` / `self.out_path` / `self.gap`
+- **`self.data`**：标准化后的展示数据，字段见下表
+
+| `self.data` 字段 | 说明 |
+| :--- | :--- |
+| `platform_text` / `content_type` / `ts` | 平台展示名 / 内容类型 / 格式化时间 |
+| `title` / `text` | 已清洗 emoji 的标题 / 正文 |
+| `author` / `name` / `author_desc` | 作者对象 / 昵称 / 签名（截断 40 字） |
+| `stats` | `[(标签, 数值), ...]`，已合并时长 |
+| `online_text` / `warnings` | 在线人数文案 / `limit_warnings` 列表 |
+| `hero` / `grid` / `is_video_hero` | 视觉主图 / 剩余图集 / 主图是否为视频封面 |
+
+### `DrawingKit` 工具
+
+| 分组 | 方法 |
+| :--- | :--- |
+| 字体文本 | `font(size, bold=False)` · `text_width` · `wrap` · `fit_lines` · `line_height` · `draw_text` |
+| 图片 | `open_image` · `cover_fit` · `rounded_image` · `rounded_image_top` · `circle_avatar` · `gradient` |
+| 光影 | `glass` · `radial_glow` · `scrim` |
+| 卡片骨架 | `base_canvas(card_h)` · `header_badges(canvas, theme, accent_rgb, data)` · `save(canvas)` |
+| 组件 | `draw_hero_badge` · `draw_flat_badge` · `avatar_block` · `stat_rows_height` · `draw_stat_rows` · `draw_online` · `warning_block_height` · `draw_warning_block` · `hero_aspect_height` · `footer_block` · `draw_grid_block` · `measure_quote` · `draw_quote_block` · `grid_metrics` · `platform_pill_width` · `stat_pill_width` · `build_stat_rows` |
+
+绘图坐标以左上角为原点，`card_h` 不包含底部 14px 的投影空间（`base_canvas` 会自动加）。
+
+### 最小完整示例
+
+```python
+# link_parser/services/card_render/styles/minimal.py
+from pathlib import Path
+
+from ..theme import L
+from .base import CardStyle
+from .registry import StyleSpec, register_style
+
+
+class MinimalStyle(CardStyle):
+    name = "minimal"
+    display_name = "极简"
+    description = "纯文字信息流，无封面也能成立"
+    version = 1
+    priority = 50
+
+    def render(self) -> Path:
+        d = self.data
+        pad = self.pad
+        inner_w = self.inner_w
+
+        title_font = self.font(L.F_TITLE, bold=True)
+        title_lines = self.fit_lines(d["title"], title_font, inner_w, 3) if d["title"] else []
+        desc_font = self.font(L.F_DESC)
+        desc_lines = self.fit_lines(d["text"], desc_font, inner_w, 5) if d["text"] else []
+        grid_h = self.grid_metrics(len(d["grid"]), inner_w, self.gap)[0]
+
+        card_h = 36
+        card_h += len(title_lines) * L.F_TITLE_LINE_H + (14 if title_lines else 0)
+        card_h += len(desc_lines) * L.F_DESC_LINE_H + (16 if desc_lines else 0)
+        card_h += grid_h + (20 if grid_h else 0) + L.FOOTER_H
+
+        canvas, draw = self.base_canvas(card_h)
+        y = 36
+        for line in title_lines:
+            self.draw_text(draw, (pad, y), line, L.F_TITLE, self.theme.text_primary, bold=True)
+            y += L.F_TITLE_LINE_H
+        if title_lines:
+            y += 14
+        for line in desc_lines:
+            self.draw_text(draw, (pad, y), line, L.F_DESC, self.theme.text_secondary)
+            y += L.F_DESC_LINE_H
+        if desc_lines:
+            y += 16
+        y = self.draw_grid_block(canvas, draw, self.theme, d["grid"], y, inner_w, self.gap)
+        self.footer_block(
+            canvas, draw, self.theme, self.accent, self.accent_rgb,
+            self.result, y, inner_w,
+        )
+        return self.save(canvas, self.out_path)
+
+
+register_style(StyleSpec(style_cls=MinimalStyle, priority=50))
+```
+
+### 约束
+
+1. `render()` 必须返回已写入的 `self.out_path`（通常就是 `self.save(canvas)`）。
+2. 无封面、无图集、无头像、超长标题/正文、`limit_warnings` 都必须能降级绘制，不能抛异常；
+   抛异常时渲染器会记日志并回退文本输出。
+3. 想复用现有视觉，优先用 `base_canvas` / `header_badges` / `footer_block` 等组件；
+   想完全重做，直接 `Image.new` + `self.font` / `self.draw_text` 自绘即可，
+   `DrawingKit` 的图片与光影工具照样可用。
+4. 读取配色用 `self.theme`；读取平台色用 `self.accent` / `self.accent_for(...)`；
+   两者都可以完全忽略，按样式自己的固定配色绘制（同时把 `palettes` 设为 `()`）。
+5. 改视觉后把 `version` +1，否则同名旧卡片会被直接复用（也可 `/clear_cache` 强制重画）。
+6. 模块末尾只调用一次 `register_style(...)`；`StyleSpec` 只需要样式类，
+   展示字段都从类属性读取。
+
+### 生效与验证
+
+- 保存文件后重载插件（或重启 AstrBot），设置页「卡片样式」下拉会自动多出该项；
+  选中保存后无需再次重载，渲染器会按新样式重建。
+- 运行 `python scripts/preview_layouts.py`：脚本会遍历 `style_names()`，
+  新增样式自动纳入回归；末行的总数会随样式数量变化。
+- 当前只支持**插件内置目录**，不扫描外部插件或数据目录；样式导入失败时看日志
+  `卡片样式模块 xxx 导入失败`。
+
+---
+
 ## 🧑‍💻 开发与验证
 
 `scripts/` 下的脚本都自带 `astrbot` 桩，可脱离 AstrBot 运行环境直接执行。
@@ -557,7 +720,8 @@ def register(api):
 # 静态检查（未定义名 / 未使用导入）
 python -m ruff check --select F,E9 --no-cache --exclude __pycache__ .
 
-# 卡片布局回归：4 布局 × 2 主题 × 全尺寸 = 96 张，末行应为「共渲染 96 张，全部成功」
+# 卡片样式回归：全部样式 × 2 配色 × 全尺寸 × 6 样例
+# 内置 4 个样式时共 96 张，末行应为「共渲染 96 张，全部成功」
 python scripts/preview_layouts.py
 
 # 颜文字字体回退回归

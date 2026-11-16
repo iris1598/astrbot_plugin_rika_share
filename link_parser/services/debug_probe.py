@@ -663,7 +663,7 @@ def _environment_lines(plugin: Any) -> list[str]:
     if renderer is not None:
         lines.append(
             f"卡片渲染    : {'开' if renderer.enabled else '关'}"
-            f"（主题 {renderer.theme_name} / 布局 {renderer.layout_name} / 宽度 {renderer.width}px）"
+            f"（配色 {renderer.theme_name} / 样式 {renderer.layout_name} / 宽度 {renderer.width}px）"
         )
     client = getattr(plugin, "_cloudflare_client", None)
     if client is not None:
