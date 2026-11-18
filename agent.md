@@ -29,7 +29,7 @@ AstrBot 插件：自动识别聊天消息里的分享链接 / JSON 分享卡片 
 1. **所有 Handler 必须「归属」在 `main.py` 这个模块下。**
    AstrBot 用 `handler.handler_module_path == 插件模块路径` **精确匹配**来归属 Handler（框架源码 `<AstrBot>/astrbot/core/star/star_handler.py`，不在本仓库；`__module__` 不匹配的 Handler 会在 `only_activated` 过滤里被直接丢掉，功能静默失效）。
    因此：**各平台 Handler 由 `main._PLATFORM_HANDLERS` 按适配器注册表自动生成**（生成函数在本模块内构造，显式改写 `__module__` / `__name__`，仍满足归属要求），其余 Handler 手写在 `main.py`。业务逻辑一律放 `link_parser/`，Handler 壳子不许离开本模块。
-   数量基线：**16 个 Handler** = 8 平台 + JSON 卡片 + 分享卡片（官方机器人纯文本卡片，见 5.15）+ Cloudflare 兜底 + 封面下载（见 5.13）+ 4 指令；**新增平台会同时多出一个 Handler**（含外部解析器插件接入的平台，见 5.14——装着 `astrbot_plugin_multincm` 时为 17 个），所以 Handler 数随平台数变化，一律以第 8 节的注册表冒烟脚本为准。`grep -c "@filter\." main.py` 只剩静态装饰器（当前 **13**，其中 3 行是注释/文档串里提到的 `@filter.regex`），已经不能当基线用。
+   数量基线：**18 个 Handler** = 10 平台 + JSON 卡片 + 分享卡片（官方机器人纯文本卡片，见 5.15）+ Cloudflare 兜底 + 封面下载（见 5.13）+ 4 指令；**新增平台会同时多出一个 Handler**（含外部解析器插件接入的平台，见 5.14——装着 `astrbot_plugin_multincm` 时为 19 个），所以 Handler 数随平台数变化，一律以第 8 节的注册表冒烟脚本为准。`grep -c "@filter\." main.py` 只剩静态装饰器（当前 **13**，其中 3 行是注释/文档串里提到的 `@filter.regex`），已经不能当基线用。
 2. **插件类名必须以 `Plugin` 结尾（或名为 `Main`）。**
    框架按 `name.lower().endswith("plugin") or name.lower() == "main"` 找插件类（`star_manager._get_classes`）。现用名 `ParserPlugin`。
 3. **不要改插件身份标识**：`metadata.yaml` 的 `name`、`author`、目录名、`main.py` 的 `_get_plugin_data_dir()` 中的 `astrbot_plugin_rika_share`、`StarTools.get_data_dir("astrbot_plugin_rika_share")`、`_conf_schema.json` 里的配置键名。
@@ -282,6 +282,7 @@ JSON 卡片里「哪个平台先认领链接」= 设置页开关排列 = `DISABL
 | `limit_warnings` | 时长超限等警告列表（`list[str]`） | 卡片警告块；无卡片时追加为文本 |
 | `info` | B站 AI 总结 | 卡片正文补充 |
 | `is_video` | 小红书等「是否视频笔记」 | 输出分支 |
+| `repo_line` | GitHub 仓库元信息行（语言 / License / Topics / 更新时间） | `output/builder.py` github 分支 |
 | `suppress_text_output` | 「卡片已承载全部信息」声明：卡片渲染成功时不再发送文本输出（渲染关闭/失败仍回退文本） | `_process_url` |
 | `music_card` | 音乐卡片规格 `{"type": "163", "id": <歌曲id>}`：QQ 系平台在解析卡片之后发送 `Comp.Music`，替代文本/音频（卡片图保留），见 5.14 | `main._process_url` |
 | `audio_as_file` | 音频以文件（`Comp.File`）而非语音发送 | `output/builder.try_send_media` |
@@ -978,7 +979,7 @@ grep -rnE "logger\.(setLevel|addHandler|removeHandler|handlers|propagate|filters
 **导入冒烟脚本**（放临时目录，不提交；在 AstrBot 仓库根目录执行）：
 
 ```python
-# 目的：确认全部模块可导入、8 个适配器已注册、16 个 Handler 已被框架接收
+# 目的：确认全部模块可导入、10 个适配器已注册、18 个 Handler 已被框架接收
 import importlib, pkgutil, sys
 sys.path.insert(0, r"<插件父目录>")           # 含 astrbot_plugin_rika_share 目录的那个上级目录
 
@@ -1000,22 +1001,22 @@ handlers = star_handlers_registry.get_handlers_by_module_name(
     "astrbot_plugin_rika_share.main"
 )
 print("imports_failed :", bad)
-print("adapters       :", adapter_names())    # 应为 8 个，顺序固定
-print("handlers       :", len(handlers))      # 应为 16
-assert not bad and len(handlers) == 16
+print("adapters       :", adapter_names())    # 应为 10 个，顺序固定
+print("handlers       :", len(handlers))      # 应为 18
+assert not bad and len(handlers) == 18
 ```
 
-期望基线（2026-11-16 实测）：模块导入 **78/78**（`main.py` + `link_parser/` 下 77 个模块，含 `card_render/toolkit.py` 1 个与 `styles/` 7 个）、适配器 **8 个**（`adapter_names()` 顺序 = priority 10→80）、Handler **16 个**（8 平台 + JSON 卡片 + 分享卡片 + 兜底 + 封面下载 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **47 项 / 9 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功、样式注册表 **4 项**（`style_names()`）。
+期望基线（2026-11-18 实测）：模块导入 **84/84**（`main.py` + `link_parser/` 下 83 个模块，含 `card_render/toolkit.py` 1 个与 `styles/` 7 个）、适配器 **10 个**（`adapter_names()` 顺序 = priority 10→100）、Handler **18 个**（10 平台 + JSON 卡片 + 分享卡片 + 兜底 + 封面下载 + 4 指令；平台 Handler 是生成的，`grep "@filter\." main.py` 只剩静态那几个，不能当基线）、配置项 **47 项 / 9 组**（`len(CONFIG_META)`）、原生面板可见项 **0 个**（全部分组与条目都 `invisible`，配置只在插件页面维护）、渲染 **96 张**全部成功、样式注册表 **4 项**（`style_names()`）。
 
 > 上述基线按**未安装外部解析器插件**的环境计。装着 `astrbot_plugin_multincm` 时，
 > `_external.register_external_adapters()` 会在导入阶段多注册 `netease` 平台：
-> 适配器 **9 个**、Handler **17 个**（多一个 `netease_handler`），且 `netease` 排在
+> 适配器 **11 个**、Handler **19 个**（多一个 `netease_handler`），且 `netease` 排在
 > 注册表末尾（priority 100）。判断基线时先看有没有装联动插件。
 
 **「新增平台零改动」回归**：往 `link_parser/adapters/` 里临时丢一个最小适配器
 （继承 `BaseParser` + 末尾 `register_adapter(AdapterSpec(name="probe", url_pattern=..., parser_cls=...))`，
 **不改任何其他文件**），跑上面的冒烟脚本，应当看到 `adapter_names()` 多出 `probe`、
-Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复跑回到 8/16。
+Handler 数 +1、`registered_platforms()` 多出它，然后删掉该文件复跑回到 10/18。
 这一步是防止自动发现 / 动态 Handler 被人「修回去」的唯一护栏。
 
 **「新增样式零改动」回归**：往 `link_parser/services/card_render/styles/` 里临时丢一个

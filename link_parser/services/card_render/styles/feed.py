@@ -51,14 +51,14 @@ class FeedStyle(CardStyle):
             y += len(desc_lines) * L.F_DESC_LINE_H + 16
         if media_h:
             y += media_h + 20
+        if grid_h:
+            y += grid_h + 20
         if stats_h:
             y += stats_h + 18
         if d["online_text"]:
             y += 38
         if warnings_h:
             y += warnings_h + 16
-        if grid_h:
-            y += grid_h + 20
         if quote_h:
             y += quote_h + 20
         y += L.FOOTER_H
@@ -141,6 +141,8 @@ class FeedStyle(CardStyle):
             y += media_h + 20
             draw = ImageDraw.Draw(canvas)
 
+        # 图集紧跟媒体块，统计徽章垫底（与原生社交流一致：正文 → 媒体 → 点赞评论）
+        y = self.draw_grid_block(canvas, draw, theme, d["grid"], y, inner_w, gap)
         if stat_rows:
             y = self.draw_stat_rows(canvas, theme, stat_rows, pad, y) + 18
             draw = ImageDraw.Draw(canvas)
@@ -149,7 +151,6 @@ class FeedStyle(CardStyle):
         if d["warnings"]:
             y = self.draw_warning_block(canvas, draw, theme, d["warnings"], y, inner_w) + 16
             draw = ImageDraw.Draw(canvas)
-        y = self.draw_grid_block(canvas, draw, theme, d["grid"], y, inner_w, gap)
         y = self.draw_quote_block(canvas, ImageDraw.Draw(canvas), theme, accent_rgb, self.result, y, inner_w)
         self.footer_block(canvas, ImageDraw.Draw(canvas), theme, accent, accent_rgb, self.result, y, inner_w)
 

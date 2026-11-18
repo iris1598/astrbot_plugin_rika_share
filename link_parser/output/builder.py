@@ -190,6 +190,45 @@ async def build_platform_output(
                     nodes.append([Comp.Image.fromFileSystem(str(cover_path))])
         return header, nodes
 
+    if platform == "github":
+        header = f"莉卡解析 | {platform_name} - {content_type}"
+        nodes = []
+        # 第一条消息：仓库名 + 链接
+        node1_text = "\n".join([v for v in [result.title, result.url] if v])
+        if node1_text:
+            nodes.append([Comp.Plain(node1_text)])
+        # 第二条消息：元信息行 + 简介 + 统计
+        node2_parts = []
+        if repo_line := result.extra.get("repo_line"):
+            node2_parts.append(repo_line)
+        if result.text:
+            prefix = "📝 " if node2_parts else ""
+            node2_parts.append(f"{prefix}{result.text[:200]}")
+        if stats := result.extra.get("stats_line"):
+            node2_parts.append(stats)
+        if node2_parts:
+            nodes.append([Comp.Plain("\n".join(node2_parts))])
+        return header, nodes
+
+    if platform == "coolapk":
+        header = f"莉卡解析 | {platform_name} - {content_type}"
+        nodes = []
+        # 正文 + 统计
+        text_items = []
+        if result.text:
+            text_items.append(result.text[:500])
+        if stats := result.extra.get("stats_line"):
+            text_items.append(stats)
+        if text_items:
+            nodes.append([Comp.Plain("\n".join(text_items))])
+        # 图集
+        for c in result.contents:
+            if isinstance(c, ImageContent):
+                path = await c.path_task.safe_get()
+                if path:
+                    nodes.append([Comp.Image.fromFileSystem(str(path))])
+        return header, nodes
+
     # 通用平台
     header = f"莉卡解析 | {platform_name} - {content_type}"
     nodes = []
