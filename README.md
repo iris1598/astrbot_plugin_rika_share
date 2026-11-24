@@ -87,7 +87,7 @@
 插件面板位于 [`views/rika/`](views/rika/index.html)，采用**无头业务核心（`views/rika/core/`）+ 独立整页设计主题（`views/rika/themes/<id>/`）**架构。每套主题拥有独立的 HTML 结构、页面划分、交互流与隔离的 CSS 样式文件；切换主题时会卸载旧页面并挂载新页面：
 
 - **`studio`（工作台分栏 · 默认）**：左侧固定导航栏 + 独立全局/分群作用域横栏 + 四大工作区（总览与诊断 / 平台与账号 / 所见即所得卡片工作室 + 拖拽节点看板 / 主题与兜底），适合桌面端高密度精密调参。
-- **`glass-center`（空间指挥舱）**：完全独立的页面架构——顶部半透明悬浮指挥条整合作用域与快捷保存 + 底部悬浮 Dock 切换三大空间（**驾驶舱 Bento** 直连实时链路探针与平台快捷芯片、**气泡创作台** 内嵌模拟聊天对话框预览卡片并自带三泳道节点流水线、**全域控制台** 聚合筛选搜索与主题画廊）。
+- **`glass-center`（悬浮磨砂控制中心）**：隐藏侧边栏与硬分割，采用极光背景下的通透毛玻璃浮层与**底部居中悬浮胶囊 Dock** 导航。
 
 可通过在 [`views/rika/themes/`](views/rika/themes/) 新建主题目录（含 `manifest.json`、`index.js` 与独立样式，后端会自动发现，无需改已有源码），或调用 `window.RikaWebTheme.registerTheme(...)` 挂载完整整页应用（详见 [`docs/WEB_THEME_GUIDE.md`](docs/WEB_THEME_GUIDE.md)）：
 

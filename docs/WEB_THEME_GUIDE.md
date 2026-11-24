@@ -30,16 +30,17 @@ views/rika/
     │   ├── theme.css
     │   ├── widgets.js
     │   └── views/
-    └── glass-center/           # 内置设计 2：空间指挥舱（顶部指挥条 + Bento + 聊天真预览）
+    └── glass-center/           # 内置设计 2：悬浮磨砂控制中心（顶部磨砂栏 + 底部胶囊 Dock）
         ├── manifest.json
         ├── index.js
         └── theme.css
 ```
 
 > [!TIP]
-> 内置的两套主题正是同一无头核心下的两种彻底不同的页面设计：
-> - [studio/](../views/rika/themes/studio)：左侧栏 + 独立全局/分群横栏 + 4 页签高密度表单工作台；
-> - [glass-center/](../views/rika/themes/glass-center)：悬浮顶栏 + 底部空间 Dock + 驾驶舱 Bento 网格 + 模拟 IM 聊天气泡预览台 + 三泳道节点流水线。
+> 内置的两套主题都打包为独立整页主题包（不共享全局样式表，可完全各自演进）：
+> - [studio/](../views/rika/themes/studio)：左侧固定导航栏 + 独立全局/分群横栏 + 4 页签高密度表单工作台；
+> - [glass-center/](../views/rika/themes/glass-center)：极光磨砂浮层 + 顶部吸顶栏 + 底部居中悬浮胶囊 Dock 导航。
+> - 若要编写与两者结构完全不同的全新页面（如单页长卷、Bento 看板、分屏阅读器等），直接参照下文新建 `themes/<id>/` 实现自己的 `mount(mountEl, ctx)` 即可。
 
 ---
 
