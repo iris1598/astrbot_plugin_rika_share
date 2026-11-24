@@ -11,8 +11,8 @@ __pycache__/
 coverage.xml
 *.log
 *.tmp
-cache/
-config/
+/cache/
+/config/
 
 # 开发辅助脚本的统一输出目录（测试日志、渲染预览图、隔离数据）
 scripts/.out/
