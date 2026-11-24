@@ -199,93 +199,387 @@ def _render_pinwheel_hairpin(size: int, is_dark: bool) -> Image.Image:
     return img.resize((size, size), LANCZOS)
 
 
+def _cubic_bezier(
+    p0: tuple[float, float],
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    p3: tuple[float, float],
+    steps: int = 16,
+) -> list[tuple[float, float]]:
+    """采样三次贝塞尔曲线顶点序列，用于绘制圆润自然的鳍手与叶耳轮廓。"""
+    pts: list[tuple[float, float]] = []
+    for i in range(steps + 1):
+        t = i / steps
+        mt = 1.0 - t
+        x = (
+            mt**3 * p0[0]
+            + 3 * mt**2 * t * p1[0]
+            + 3 * mt * t**2 * p2[0]
+            + t**3 * p3[0]
+        )
+        y = (
+            mt**3 * p0[1]
+            + 3 * mt**2 * t * p1[1]
+            + 3 * mt * t**2 * p2[1]
+            + t**3 * p3[1]
+        )
+        pts.append((x, y))
+    return pts
+
+
 def _render_soliskin_mascot(size: int, is_dark: bool) -> Image.Image:
-    """超采样绘制伴生「日灵（Soliskin）」圆润青玉小精灵徽章。"""
-    ss = 3
+    """4x 超采样绘制伴生「日灵（小哆 / Soliskin）」徽标。
+
+    忠实还原设定细节：头顶双环金色圣辉光轮、直立晶叶长耳与耳根小圆苞、
+    两侧圆润微翘的白纹宽展长鳍手、奶白青瓷绿梨形躯干，以及正中
+    「朝霞金粉渐变 + 八芒太阳纹」核心与腹部荧光绿回路纹。
+    """
+    ss = 4
     S = size * ss
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    cx, cy = S * 0.50, S * 0.58
+    cx = S * 0.50
+    cy = S * 0.615
 
-    body_top = (168, 248, 232) if is_dark else (142, 238, 220)
-    body_bot = (84, 206, 194) if is_dark else (66, 190, 178)
-    outline = (46, 128, 126, 215) if not is_dark else (196, 255, 245, 210)
-    mark_col = (54, 152, 146, 205) if not is_dark else (38, 124, 122, 215)
+    # 奶白青瓷绿实色色阶（全程使用不透明混合色或 alpha_composite，杜绝半透明多边形掏空 Alpha）
+    jade_hi = (234, 250, 232)
+    jade_mid = (198, 236, 206)
+    jade_low = (152, 210, 178)
+    arm_tip_col = (228, 246, 224)
+    ear_tip_col = (255, 251, 214)
+    jade_edge = (72, 138, 114, 230) if not is_dark else (112, 182, 154, 235)
+    neon_mint = (176, 255, 214, 250)
 
-    # 柔和青玉荧光外晕
-    glow = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    ImageDraw.Draw(glow).ellipse(
-        (S * 0.12, S * 0.18, S * 0.88, S * 0.94),
-        fill=(103, 228, 207, 72 if is_dark else 46),
+    # 1) 柔和背光外晕 + 头顶圣辉金晕
+    aura = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    ad = ImageDraw.Draw(aura)
+    ad.ellipse(
+        (S * 0.16, S * 0.26, S * 0.84, S * 0.94),
+        fill=(18, 26, 34, 95) if is_dark else (86, 158, 132, 46),
     )
-    img.alpha_composite(glow.filter(ImageFilter.GaussianBlur(ss * 2)))
+    ad.ellipse(
+        (S * 0.22, S * 0.01, S * 0.78, S * 0.17),
+        fill=(255, 240, 156, 115 if is_dark else 85),
+    )
+    img.alpha_composite(aura.filter(ImageFilter.GaussianBlur(round(ss * 2.2))))
+
+    # 2) 头顶悬浮双环金色符文光轮（绘制在独立层，带清亮白金高光）
+    halo_layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    hd = ImageDraw.Draw(halo_layer)
+    hy0, hy1 = S * 0.032, S * 0.132
+    hd.ellipse(
+        (S * 0.24, hy0, S * 0.76, hy1),
+        outline=(255, 244, 178, 245),
+        width=max(2, round(ss * 0.75)),
+    )
+    hd.ellipse(
+        (S * 0.31, hy0 + S * 0.020, S * 0.69, hy1 - S * 0.020),
+        outline=(255, 252, 220, 230),
+        width=max(1, round(ss * 0.50)),
+    )
+    # 光轮内十字刻度短线
+    hd.line([(cx - S * 0.06, (hy0 + hy1) / 2), (cx + S * 0.06, (hy0 + hy1) / 2)], fill=(255, 250, 210, 210), width=max(1, ss // 2))
+    img.alpha_composite(halo_layer)
+
+    # 3) 两侧圆润微翘的宽展长鳍手（贝塞尔平滑曲线 + 白色回路弧带）
+    arms_layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    ard = ImageDraw.Draw(arms_layer)
+    for sign in (-1, 1):
+        # 上沿：从肩侧向下微垂后在末端优雅上翘
+        upper = _cubic_bezier(
+            (cx + sign * S * 0.20, cy - S * 0.04),
+            (cx + sign * S * 0.31, cy + S * 0.03),
+            (cx + sign * S * 0.41, cy + S * 0.04),
+            (cx + sign * S * 0.475, cy + S * 0.005),
+            steps=14,
+        )
+        # 鳍尖圆弧包回下沿
+        tip_curve = _cubic_bezier(
+            (cx + sign * S * 0.475, cy + S * 0.005),
+            (cx + sign * S * 0.505, cy + S * 0.055),
+            (cx + sign * S * 0.455, cy + S * 0.165),
+            (cx + sign * S * 0.355, cy + S * 0.185),
+            steps=12,
+        )
+        # 下沿圆润收回腰侧
+        lower = _cubic_bezier(
+            (cx + sign * S * 0.355, cy + S * 0.185),
+            (cx + sign * S * 0.285, cy + S * 0.195),
+            (cx + sign * S * 0.235, cy + S * 0.160),
+            (cx + sign * S * 0.195, cy + S * 0.125),
+            steps=12,
+        )
+        arm_poly = upper + tip_curve[1:] + lower[1:]
+        ard.polygon(arm_poly, fill=(*jade_mid, 255))
+
+        # 鳍端柔白渐变亮区（使用蒙版限制在鳍手内部，绝不污染透明通道）
+        tip_poly = upper[7:] + tip_curve[1:] + lower[:5]
+        ard.polygon(tip_poly, fill=(*arm_tip_col, 255))
+
+        # 鳍手白色双弧纹与发光小圆节点
+        band1 = _cubic_bezier(
+            (cx + sign * S * 0.335, cy + S * 0.032),
+            (cx + sign * S * 0.355, cy + S * 0.095),
+            (cx + sign * S * 0.340, cy + S * 0.145),
+            (cx + sign * S * 0.310, cy + S * 0.182),
+            steps=10,
+        )
+        band2 = _cubic_bezier(
+            (cx + sign * S * 0.400, cy + S * 0.030),
+            (cx + sign * S * 0.420, cy + S * 0.085),
+            (cx + sign * S * 0.405, cy + S * 0.130),
+            (cx + sign * S * 0.375, cy + S * 0.172),
+            steps=10,
+        )
+        ard.line(band1, fill=(255, 253, 236, 240), width=max(2, round(ss * 0.6)))
+        ard.line(band2, fill=(255, 253, 236, 215), width=max(1, round(ss * 0.45)))
+        dot_x, dot_y = cx + sign * S * 0.352, cy + S * 0.112
+        dr = S * 0.015
+        ard.ellipse((dot_x - dr, dot_y - dr, dot_x + dr, dot_y + dr), fill=(255, 253, 232, 255))
+        ard.line([*arm_poly, arm_poly[0]], fill=jade_edge, width=max(2, round(ss * 0.55)))
+    img.alpha_composite(arms_layer)
+
     d = ImageDraw.Draw(img)
 
-    # 两枚灵动叶片长耳（左微倾、右舒展）
-    left_ear = [
-        (cx - S * 0.10, cy - S * 0.18),
-        (cx - S * 0.26, cy - S * 0.44),
-        (cx - S * 0.22, cy - S * 0.52),
-        (cx - S * 0.02, cy - S * 0.26),
-    ]
-    right_ear = [
-        (cx + S * 0.04, cy - S * 0.24),
-        (cx + S * 0.24, cy - S * 0.50),
-        (cx + S * 0.30, cy - S * 0.40),
-        (cx + S * 0.13, cy - S * 0.16),
-    ]
-    d.polygon(left_ear, fill=(*body_top, 240))
-    d.polygon(right_ear, fill=(*body_top, 240))
-    d.line([*left_ear, left_ear[0]], fill=outline, width=max(2, ss - 1))
-    d.line([*right_ear, right_ear[0]], fill=outline, width=max(2, ss - 1))
+    # 4) 底部两只短圆小脚
+    for sign in (-1, 1):
+        fx = cx + sign * S * 0.090
+        fy = cy + S * 0.248
+        frx, fry = S * 0.048, S * 0.042
+        d.ellipse(
+            (fx - frx, fy - fry, fx + frx, fy + fry),
+            fill=(*jade_low, 255),
+            outline=jade_edge,
+            width=max(1, ss // 2),
+        )
 
-    # 两侧小巧翼芽
-    d.polygon(
-        [(cx - S * 0.28, cy + S * 0.02), (cx - S * 0.42, cy - S * 0.04), (cx - S * 0.31, cy + S * 0.14)],
-        fill=(*body_bot, 230),
+    # 5) 直立晶叶长耳（不透明暖金白耳尖渐变 + 折线叶脉）
+    ears_layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    ed = ImageDraw.Draw(ears_layer)
+    for sign in (-1, 1):
+        ear_in = _cubic_bezier(
+            (cx + sign * S * 0.055, cy - S * 0.22),
+            (cx + sign * S * 0.068, cy - S * 0.34),
+            (cx + sign * S * 0.112, S * 0.18),
+            (cx + sign * S * 0.158, S * 0.058),
+            steps=12,
+        )
+        ear_out = _cubic_bezier(
+            (cx + sign * S * 0.158, S * 0.058),
+            (cx + sign * S * 0.205, S * 0.19),
+            (cx + sign * S * 0.208, cy - S * 0.31),
+            (cx + sign * S * 0.152, cy - S * 0.195),
+            steps=12,
+        )
+        ear_poly = ear_in + ear_out[1:]
+        ed.polygon(ear_poly, fill=(*jade_mid, 255))
+
+        # 耳尖金白高光渐变（通过蒙版合成，保持 255 满不透明度）
+        ear_mask = Image.new("L", (S, S), 0)
+        ImageDraw.Draw(ear_mask).polygon(ear_poly, fill=255)
+        ear_grad = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+        egd = ImageDraw.Draw(ear_grad)
+        y_top_e = int(S * 0.055)
+        y_bot_e = int(cy - S * 0.19)
+        for yy in range(y_top_e, y_bot_e + 1):
+            t = (yy - y_top_e) / max(y_bot_e - y_top_e, 1)
+            col = mix(ear_tip_col, jade_hi, min(1.0, t / 0.48)) if t < 0.48 else mix(jade_hi, jade_mid, (t - 0.48) / 0.52)
+            egd.line([(0, yy), (S, yy)], fill=(*col, 255))
+        ears_layer.paste(ear_grad, (0, 0), ear_mask)
+
+        ed = ImageDraw.Draw(ears_layer)
+        # 耳内几何白色叶脉与小圆点
+        vein = [
+            (cx + sign * S * 0.108, cy - S * 0.22),
+            (cx + sign * S * 0.146, cy - S * 0.33),
+            (cx + sign * S * 0.132, S * 0.20),
+            (cx + sign * S * 0.158, S * 0.075),
+        ]
+        ed.line(vein, fill=(255, 254, 240, 235), width=max(1, round(ss * 0.48)))
+        vx, vy = vein[1]
+        ed.ellipse((vx - ss, vy - ss, vx + ss, vy + ss), fill=(255, 254, 240, 245))
+        ed.line([*ear_poly, ear_poly[0]], fill=jade_edge, width=max(2, round(ss * 0.55)))
+    img.alpha_composite(ears_layer)
+
+    # 6) 圆润梨形躯干（上窄下微丰满的蛋梨形轮廓 + 脸侧小绒尖 + 耳根小圆苞）
+    rx_top, rx_bot = S * 0.222, S * 0.254
+    ry = int(S * 0.265)
+    by0, by1 = int(cy - ry), int(cy + ry)
+    bh = max(1, by1 - by0)
+    body_layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    body_mask = Image.new("L", (S, S), 0)
+    bmd = ImageDraw.Draw(body_mask)
+    left_side = _cubic_bezier(
+        (cx, by0),
+        (cx - rx_top * 1.18, by0),
+        (cx - rx_bot * 1.12, cy + ry * 0.15),
+        (cx - rx_bot * 0.72, by1 - ry * 0.14),
+        steps=18,
     )
-    d.polygon(
-        [(cx + S * 0.28, cy + S * 0.02), (cx + S * 0.42, cy - S * 0.04), (cx + S * 0.31, cy + S * 0.14)],
-        fill=(*body_bot, 230),
+    bottom_arc = _cubic_bezier(
+        (cx - rx_bot * 0.72, by1 - ry * 0.14),
+        (cx - rx_bot * 0.36, by1 + ry * 0.04),
+        (cx + rx_bot * 0.36, by1 + ry * 0.04),
+        (cx + rx_bot * 0.72, by1 - ry * 0.14),
+        steps=14,
+    )
+    right_side = _cubic_bezier(
+        (cx + rx_bot * 0.72, by1 - ry * 0.14),
+        (cx + rx_bot * 1.12, cy + ry * 0.15),
+        (cx + rx_top * 1.18, by0),
+        (cx, by0),
+        steps=18,
+    )
+    body_poly = left_side + bottom_arc[1:] + right_side[1:]
+    bmd.polygon(body_poly, fill=255)
+
+    body_grad = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    bgd = ImageDraw.Draw(body_grad)
+    for yy in range(by0 - 4, by1 + 8):
+        t = max(0.0, min(1.0, (yy - by0) / bh))
+        col = mix(jade_hi, jade_mid, t / 0.58) if t < 0.58 else mix(jade_mid, jade_low, (t - 0.58) / 0.42)
+        bgd.line([(0, yy), (S, yy)], fill=(*col, 255))
+    body_layer.paste(body_grad, (0, 0), body_mask)
+
+    bld = ImageDraw.Draw(body_layer)
+    # 脸颊两侧小巧绒毛尖（紧贴上半脸颊）
+    for sign in (-1, 1):
+        tuft = [
+            (cx + sign * S * 0.205, cy - S * 0.105),
+            (cx + sign * S * 0.258, cy - S * 0.130),
+            (cx + sign * S * 0.220, cy - S * 0.055),
+        ]
+        bld.polygon(tuft, fill=(*jade_hi, 255))
+        bld.line([tuft[0], tuft[1], tuft[2]], fill=jade_edge, width=max(1, round(ss * 0.5)))
+
+    bld.line([*body_poly, body_poly[0]], fill=jade_edge, width=max(2, round(ss * 0.58)))
+
+    # 耳根外侧两枚可爱小圆苞（紧贴头侧耳根）
+    for sign in (-1, 1):
+        bud_x = cx + sign * S * 0.178
+        bud_y = cy - S * 0.202
+        br = S * 0.036
+        bld.ellipse(
+            (bud_x - br, bud_y - br * 0.86, bud_x + br, bud_y + br * 0.86),
+            fill=(*jade_hi, 255),
+            outline=jade_edge,
+            width=max(1, round(ss * 0.5)),
+        )
+    img.alpha_composite(body_layer)
+
+    # 7) 腹部荧光绿回路纹（先画一层柔光外晕再叠清亮荧光线，还原游戏内自发光纹路）
+    core_cy = cy - S * 0.048
+    core_r = int(S * 0.126)
+    arc_r = core_r + S * 0.034
+
+    circuit_glow = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    cgd_line = ImageDraw.Draw(circuit_glow)
+    cgd_line.arc(
+        (cx - arc_r, core_cy - arc_r, cx + arc_r, core_cy + arc_r),
+        start=26,
+        end=154,
+        fill=(120, 255, 190, 150),
+        width=max(3, round(ss * 1.1)),
+    )
+    for sign in (-1, 1):
+        stem = _cubic_bezier(
+            (cx + sign * S * 0.135, cy + S * 0.105),
+            (cx + sign * S * 0.075, cy + S * 0.150),
+            (cx + sign * S * 0.028, cy + S * 0.175),
+            (cx + sign * S * 0.022, cy + S * 0.240),
+            steps=10,
+        )
+        cgd_line.line(stem, fill=(120, 255, 190, 145), width=max(3, round(ss * 1.0)))
+    img.alpha_composite(circuit_glow.filter(ImageFilter.GaussianBlur(ss)))
+
+    circuit_sharp = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    csd = ImageDraw.Draw(circuit_sharp)
+    csd.arc(
+        (cx - arc_r, core_cy - arc_r, cx + arc_r, core_cy + arc_r),
+        start=26,
+        end=154,
+        fill=neon_mint,
+        width=max(2, round(ss * 0.55)),
+    )
+    for sign in (-1, 1):
+        ang = math.radians(90 - sign * 64)
+        nx = cx + math.cos(ang) * arc_r
+        ny = core_cy + math.sin(ang) * arc_r
+        nr = S * 0.015
+        csd.ellipse((nx - nr, ny - nr, nx + nr, ny + nr), outline=neon_mint, width=max(1, ss // 2))
+        stem = _cubic_bezier(
+            (cx + sign * S * 0.135, cy + S * 0.105),
+            (cx + sign * S * 0.075, cy + S * 0.150),
+            (cx + sign * S * 0.028, cy + S * 0.175),
+            (cx + sign * S * 0.022, cy + S * 0.240),
+            steps=10,
+        )
+        csd.line(stem, fill=neon_mint, width=max(2, round(ss * 0.52)))
+        # 轻巧柔和的浅嫩叶芽斑纹（低对比度融于青玉肌肤）
+        leaf_col = (*mix(jade_mid, (152, 198, 138), 0.48), 230)
+        lx, ly = cx + sign * S * 0.152, cy + S * 0.070
+        leaf_pts = [
+            (lx, ly - S * 0.022),
+            (lx + sign * S * 0.014, ly),
+            (lx, ly + S * 0.022),
+            (lx - sign * S * 0.014, ly),
+        ]
+        csd.polygon(leaf_pts, fill=leaf_col)
+    img.alpha_composite(circuit_sharp)
+
+    # 8) 核心特征：朝霞渐变圆盘 + 白色八芒太阳纹（「是红色，是太阳，是朝霞的颜色」）
+    core_layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    cld = ImageDraw.Draw(core_layer)
+    rim_r = core_r + round(S * 0.020)
+    cld.ellipse(
+        (cx - rim_r, core_cy - rim_r, cx + rim_r, core_cy + rim_r),
+        fill=(242, 251, 238, 255),
+        outline=(168, 210, 180, 235),
+        width=max(1, round(ss * 0.45)),
     )
 
-    # 圆润团子身体（垂直柔光渐变）
-    rx, ry = int(S * 0.31), int(S * 0.28)
-    body_box = (int(cx - rx), int(cy - ry), int(cx + rx), int(cy + ry))
-    bw, bh = rx * 2, ry * 2
-    grad = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
-    for yy in range(bh):
-        t = yy / max(bh - 1, 1)
-        col = mix(body_top, body_bot, t)
-        ImageDraw.Draw(grad).line([(0, yy), (bw, yy)], fill=(*col, 245))
-    bmask = Image.new("L", (bw, bh), 0)
-    ImageDraw.Draw(bmask).ellipse((0, 0, bw - 1, bh - 1), fill=255)
-    grad.putalpha(bmask)
-    img.alpha_composite(grad, (body_box[0], body_box[1]))
+    cd = core_r * 2
+    core_grad = Image.new("RGBA", (cd, cd), (0, 0, 0, 0))
+    cgd = ImageDraw.Draw(core_grad)
+    sun_top = (255, 226, 96)     # 暖阳金黄
+    sun_mid = (255, 198, 132)    # 柔和杏橘
+    sun_bot = (255, 168, 186)    # 朝霞粉红
+    for yy in range(cd):
+        t = yy / max(cd - 1, 1)
+        col = mix(sun_top, sun_mid, t / 0.52) if t < 0.52 else mix(sun_mid, sun_bot, (t - 0.52) / 0.48)
+        cgd.line([(0, yy), (cd, yy)], fill=(*col, 255))
+    cmask = Image.new("L", (cd, cd), 0)
+    ImageDraw.Draw(cmask).ellipse((0, 0, cd - 1, cd - 1), fill=255)
+    core_grad.putalpha(cmask)
+    core_layer.alpha_composite(core_grad, (int(cx - core_r), int(core_cy - core_r)))
 
-    d = ImageDraw.Draw(img)
-    # 顶部高光月牙
-    d.ellipse(
-        (cx - rx * 0.58, cy - ry * 0.78, cx + rx * 0.22, cy - ry * 0.28),
-        fill=(255, 255, 255, 110),
-    )
-    d.ellipse(body_box, outline=outline, width=max(2, ss - 1))
-
-    # 日灵标志性的同心圆日轮纹与小憩弯眼（呼应插画二怀抱日灵特写）
-    ring_r = S * 0.145
-    d.ellipse(
-        (cx - ring_r, cy - ring_r + S * 0.02, cx + ring_r, cy + ring_r + S * 0.02),
-        outline=mark_col,
-        width=max(2, ss - 1),
-    )
-    eye_r = S * 0.065
-    d.arc(
-        (cx - eye_r, cy - eye_r + S * 0.01, cx + eye_r, cy + eye_r + S * 0.03),
-        start=20,
-        end=160,
-        fill=mark_col,
-        width=max(2, ss),
+    cld = ImageDraw.Draw(core_layer)
+    cld.ellipse(
+        (cx - core_r, core_cy - core_r, cx + core_r, core_cy + core_r),
+        outline=(238, 192, 126, 225),
+        width=max(1, round(ss * 0.45)),
     )
 
+    # 中央白色太阳圆心 + 8 枚放射菱瓣光芒
+    sun_white = (255, 253, 245, 255)
+    disc_r = core_r * 0.34
+    cld.ellipse((cx - disc_r, core_cy - disc_r, cx + disc_r, core_cy + disc_r), fill=sun_white)
+    r_in = core_r * 0.45
+    r_mid = core_r * 0.61
+    r_out = core_r * 0.81
+    ray_half_w = core_r * 0.125
+    for i in range(8):
+        ang = i * (math.pi / 4.0)
+        ux, uy = math.cos(ang), math.sin(ang)
+        px, py = -uy, ux
+        ray_pts = [
+            (cx + ux * r_in, core_cy + uy * r_in),
+            (cx + ux * r_mid + px * ray_half_w, core_cy + uy * r_mid + py * ray_half_w),
+            (cx + ux * r_out, core_cy + uy * r_out),
+            (cx + ux * r_mid - px * ray_half_w, core_cy + uy * r_mid - py * ray_half_w),
+        ]
+        cld.polygon(ray_pts, fill=sun_white)
+
+    img.alpha_composite(core_layer)
     return img.resize((size, size), LANCZOS)
 
 
@@ -295,7 +589,7 @@ class SigrikaStyle(CardStyle):
     name = "sigrika"
     display_name = "浮光莉卡"
     description = "西格莉卡专属主题：浮光暖金与暮堇符文星轨、风车星芒与日灵徽记"
-    version = 1
+    version = 2
     priority = 50
     palettes = ("dark", "light")
     supports_dynamic_footer = True
@@ -610,13 +904,13 @@ class SigrikaStyle(CardStyle):
 
         # 4) 右侧：时间戳（窄屏自适应防重叠）+ 无封面时在右上附一枚日灵小徽章
         right_edge = self.width - pad
-        if not d["hero"] and right_edge - cur_x >= 44:
-            mascot_sz = 36
+        if not d["hero"] and right_edge - cur_x >= 50:
+            mascot_sz = 44
             mascot = _render_soliskin_mascot(mascot_sz, theme.is_dark)
             canvas.alpha_composite(
-                mascot, (right_edge - mascot_sz, y + (row_h - mascot_sz) // 2)
+                mascot, (right_edge - mascot_sz + 2, y + (row_h - mascot_sz) // 2)
             )
-            right_edge -= mascot_sz + 10
+            right_edge -= mascot_sz + 8
             draw = ImageDraw.Draw(canvas)
 
         if d["ts"]:
@@ -770,12 +1064,12 @@ class SigrikaStyle(CardStyle):
                 fill=(255, 252, 245, 248),
             )
 
-        # 右下角栖息一枚可爱的「日灵（Soliskin）」伴生小精灵印记
-        mascot_sz = 48
+        # 右下角栖息一枚可爱的「日灵（小哆 / Soliskin）」伴生小精灵印记
+        mascot_sz = 60
         mascot = _render_soliskin_mascot(mascot_sz, theme.is_dark)
         canvas.alpha_composite(
             mascot,
-            (pad + inner_w - mascot_sz - 12, y + media_h - mascot_sz - 10),
+            (pad + inner_w - mascot_sz - 10, y + media_h - mascot_sz - 8),
         )
 
         return y + media_h
