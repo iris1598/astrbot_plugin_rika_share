@@ -1,17 +1,18 @@
-"""全部卡片样式 × 全类型 渲染回归与预览（一次性脚本）
+"""全部卡片样式 × 全类型 渲染回归与文档预览图生成脚本。
 
-使用插件内置 ShareCardRenderer(style=...) 渲染
-内置样式 × dark/light × 全尺寸开关 × 6 类样例，验证各解析结果类型在
-所有样式下均正常；新增样式文件后这里会自动多遍历一项。
+默认把所有样式 × dark/light × 全尺寸 × 6 类样例输出到 ``scripts/.out/layouts/``；
+传入 ``--export-docs`` 时额外导出清晰无缺字的展示图到 ``docs/previews/``。
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
-import sys
-import types
 from datetime import datetime
 from pathlib import Path
+import shutil
+import sys
+import types
 
 if "astrbot" not in sys.modules:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -28,62 +29,31 @@ PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 from link_parser.models import Author, ImageContent, ParseResult, Platform, VideoContent  # noqa: E402
-from link_parser.models.task import PathTask  # noqa: E402
-from link_parser.services.card_render import ShareCardRenderer, style_names  # noqa: E402
+from link_parser.services.card_render import ShareCardRenderer, iter_styles, style_names  # noqa: E402
+from link_parser.services.card_render.preview import (  # noqa: E402
+    _StaticPathTask,
+    build_preview_sample,
+    ensure_preview_assets,
+)
+from link_parser.services.card_render.theme import Image, ImageDraw, LANCZOS  # noqa: E402
+from link_parser.services.card_render.toolkit import FontBook  # noqa: E402
 
-OUT_DIR = PLUGIN_ROOT / "scripts" / "preview_out" / "layouts"
-ASSET_DIR = PLUGIN_ROOT / "scripts" / "preview_out" / "assets"
+OUT_DIR = PLUGIN_ROOT / "scripts" / ".out" / "layouts"
+ASSET_DIR = PLUGIN_ROOT / "scripts" / ".out" / "assets"
+DOCS_PREVIEW_DIR = PLUGIN_ROOT / "docs" / "previews"
 
 
-async def _p(path: Path) -> Path:
-    return path
-
-
-def task(path: Path) -> PathTask:
-    return PathTask(_p(path))
+def task(path: Path) -> _StaticPathTask:
+    return _StaticPathTask(path)
 
 
 def build_samples() -> list[tuple[str, ParseResult]]:
+    ensure_preview_assets(ASSET_DIR)
     now = int(datetime.now().timestamp())
     return [
-        ("bilibili-video", ParseResult(
-            platform=Platform("bilibili", "哔哩哔哩"),
-            author=Author("影视飓风", avatar=task(ASSET_DIR / "avatar.png"), description="无限进步 · 科技美学"),
-            title="【8K】我们拍到了极光爆发！这趟冰岛之旅值了",
-            text="历时两周的冰岛拍摄终于成片，8K HDR 记录下了极光爆发的全过程。幕后花絮和拍摄参数都在视频里，记得一键三连支持一下！",
-            timestamp=now,
-            url="https://www.bilibili.com/video/BV1xx411c7mD",
-            contents=[VideoContent(task(ASSET_DIR / "hero0.png"), cover=task(ASSET_DIR / "hero0.png"), duration=754)],
-            extra={"stats_line": "👍 12.3万 🪙 4.5万 ⭐ 2.1万 💬 3.2千 👀 105.8万",
-                   "duration": "12:34", "online": "🏄 1.2万人正在观看", "content_type": "视频"},
-        )),
-        ("xhs-gallery", ParseResult(
-            platform=Platform("xiaohongshu", "小红书"),
-            author=Author("桃子味汽水", avatar=task(ASSET_DIR / "avatar1.png"), description="分享生活的小美好"),
-            title="周末 City Walk｜这条老街太好拍了吧",
-            text="发现一条宝藏老街，咖啡香、猫、还有满墙的爬山虎。整理了 7 个机位给大家，建议傍晚去，光线绝绝子～",
-            timestamp=now - 7200,
-            url="https://www.xiaohongshu.com/explore/64f0abcd1234",
-            graphics=[ImageContent(task(ASSET_DIR / f"g{i}.png")) for i in range(7)],
-            extra={"content_type": "图文", "is_video": False},
-        )),
-        ("weibo-repost", ParseResult(
-            platform=Platform("weibo", "微博"),
-            author=Author("科技圈那点事", avatar=task(ASSET_DIR / "avatar.png"), description="专注科技资讯"),
-            title=None,
-            text="这个方向确实值得关注，端侧推理的成本已经降到去年的十分之一了，明年大概率会看到一波应用爆发。",
-            timestamp=now - 3600,
-            url="https://weibo.com/1887344341/PeExample",
-            repost=ParseResult(
-                platform=Platform("weibo", "微博"),
-                author=Author("量子位", avatar=None),
-                title=None,
-                text="刚刚：某厂发布新一代端侧大模型，7B 参数在手机上实现 30 tokens/s 推理速度，功耗下降 40%。",
-                timestamp=now - 5400,
-                url="https://weibo.com/6105753431/QbitAI",
-            ),
-            extra={"content_type": "动态"},
-        )),
+        build_preview_sample("video", ASSET_DIR),
+        build_preview_sample("gallery", ASSET_DIR),
+        build_preview_sample("repost", ASSET_DIR),
         ("douyin-nocover", ParseResult(
             platform=Platform("douyin", "抖音"),
             author=Author("街头摄影老王", avatar=task(ASSET_DIR / "avatar1.png"), description=None),
@@ -122,7 +92,84 @@ def build_samples() -> list[tuple[str, ParseResult]]:
     ]
 
 
-async def main() -> None:
+def _compose_overview(panels: list[tuple[str, str, Path]], target: Path) -> None:
+    """将 4 张样式示例图拼接为带清晰中文字体标注的 2×2 总览图。"""
+    if Image is None:
+        return
+    fonts = FontBook()
+    col_w = 560
+    pad_x = 32
+    pad_y = 32
+    gap = 28
+    label_h = 36
+
+    thumbs: list[tuple[str, Image.Image]] = []
+    for key, title, path in panels[:4]:
+        with Image.open(path) as im:
+            im.load()
+            rgba = im.convert("RGBA")
+        scale = col_w / rgba.width
+        resized = rgba.resize((col_w, round(rgba.height * scale)), LANCZOS)
+        thumbs.append((f"{key} · {title}", resized))
+
+    left_h = max(thumbs[0][1].height, thumbs[1][1].height) + label_h
+    right_h = max(thumbs[2][1].height, thumbs[3][1].height) + label_h
+    canvas_w = pad_x * 2 + col_w * 2 + gap
+    canvas_h = pad_y * 2 + left_h + gap + right_h
+    canvas = Image.new("RGB", (canvas_w, canvas_h), (16, 19, 27))
+    draw = ImageDraw.Draw(canvas)
+
+    for idx, (caption, img) in enumerate(thumbs):
+        r, c = divmod(idx, 2)
+        x = pad_x + c * (col_w + gap)
+        y = pad_y + (0 if r == 0 else left_h + gap)
+        canvas.paste(img.convert("RGB"), (x, y), img.split()[3])
+        fonts.draw_text(
+            draw,
+            (x + 8, y + img.height + 10),
+            caption,
+            size=20,
+            fill="#cbd5e1",
+            bold=True,
+        )
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(target, "PNG", optimize=True)
+
+
+async def export_docs_previews() -> None:
+    """导出清晰、无缺字的 docs/previews/ 示例与总览图。"""
+    ensure_preview_assets(ASSET_DIR)
+    DOCS_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    _, video_res = build_preview_sample("video", ASSET_DIR)
+    tmp_dir = PLUGIN_ROOT / "scripts" / ".out" / "docs_tmp"
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    panels: list[tuple[str, str, Path]] = []
+    for spec in iter_styles():
+        renderer = ShareCardRenderer(tmp_dir, width=800, theme="dark", style=spec.name)
+        rendered = await renderer.render(video_res, cache_key=f"doc-{spec.name}-dark")
+        assert rendered and rendered.exists(), spec.name
+        dest = DOCS_PREVIEW_DIR / f"layout-{spec.name}-dark.png"
+        shutil.copy2(rendered, dest)
+        panels.append((spec.name, spec.display_name, dest))
+        print(f"[docs/previews] 导出 {dest.name}")
+
+    light_renderer = ShareCardRenderer(tmp_dir, width=800, theme="light", style="standard")
+    light_rendered = await light_renderer.render(video_res, cache_key="doc-standard-light")
+    assert light_rendered and light_rendered.exists()
+    light_dest = DOCS_PREVIEW_DIR / "layout-standard-light.png"
+    shutil.copy2(light_rendered, light_dest)
+    print(f"[docs/previews] 导出 {light_dest.name}")
+
+    overview_dest = DOCS_PREVIEW_DIR / "overview-layouts.png"
+    _compose_overview(panels, overview_dest)
+    print(f"[docs/previews] 合成 {overview_dest.name}")
+
+
+async def run_matrix() -> None:
+    ensure_preview_assets(ASSET_DIR)
     samples = build_samples()
     total = 0
     for style in style_names():
@@ -143,6 +190,20 @@ async def main() -> None:
                     total += 1
                     print(f"[{style}/{theme}/full={full_size}] {slug}: {out.name}")
     print(f"\n共渲染 {total} 张，全部成功")
+
+
+async def main() -> None:
+    parser = argparse.ArgumentParser(description="卡片渲染回归与文档预览导出")
+    parser.add_argument(
+        "--export-docs",
+        action="store_true",
+        help="仅生成 docs/previews/ 下的最新样式预览与总览图",
+    )
+    args = parser.parse_args()
+    if args.export_docs:
+        await export_docs_previews()
+    else:
+        await run_matrix()
 
 
 if __name__ == "__main__":

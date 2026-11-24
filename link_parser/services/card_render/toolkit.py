@@ -10,15 +10,18 @@
 
 from __future__ import annotations
 
+import io
 import math
 import sys
 import unicodedata
+import uuid
 from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
 
 from ...models import ParseResult
+from ...utils.persona import DEFAULT_BRAND_NAME
 from .fonts import (
     FONT_DIRS,
     SYMBOL_FONT_CANDIDATES,
@@ -300,6 +303,42 @@ class FontBook:
 
 
 
+def draw_watermark_on_canvas(
+    canvas: Any,
+    fonts: FontBook,
+    *,
+    watermark: str = DEFAULT_BRAND_NAME,
+    foot_y: int,
+    pad: int = L.PAD,
+    accent: str,
+    font_size: int = L.F_FOOT,
+    draw: Any = None,
+) -> int:
+    """在卡片指定页脚位置右下角绘制「圆点 + <署名>」水印并返回总宽度。"""
+    target_draw = draw if draw is not None else ImageDraw.Draw(canvas)
+    wm_text = (watermark or DEFAULT_BRAND_NAME).strip() or DEFAULT_BRAND_NAME
+    wm_font = fonts.font(font_size, bold=True)
+    wm_text_w = fonts.text_width(wm_text, wm_font)
+    wm_group_w = L.WM_DOT + L.WM_DOT_GAP + wm_text_w
+    wm_x = canvas.width - pad - wm_group_w
+    wm_lh = fonts.line_height(wm_font)
+    dot_cy = foot_y + wm_lh // 2
+    accent_rgb = hex_to_rgb(accent)
+    target_draw.ellipse(
+        (wm_x, dot_cy - L.WM_DOT // 2, wm_x + L.WM_DOT, dot_cy + L.WM_DOT // 2),
+        fill=(*accent_rgb, 255),
+    )
+    fonts.draw_text(
+        target_draw,
+        (wm_x + L.WM_DOT + L.WM_DOT_GAP, foot_y),
+        wm_text,
+        font_size,
+        accent,
+        bold=True,
+    )
+    return wm_group_w
+
+
 class DrawingKit:
     """单次渲染的绘图上下文与全部可复用组件。
 
@@ -318,6 +357,8 @@ class DrawingKit:
         result: ParseResult,
         images: dict[str, Any],
         out_path: Path,
+        watermark_text: str | None = DEFAULT_BRAND_NAME,
+        in_memory: bool = False,
     ):
         self.fonts = fonts
         self.width = width
@@ -327,6 +368,11 @@ class DrawingKit:
         self.result = result
         self.images = images
         self.out_path = out_path
+        self.watermark_text = watermark_text
+        self._in_memory = in_memory
+        self._memory_bytes: bytes | None = None
+        self._last_canvas: Any = None
+        self._footer_anchor: dict[str, Any] | None = None
         self.pad = L.PAD
         self.inner_w = self.width - self.pad * 2
         self.gap = L.GRID_GAP
@@ -381,10 +427,25 @@ class DrawingKit:
         return self._data
 
     def save(self, canvas: Any, out_path: Path | None = None) -> Path:
-        """保存 PNG 并返回目标路径。"""
+        """保存 PNG 并返回目标路径（内存预览模式仅写入缓冲区，磁盘写入采用原子替换）。"""
+        self._last_canvas = canvas
+        if self._in_memory:
+            buf = io.BytesIO()
+            canvas.save(buf, "PNG", optimize=True)
+            self._memory_bytes = buf.getvalue()
+            return Path(out_path or self.out_path)
         target = Path(out_path or self.out_path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        canvas.save(target, "PNG", optimize=True)
+        tmp = target.with_name(f".{target.stem}.{uuid.uuid4().hex[:8]}.tmp.png")
+        try:
+            canvas.save(tmp, "PNG", optimize=True)
+            tmp.replace(target)
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         return target
 
     # ---------- 图片工具 ----------
@@ -964,7 +1025,7 @@ class DrawingKit:
     def footer_block(self, canvas, draw, theme: Theme, accent: str, accent_rgb,
                       result: ParseResult, y: int, inner_w: int,
                       on_image: bool = False) -> None:
-        """页脚：分隔线 + 左链接 + 右「圆点 莉卡解析」水印。"""
+        """页脚：分隔线 + 左链接 + 右「圆点 <署名>」水印（传 None 时跳过水印以生成底卡）。"""
         pad = L.PAD
         divider_layer = Image.new("RGBA", (inner_w, 1), (0, 0, 0, 0))
         ImageDraw.Draw(divider_layer).line(
@@ -975,18 +1036,28 @@ class DrawingKit:
         )
         canvas.alpha_composite(divider_layer, (pad, y + 12))
         foot_y = y + 28
-        wm_font = self.font(L.F_FOOT, bold=True)
-        wm_text_w = self.text_width("莉卡解析", wm_font)
-        wm_group_w = L.WM_DOT + L.WM_DOT_GAP + wm_text_w
-        wm_x = self.width - pad - wm_group_w
-        wm_lh = self.line_height(wm_font)
-        dot_cy = foot_y + wm_lh // 2
-        draw.ellipse(
-            (wm_x, dot_cy - L.WM_DOT // 2, wm_x + L.WM_DOT, dot_cy + L.WM_DOT // 2),
-            fill=(*accent_rgb, 255),
-        )
-        self.draw_text(draw, (wm_x + L.WM_DOT + L.WM_DOT_GAP, foot_y),
-                        "莉卡解析", L.F_FOOT, accent, bold=True)
+        self._footer_anchor = {
+            "foot_y": foot_y,
+            "pad": pad,
+            "accent": accent,
+            "font_size": L.F_FOOT,
+        }
+        if self.watermark_text is not None:
+            reserve_w = draw_watermark_on_canvas(
+                canvas,
+                self.fonts,
+                watermark=self.watermark_text,
+                foot_y=foot_y,
+                pad=pad,
+                accent=accent,
+                font_size=L.F_FOOT,
+                draw=draw,
+            )
+        else:
+            # 底卡模式保留右侧安全宽，避免后续叠印较长人格署名时与左链接重叠
+            reserve_w = min(220, max(120, inner_w // 2))
+
+        wm_x = self.width - pad - reserve_w
         url_text = short_url(result.url)
         if url_text:
             url_font = self.font(L.F_FOOT)

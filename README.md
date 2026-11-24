@@ -1,754 +1,174 @@
-# 莉卡解析 · astrbot_plugin_rika_share
+<div align="center">
+  <img src="logo.png" alt="莉卡解析 Logo" width="110" />
+  <h1>莉卡解析（astrbot_plugin_rika_share）</h1>
+  <p>面向 <strong>AstrBot 4.x</strong> 的多平台链接与卡片分享自动解析插件</p>
 
-![AstrBot Plugin](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)
-![Version](https://img.shields.io/badge/Version-v3.4.0-brightgreen?style=flat-square)
-![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D3.5.13-blue?style=flat-square)
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square)
-![Render](https://img.shields.io/badge/Render-Pillow-orange?style=flat-square)
-![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-
-**莉卡解析** 是为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 打造的链接自动解析与媒体下载插件。
-自动识别聊天中的链接与 JSON 分享卡片，提取标题、正文、作者、数据统计、图集与无水印视频，
-并可渲染为精美的分享卡片图片单独发送。
-
-移植自 [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser)，并针对 AstrBot 架构做了分层重构与功能增强。
-
-> **本插件为自用项目**：功能按自己的使用场景取舍，更新随个人节奏，不承诺兼容性与排期。
->
-> 网页设置页（`pages/rika/`）来自 [astrbot_plugin_denia_share](https://github.com/xiaoxi2760/astrbot_plugin_denia_share)；该项目的卡片渲染最初源自本项目。
+  ![Version](https://img.shields.io/badge/version-v3.5.0-6d28d9)
+  ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.0.0-3b82f6)
+  ![License](https://img.shields.io/badge/license-MIT-10b981)
+</div>
 
 ---
 
-## 📖 目录
+自动识别聊天消息里的分享链接、群转发卡片与官方纯文本小程序卡片，提取正文、图集或音视频资源，并生成多种风格的 **Pillow 分享卡片** 发送至群聊或私聊。
 
-| | |
-| :--- | :--- |
-| [✨ 特性速览](#-特性速览) | [🌐 支持平台](#-支持平台) |
-| [📦 安装与部署](#-安装与部署) | [🛠️ 指令说明](#️-指令说明) |
-| [⚙️ 配置说明](#️-配置说明) | [🎨 解析卡片渲染](#-解析卡片渲染) |
-| [🔐 Cookie 获取指南](#-cookie-获取指南) | [📁 项目结构](#-项目结构) |
-| [🧩 扩展：新增一个平台](#-扩展新增一个平台) | [🎨 扩展：新增卡片样式](#-扩展新增卡片样式) |
-| [🧑‍💻 开发与验证](#-开发与验证) | [🙏 致谢](#-致谢) |
-| [📄 开源许可](#-开源许可) | |
-
----
-
-## ✨ 特性速览
-
-### 🚀 多平台自动解析
-
-自动识别文本链接与 JSON 分享卡片，一次提取标题、正文、作者、数据统计、图集与无水印视频。
-短链会自动跟随跳转，因此 `b23.tv` / `v.douyin.com` / `xhslink.com` 等分享链接可直接使用。
-
-**QQ 官方机器人**同样可用：分享卡片以纯文本下发（`[卡片消息] …`），带 `jump_url` 的
-按链接解析，无链接的 B站「小程序」卡片自动按标题搜索匹配视频。
-
-### 🔑 B站扫码登录与 Cookie 自动化
-
-- **无需抓包**：聊天框直接发送 `/bili_login` 生成二维码，扫码确认即完成登录。
-- **加密持久化**：Cookie 使用 Fernet 加密落盘，重启不丢失。
-- **凭据自动续期**：登录时一并保存 `refresh_token`，凭证临近过期时自动刷新。
-- **健康度监控**：后台定时检测 Cookie 有效性，失效 / 恢复时通知指定管理员。
-- **无缝生效**：登录成功后立即注入解析引擎，无需重载插件或修改配置。
-
-### 🎨 Pillow 纯 Headless 卡片渲染
-
-不依赖浏览器，毫秒级输出。提供 4 种内置卡片样式与深 / 浅两套配色，支持全尺寸封面、
-品牌光晕与毛玻璃徽章；**样式是独立模块**，往 `card_render/styles/` 放一个文件即可新增
-完整版式（不是换配色），渲染失败时自动回退为文本输出。
-
-### ⚡ 跨平台发送适配
-
-- **OneBot v11**：自动构建节点合并转发（`Nodes`），避免消息刷屏，并按节点数 / 图片体积自动拆批。
-- **QQ Official / Telegram 等**：整条解析内容（标题、简介、图集全部图片）转成一个**聊天记录式网页**，
-  聊天里只发一条链接通知，点开即是排版好的完整内容；网页由 AstrBot 的文件服务提供，
-  链接基于「对外可达的回调接口地址」生成。QQ 系平台默认经腾讯文档的外链跳转页打开，
-  可在 QQ 内直接浏览。未配置回调地址或生成失败时自动回退为拆分消息发送。
-
-### 🖼️ 引用回复下载封面
-
-卡片发出去之后还想要原图？**引用**那条含链接的消息，回一句「下载封面」即可。
-插件会复用同一条解析缓存（不重复请求接口），把封面图单独发出来：
-视频取封面、图文取首图、动图与实况照片取对外展示的那张静态图。
-
-- 引用**别人**发的链接消息也行——这类引用不算唤醒，所以用的是关键词触发而不是指令；
-- 只认被引用消息里的链接：引用一张没有链接的图片（比如机器人发的卡片）时会明确回一句提示，
-  不会去猜「你大概想要哪条内容」；
-- 没有引用消息时，只有 @ 了机器人才会提示用法，不会在群里抢话。
-
-### 🛰️ Twitter/X 反代
-
-推文解析接口与图片、视频、封面、头像均可改走自建反代，解决 X 在国内无法直连的问题。
-
-> 反代 Worker 已独立为单独项目：[**iris1598/cloudflare-worker**](https://github.com/iris1598/cloudflare-worker)。
-> 部署后把地址填入 `TWITTER_MEDIA_PROXY_BASE` 即可；未配置或反代不可用时会自动回退直连。
-
-### 🌐 Cloudflare 网页截图兜底
-
-未匹配到任何已适配平台的普通网页链接，可调用 Cloudflare Browser Rendering API 渲染网页截图发送。
-支持自定义视窗、清晰度倍率、CSS 元素截取、Cookie / Header 注入与黑名单过滤。
-
-### 🐞 链接调试
-
-插件页面里还有一个「链接调试」视图：粘一条链接进去，插件会把解析主流程
-（识别平台 → 缓存标识 → 解析接口 → 媒体下载 → 卡片渲染 → 输出构建 → Cloudflare 兜底判断）
-逐步跑一遍，每步给出状态、耗时与失败原因，并把过程记成**可直接贴出的报告**
-（含逐项失败原因的堆栈；Cookie / Token 自动打码）。
-
-排查「这条链接为什么不解析」「视频为什么发不出去」时，看 `[失败]` 的那一步即可；
-`[跳过]` 是**按设计不做**（如视频时长超过上限、媒体本身为空），不是故障——
-媒体那一行会写清是哪个文件、为什么跳过，例如：
-`#1 视频: [跳过] 视频时长(12:34)超过限制(08:00)，跳过下载`。
-
-### 🖥️ 网页设置页
-
-页面来自 [astrbot_plugin_denia_share](https://github.com/xiaoxi2760/astrbot_plugin_denia_share)。
-
-插件自带一个 Dashboard 页面（插件详情页里打开），把 47 项配置按 9 个分组收在一处：
-
-- 左侧分组导航 + 顶部搜索，长配置表不再靠滚动找；
-- Cookie / Token 默认遮罩，可一键显示核对；
-- 底部保存条实时显示「已修改 N 项」，支持放弃更改、恢复默认与批量保存；
-- 保存后即时生效，卡片渲染、解析器开关、截图凭据都会自动热更新。
-
-全部 47 项配置都在页面里维护，原生插件配置面板不再展示配置项；
-页面顶部的「解析器开关」按适配器注册表动态生成，**新增平台会自动多出一个开关**；
-「卡片样式」下拉同样按 `card_render/styles` 注册表动态生成，**新增样式会自动多出一项**，
-两处都不用改配置或代码。
-
----
-
-## 🌐 支持平台
-
-| 平台 | 覆盖类型 | 可下载内容 | 备注 |
-| :--- | :--- | :--- | :--- |
-| **哔哩哔哩** | 视频 / 动态 / 图文(Opus) / 直播 / 专栏 / 收藏夹 | 高清视频、封面、图集 | 支持扫码登录、Cookie 监控与自动续期；官方机器人下的小程序卡片按标题搜索解析 |
-| **抖音** | 视频 / 图文动态 | 无水印视频、高清图集 | 支持短链解析与实况照片重建 |
-| **快手** | 视频 / 图文 | 无水印视频、高清图片 | 支持短链与网页链接 |
-| **微博** | 动态 / 文章 / 视频 | 原图图集、无水印视频 | 支持多图网格与转发引用结构 |
-| **小红书** | 图文笔记 / 视频笔记 | 原图无水印图集、视频 | 支持 `XHS_CK` 鉴权 |
-| **Twitter / X** | 推文 / 媒体 | 高清图片、视频 | 解析接口与媒体均可走自建反代 |
-| **AcFun** | 视频 | 视频文件 | 基础视频解析 |
-| **NGA** | 帖子内容 / 主题 | 正文与图集 | 论坛内容快速展示 |
-| **GitHub** | 仓库主页 | 仓库简介、统计（Star / Fork / Issues） | 通过 GitHub API 查询，匿名额度 60 次/小时/IP |
-| **酷安** | 动态 / 图文 | 正文、图集 | 桌面版网页解析，展示点赞 / 评论 / 收藏数 |
-| **网易云音乐** | 歌曲 / 专辑 / 歌单 / 电台 | 专辑封面图、音频（语音发送） | **联动提供**：需安装 [astrbot_plugin_multincm](https://github.com/iris1598/astrbot_plugin_multincm)，登录态复用其配置 |
-| **通用网页** | 任意 HTTP/HTTPS 页面 | 网页高清截图 | 需开通 Cloudflare Browser Rendering |
-
-> **关于网易云音乐**：本插件不内置网易云解析。检测到已安装 `astrbot_plugin_multincm`
-> （网易云多选点歌）时，会自动把它接入为一个解析器——网易云链接由莉卡渲染分享卡片并发送音频
-> （multincm 开启「使用音乐卡片」时 QQ 平台直接发送音乐卡片），登录态（Cookie / 账号）复用
-> multincm 的配置；multincm 未安装时没有这个解析器，其余平台不受影响。
-> multincm 自己的指令（点歌 / 歌词 / 直链等）不受联动影响。
-
----
-
-## 📦 安装与部署
-
-1. **放入插件目录**
-
-   将 `astrbot_plugin_rika_share` 文件夹放进 AstrBot 的 `data/plugins/` 目录。
-
-2. **安装依赖**
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-   主要依赖：`httpx`、`aiohttp`、`bilibili-api-python`、`msgspec`、`curl-cffi`、
-   `beautifulsoup4`、`qrcode[pil]`、`cryptography`、`Pillow`、`fonttools`、`aiofiles`。
-
-3. **启用插件**
-
-   重启 AstrBot，在管理面板 WebUI 中启用「莉卡解析」。
-
-> 💡 **Linux 字体提示**：卡片渲染需要中文字体，建议 `apt install fonts-noto-cjk fonts-noto-core`，
-> 或在 `RENDER_FONT_PATH` 中指定 `.ttf/.otf` 路径，否则文字会显示为方块。
-
----
-
-## 🛠️ 指令说明
-
-| 指令 | 权限 | 功能 |
-| :--- | :--- | :--- |
-| `/bili_login` | **ADMIN** | 启动 B站扫码登录：发送二维码图片，扫码确认后自动加密保存并启用 Cookie |
-| `/bili_check` | ADMIN | 手动检测当前 Cookie 有效性，显示昵称、UID 与会员状态 |
-| `/bili_status` | ADMIN | 查看 Cookie 状态与后台监控任务的运行情况 |
-| `/clear_cache`<br>`/清理缓存` | **ADMIN** | 清空下载文件、渲染图片、网页截图等缓存，并同步清空内存缓存 |
-
-### 引用回复：下载封面
-
-不是指令，**引用一条含分享链接的消息**后回复 `下载封面` 即可（`下载封面图` / `下载封面图片` 同样识别）。
-插件会复用解析缓存，把该内容的封面图单独发出；链接只取自被引用的那条消息，
-没有引用消息时只在 @ 了机器人之后提示用法。
-
----
-
-## ⚙️ 配置说明
-
-配置按逻辑划分为 **9 个分组**，共 47 项，**全部在插件网页设置页里维护**：
-WebUI 侧边栏「插件」→ 莉卡解析 → 插件详情页 → 打开页面。
-页面支持搜索、分组折叠、Cookie 遮罩、批量保存与恢复默认，
-另外带一个「链接调试」视图用于排查解析问题。
-
-> AstrBot 原生的插件配置面板**不再展示任何配置项**（`_conf_schema.json` 里全部标了
-> `invisible`）。它只作为配置的存储契约存在——AstrBot 加载插件时会按 schema 保留这些键，
-> 页面保存的值才能落盘。
->
-> 顶部的「解析器开关」由适配器注册表实时生成：**新写一个平台适配器，页面上就自动多出一个
-> 开关**，不需要改任何配置或代码。
-
-在网页设置页里保存后立即生效：卡片渲染、解析器开关、Cloudflare 截图凭据会自动热更新，
-**不需要重载插件**。原生面板里改开关后需要按 AstrBot 的常规流程重载插件。
-
-### 解析器开关（不在配置分组内）
-
-在网页设置页顶部的「解析器开关」里，一个平台一块，点一下即开关。
-**平台清单由适配器注册表实时生成**，支持哪些平台就列出哪些，新增平台会自动出现。
-
-| 平台 | 说明 |
-| :--- | :--- |
-| 哔哩哔哩 / 抖音 / 快手 / 微博 / 小红书 / 小蓝鸟 / NGA / 猴山 / GitHub / 酷安 | 关闭后不再解析对应平台的链接，其余平台不受影响 |
-
-关闭的平台以 `DISABLED_PLATFORMS`（逗号分隔的平台名）存在插件配置里；
-旧版本手写 `DISABLED_PLATFORMS=acfun,nga` 的写法依然有效，两者是同一个键。
-
-### 1. 平台设置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `VIDEO_DURATION_MAXIMUM` | int | `480` | 视频 / 音频最大时长（秒），超出则不下载媒体文件 |
-| `DOUYIN_LIVE_PHOTO_ENABLED` | bool | `true` | 将抖音实况照片与普通动图重建为单文件动态照片 |
-| `XHS_CK` | string | `""` | 小红书 Cookie（可选，填入后可解析高清视频与图集） |
-| `FORWARD_MAX_NODES` | int | `10` | 单条合并转发的最大节点数（超出则拆成多条） |
-| `FORWARD_MAX_BATCH_MB` | int | `30` | 单条合并转发的图片体积上限（MB），调小更省内存但消息更多 |
-
-### 2. Twitter 设置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `TWITTER_MEDIA_PROXY_ENABLED` | bool | `false` | 媒体与解析接口是否改走自定义反代 |
-| `TWITTER_MEDIA_PROXY_BASE` | string | `""` | 自建反代根地址，如 `https://xxx.workers.dev`（结尾不要带斜杠）<br>Worker 见 [cloudflare-worker](https://github.com/iris1598/cloudflare-worker) |
-
-### 3. B站设置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `BILI_CK` | string | `""` | B站 Cookie（SESSDATA）。*建议直接用 `/bili_login` 扫码登录* |
-| `BILI_QUALITY` | string | `"1080P"` | 下载清晰度：`360P` / `480P` / `720P` / `1080P` / `1080P+` / `4K` / `8K`（更高档位需账号权限） |
-| `BILI_CODEC` | string | `"H264"` | 下载视频编码：`H264` (AVC) / `H265` (HEVC) / `AV1`。聊天客户端对 AV1 支持差，发不出或播不了就选 `H264`；所选编码不可用时自动回退 |
-| `BILI_COOKIE_MONITOR_ENABLED` | bool | `true` | 是否启用 Cookie 定时监控 |
-| `BILI_COOKIE_CHECK_INTERVAL` | int | `3600` | 检测间隔（秒，最小 60） |
-| `BILI_NOTIFY_USER_ID` | string | `""` | Cookie 失效 / 恢复时接收通知的 QQ 号或 UserID（留空仅记日志） |
-
-### 4. 缓存设置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `CACHE_TTL_HOURS` | int | `24` | 缓存文件过期时间（小时），设为 `0` 禁用自动清理 |
-| `CACHE_CLEANUP_INTERVAL_MINUTES` | int | `60` | 清理检查间隔（分钟） |
-
-### 5. 解析图片渲染
-
-| 配置项 | 类型 | 默认值 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `RENDER_ENABLED` | bool | `true` | 是否启用卡片渲染（失败自动回退文本） |
-| `RENDER_THEME` | string | `"dark"` | 卡片配色：`dark` / `light`（固定配色的样式会忽略它） |
-| `RENDER_STYLE` | string | `"standard"` | 卡片样式：清单来自 `card_render/styles` 注册表，新增样式自动出现 |
-| `RENDER_WIDTH` | int | `800` | 卡片宽度（px，范围 520–1080） |
-| `RENDER_COVER_FULL_SIZE` | bool | `false` | 封面按原始宽高比完整展示，不做中心裁剪 |
-| `RENDER_FONT_PATH` | string | `""` | 自定义字体文件或目录（`.ttf/.ttc/.otf`），留空自动探测系统字体 |
-
-> 旧配置键 `RENDER_LAYOUT` 已废弃，启动时自动迁移到 `RENDER_STYLE`；
-> 它仍保留在 schema 里用于读取旧值，但不再出现在设置页。
-
-### 6. 网页分享设置
-
-非 OneBot 平台（QQ Official / Telegram / Discord 等）的解析内容默认**全部转成一个网页**、
-聊天里只发链接通知（OneBot v11 仍走合并转发）。网页由 AstrBot 的文件服务（`/api/file/{token}`）
-提供，链接前缀取 AstrBot 的**对外可达的回调接口地址**（`callback_api_base`）——请先在
-AstrBot 系统配置里把它填成外部可访问的地址（如 `https://example.com:6185`），
-否则此功能不生效、自动回退为拆分消息。
-
-链接有效期与缓存共用 `CACHE_TTL_HOURS`（网页页脚会写明），图集图片必然活得和链接一样久；
-链接 token 在内存里，**AstrBot 重启后旧链接失效**（`CACHE_TTL_HOURS=0` 时链接到重启前一直有效、
-页面文件不清理）。同一内容在链接有效期内重复分享会**复用同一个链接**，不会重复建页。
-
-在 QQ 官方平台还有更进一步的形态：使用 [astrbot_plugin_qqofficial_full](https://github.com/iris1598/astrbot_plugin_qqofficial_full)（≥v0.5.1）
-适配器时，通知会做成**原生图文卡片**——标题/摘要/封面（取图集第一张压制）+ 腾讯文档包装的
-跳转链接，点卡片直接在 QQ 内打开网页；无封面、`callback_api_base` 非 https 或发送被拒时
-依次回退 markdown 链接、纯文本（markdown 需机器人有原生 Markdown 权限，没有时自动降级）。
-
-| 配置项 | 类型 | 默认值 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `WEBPAGE_FALLBACK_ENABLED` | bool | `true` | 非 OneBot 平台把合并转发内容转成网页链接发送；生成失败自动回退纯文本 |
-| `WEBPAGE_TDOCS_JUMP` | bool | `true` | QQ 系平台（QQ 官方机器人 / QQ 频道等）的链接经腾讯文档外链跳转页（docs.qq.com）打开，可在 QQ 内直接浏览；其他平台始终发原始链接 |
-
-> 网页的形态与交互设计参考自 [qbob](https://github.com/Loping151/qbob)（AGPL-3.0）的同名功能，实现为独立重写（不含其代码），致谢见文末。
-
-### 7. Cloudflare 基础设置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `CLOUDFLARE_FALLBACK_ENABLED` | bool | `false` | 启用通用链接截图兜底（未匹配已知适配器时触发） |
-| `CLOUDFLARE_ACCOUNT_ID` | string | `""` | Cloudflare 账号 ID（需开通 Browser Rendering） |
-| `CLOUDFLARE_API_TOKEN` | string | `""` | API Token（需具备 Browser Rendering - Edit 权限） |
-| `CLOUDFLARE_TIMEOUT` | int | `60` | 截图 API 请求超时（秒） |
-| `CLOUDFLARE_CACHE_TTL` | int | `0` | 截图缓存时长（秒），`0` 表示不缓存、每次重新渲染 |
-| `CLOUDFLARE_BLACKLIST` | list | `[]` | 截图黑名单，支持完整域名、`*.example.com` 通配符、路径前缀或无点关键词 |
-
-### 8. Cloudflare 截图设置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `CLOUDFLARE_VIEWPORT_WIDTH` | int | `1280` | 浏览器视窗宽度（px） |
-| `CLOUDFLARE_VIEWPORT_HEIGHT` | int | `720` | 浏览器视窗高度（px） |
-| `CLOUDFLARE_WAIT_UNTIL` | string | `"networkidle0"` | 加载等待策略：`load` / `domcontentloaded` / `networkidle0` / `networkidle2` |
-| `CLOUDFLARE_GOTO_TIMEOUT` | int | `45000` | 页面导航超时（毫秒） |
-| `CLOUDFLARE_FULL_PAGE` | bool | `false` | 截取完整长图（含滚动区域） |
-| `CLOUDFLARE_DEVICE_SCALE_FACTOR` | float | `1.0` | 清晰度倍率，建议 1–3（大视窗下可消除模糊） |
-| `CLOUDFLARE_SCREENSHOT_TYPE` | string | `"png"` | 截图格式：`png` / `jpeg` |
-| `CLOUDFLARE_SCREENSHOT_QUALITY` | int | `0` | 截图质量（仅 `jpeg` 有效，0–100，`0` 为默认） |
-| `CLOUDFLARE_OMIT_BACKGROUND` | bool | `false` | 隐藏默认白底，适合 `png` 透明图 |
-| `CLOUDFLARE_SELECTOR` | string | `""` | 只截取指定 CSS 选择器区域，留空截整页 |
-| `CLOUDFLARE_WAIT_FOR_SELECTOR` | string | `""` | 等待该选择器出现后再截图（适合 SPA） |
-| `CLOUDFLARE_WAIT_FOR_TIMEOUT` | int | `0` | 等待元素超时（毫秒），`0` 为默认 |
-| `CLOUDFLARE_USER_AGENT` | string | `""` | 自定义 User-Agent，留空使用默认 |
-| `CLOUDFLARE_EXTRA_HEADERS` | text | `""` | 加载页面时附加的 HTTP 头（JSON），如 `{"Authorization":"..."}` |
-| `CLOUDFLARE_COOKIES` | text | `""` | 页面附加 Cookie（JSON 数组），如 `[{"name":"session","value":"..."}]` |
-
-### 9. 调试设置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `DEBUG_LOG_ENABLED` | bool | `true` | 是否打印详细错误堆栈 |
-| `SEND_ERROR_MESSAGES` | bool | `false` | 出错时是否向对话发送提示（关闭则仅记日志） |
-
----
-
-## 🎨 解析卡片渲染
-
-开启 `RENDER_ENABLED` 后，解析结果会渲染为现代视觉风格的分享卡片并单独发送。
-
-### 内置卡片样式
+## 效果预览
 
 ![渲染样式总览](docs/previews/overview-layouts.png)
 
-| 样式 (`RENDER_STYLE`) | 特点与适用场景 |
-| :--- | :--- |
-| **`standard`** 标准横幅 *(默认)* | 顶部全宽封面 + 纵向信息流，大气平衡，适合绝大多数视频与动态 |
-| **`magazine`** 双栏杂志 | 封面左置、标题作者右置，适合长文本与文章 |
-| **`immersive`** 沉浸全屏 | 封面高斯模糊铺满整卡，文字浮于渐变遮罩上（无图时自动回退 `standard`） |
-| **`feed`** 社交动态 | 头像与作者信息行置顶，媒体内嵌为圆角多图，原生 App 社交流风格 |
+<details>
+<summary>查看更多卡片样式示例（标准 / 双栏杂志 / 沉浸 / 社交动态）</summary>
 
-每个样式都是一个独立模块，**新增样式不需要改渲染器、配置或页面**，
-详见下文「[扩展：新增卡片样式](#-扩展新增卡片样式)」。
+- **浅色标准卡片**：
+  ![浅色主题示例](docs/previews/layout-standard-light.png)
+- 更多样式预览位于 [`docs/previews/`](docs/previews/)，也可随时在插件控制台切换 **4 种排版样式 × 深/浅配色** 实时生效。
 
-### 配色
-
-支持 **深色 (`dark`)** 与 **浅色 (`light`)** 两套配色：
-
-![浅色主题示例](docs/previews/layout-standard-light.png)
-
-> `RENDER_THEME` 只是配色轴；样式可以读取 `self.theme` 使用这两套 token，
-> 也可以完全忽略它、使用固定配色（见 `CardStyle.palettes`）。
-
-### 字体与颜文字
-
-> 颜文字（如 `᳐⦁⩊੭ᯠᯄᐠ⸝⌯`）在主字体缺字形时会自动回退到系统符号字体
-> （Windows：Segoe UI Symbol / Segoe UI / Leelawadee UI / Gadugi / SansSerifCollection 等；
-> Linux：Noto Sans Symbols / Math / Sundanese 等），无需手动配置。
-> 预设链未覆盖的字符还会通过 `fc-list :charset=XXX` 动态查找系统字体兜底。
-> Linux 建议一并安装 `fonts-noto-cjk` 与 `fonts-noto-core`。
+</details>
 
 ---
 
-## 🔐 Cookie 获取指南
+## 核心功能
 
-### B站：扫码登录（推荐）
+### 1. 内置支持 10 大平台 + 外部联动
 
-1. 用管理员账号向机器人发送 `/bili_login`。
-2. 机器人返回一张登录二维码图片。
-3. 打开手机 **B站 App** 扫描二维码，并点击 **确认登录**。
-4. 机器人提示登录成功，Cookie 会**加密保存并立即生效**，无需重启。
+| 平台 | 标识 | 支持内容 | 说明 |
+| :--- | :--- | :--- | :--- |
+| **哔哩哔哩** | `bilibili` | 视频、动态、图文 Opus、直播、专栏、收藏夹 | 内置 WebUI 与 `/bili_login` 扫码登录、状态监控与 Cookie 加密保存 |
+| **抖音** | `douyin` | 无水印视频、图文动态、短链展开 | 支持实况照片与动图重建 |
+| **快手** | `kuaishou` | 视频、图文 | 自动解析短链与直链 |
+| **微博** | `weibo` | 动态、头条文章、视频 | 自动提取高清图集与正文 |
+| **小红书** | `xiaohongshu` | 图文笔记、视频笔记 | 可在配置中填入 Cookie 提升稳定性 |
+| **Twitter / X** | `twitter` | 推文、图片、视频、GIF | 支持填写自定义 Cloudflare Worker 反代 |
+| **AcFun** | `acfun` | 视频与分 P 信息 | 原生播放与封面提取 |
+| **NGA** | `nga` | 论坛主贴正文与附件图 | 清理论坛排版标签 |
+| **GitHub** | `github` | 仓库主页卡片 | 提取 Star / Fork / Issues / 语言 / License / Topics |
+| **酷安** | `coolapk` | 动态、图文卡片 | 社区动态与图文解析 |
+| **网易云音乐（联动）** | `netease` | 歌曲、歌单、专辑、播客（需安装 `astrbot_plugin_multincm`） | 安装后自动接入，遵循音乐卡片 / 文件发送等联动设置 |
 
-登录时会一并保存续期凭据（`refresh_token`），凭证临近过期可自动刷新，
-无需反复重新扫码。
+### 2. 特色能力
 
-### 其他平台
-
-在插件配置中填入对应 Cookie 即可（`XHS_CK` 等），格式为浏览器中复制的
-`name=value; name=value` 字符串。
+- **多种卡片排版与极速渲染**：内置 `standard`（标准横幅）、`magazine`（双栏杂志）、`immersive`（沉浸全屏）、`feed`（社交动态）4 种排版及深浅配色，支持自适应系统字体与颜文字回退；支持**自定义卡片署名**（关闭人格跟随时可自由修改默认 `莉卡解析`），并可选开启**随会话人格变更署名**（命中如「达妮娅」人格时卡片与消息头变为 `达妮娅解析`，并跨人格共享底卡缓存）。
+- **QQ 小程序与图文卡片识别**：支持 OneBot 卡片 JSON 与官方机器人纯文本卡片（含无链接标题召回）。
+- **非 OneBot 合并转发转网页**：在 QQ Official、Telegram、Discord 等不支持合并转发的平台中，自动将多条图集内容合成为临时网页链接（需在 AstrBot 填好 `callback_api_base`）。
+- **未适配网页截图兜底**：可选接入 Cloudflare Browser Rendering API，为普通网页自动生成截图预览，支持域名/通配符黑名单与高级浏览器参数。
 
 ---
 
-## 📁 项目结构
+## 快速安装
 
-> 面向贡献者与 AI 的架构契约、常见改动位置与验证清单，见 [`agent.md`](agent.md)。
+1. 在 **AstrBot 控制台 → 插件市场** 搜索并安装 **`莉卡解析`**（或将本仓库克隆至 `data/plugins/astrbot_plugin_rika_share`）。
+2. 如需手动安装依赖，可在 AstrBot 所在 Python 环境中执行：
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. 重载或启动 AstrBot 后，打开 **插件 → 莉卡解析 → 控制面板**（或「查看插件页面」）即可图形化管理全部设置。
+
+> 插件运行需要 **AstrBot `>= 4.0.0`**。
+
+---
+
+## 常用指令与用法
+
+| 指令 / 触发方式 | 权限 | 说明 |
+| :--- | :--- | :--- |
+| 直接发送分享链接 / 卡片 | 所有人 | 自动识别所属平台并输出卡片或多媒体（可在面板逐个开关平台） |
+| **引用**消息并回复 `下载封面` | 所有人 | 提取被引用消息里视频/图集的原封面图（亦认 `下载封面图`、`下载封面图片`、`/下载封面`） |
+| `/bili_login` | 管理员 | 获取 B站扫码登录二维码，扫码后自动写入 Cookie 并开启失效监控 |
+| `/bili_check` | 所有人 | 立即验证当前 B站 Cookie 是否有效并刷新用户名与 VIP 状态 |
+| `/bili_status` | 所有人 | 查看 B站 Cookie 配置情况、监控状态与上次检测时间 |
+| `/clear_cache`（别名：`清理缓存`） | 管理员 | 手动清理磁盘缓存、临时网页与内存索引 |
+
+---
+
+## 控制面板与布局级主题（WebUI）
+
+插件面板位于 [`views/rika/`](views/rika/index.html)，按实际使用心智重构为 **4 大工作区**：
+
+1. **总览与诊断**：查看平台启停、B站登录态检测、缓存磁盘占用（安全行内清理），并在同一页面输入链接执行只读全链路诊断与脱敏 `.log` 下载。
+2. **平台与账号**：平台卡片开关矩阵 + B站账号登录态（支持在网页端直接**扫码登录 B站**、查看实时有效期/大会员与自动续期状态）+ Cookie 与监控配置 + 视频画质、编码、Twitter 反代与转发策略。
+3. **卡片工作室（所见即所得）**：左侧调整版式样式（自动向后端拉取含自定义样式在内的**真实样图**）、深浅配色、宽度滑块、封面全尺寸、字体、**随会话人格署名**开关及关闭后的**自定义署名**；右侧**实时渲染真卡片大图**（支持视频 / 7 图集 / 无图转发样例切换与点击放大），下方收拢网页分发与缓存清理设置。
+4. **主题与兜底**：切换不同空间架构的网页布局主题、管理 Cloudflare 未适配网页截图兜底（15 项浏览器微调参数默认折叠）与错误日志策略。
+
+### 内置两套结构级网页主题 & 扩展接口
+
+这里的主题不止换色，而是同步改变页面骨架、导航形态与容器景深：
+- **`studio`（工作台分栏 · 默认）**：左侧固定秩序导航栏 + 右侧精密分栏工作区，清晰克制，适合高频精细调参。
+- **`glass-center`（悬浮磨砂控制中心）**：隐藏侧边栏与传统后台顶栏，改用极光背景下的通透毛玻璃浮层与**底部居中悬浮胶囊 Dock** 导航。
+
+可通过 [`views/rika/themes/`](views/rika/themes/) 新增主题模块并在 [`views/rika/themes/index.js`](views/rika/themes/index.js) 注册，或直接调用全局扩展接口 `window.RikaWebTheme.registerTheme(...)`：
+
+```js
+window.RikaWebTheme.registerTheme({
+  id: "my-layout",
+  name: "我的布局主题",
+  layout: "my-layout",
+  navMode: "dock", // "sidebar" 或 "dock"
+  light: { "--accent": "#2563eb", "--bg": "#f5f8ff" },
+  dark: { "--accent": "#60a5fa", "--bg": "#0f172a" },
+  css: `[data-layout="my-layout"] .surface-panel { border-radius: 18px; }`,
+});
+```
+
+---
+
+## 常见问题（FAQ）
+
+<details>
+<summary>1. 为什么在 QQ Official / Telegram 上解析长图文变成了网页链接？</summary>
+
+因为这些平台没有合并转发能力。插件会借助 AstrBot 内置文件服务生成临时浏览网页；请确认在 AstrBot 全局设置里正确填写了公网可达的 **`callback_api_base`**（QQ 官方图文卡片要求 `https://`），若不需要可到 **卡片工作室 → 非 OneBot 分发与缓存清理** 关闭。
+
+</details>
+
+<details>
+<summary>2. B站视频画质最高只能选 360P / 480P 怎么办？</summary>
+
+B站高画质与部分图文动态需要登录态。推荐直接打开 **控制面板 → 平台与账号 → 扫码登录 B站** 在网页端扫码（也可在聊天中发送 `/bili_login`），登录成功会自动加密持久化 Cookie 并支持在面板实时查看状态与手动检测。
+
+</details>
+
+<details>
+<summary>3. Twitter / X 在境内无法访问怎么配置反代？</summary>
+
+进入 **控制面板 → 平台与账号 → 画质、代理与发送策略**，开启 Twitter 反代开关并填写你的 Worker 地址即可。
+
+</details>
+
+<details>
+<summary>4. 为什么我的插件原生设置页里几乎是空的？</summary>
+
+自 3.x 起，为提供平台开关矩阵、实时卡片工作室与链接诊断功能，所有配置项统一收纳在 **插件专属 WebUI 面板（`views/rika`）** 维护，原设置 Schema 仅保留存储与 `secret: true` 脱敏契约。
+
+</details>
+
+---
+
+## 目录结构与开发文档
 
 ```text
 astrbot_plugin_rika_share/
-├── main.py                       # 插件入口 + 事件 Handler（各平台 Handler 按适配器注册表自动生成）
-├── metadata.yaml                 # 插件元数据定义（name / author / version / astrbot_version）
-├── .gitattributes                # 换行符统一（仓库内 LF）+ 二进制文件清单
-├── .gitignore                    # 忽略缓存与开发脚本产物
-├── _conf_schema.json             # 配置存储契约（条目全部 invisible，原生面板不展示）
-├── requirements.txt              # Python 依赖清单
-├── README.md                     # 本文件
-├── LICENSE                       # MIT 许可证
-├── agent.md                      # AI 开发指南（结构契约 / 改哪里 / 验证清单 / 维护要求）
-├── CHANGELOG.md                  # 变更日志（最新在上）
-├── .astrbot-plugin/i18n/         # 插件页面标题 / 描述的国际化文案
-├── pages/rika/                   # 插件网页设置页（设置 + 链接调试两个视图）
-│   ├── index.html                #   页面骨架：侧边导航 + 内容区
-│   ├── style.css                 #   设计系统：CSS 变量 + 明暗两套主题
-│   ├── ui.js                     #   零依赖 DOM / 表单小工具
-│   ├── app.js                    #   框架层：bridge 就绪 → 建导航 → 切换视图
-│   └── views/                    #   settings.js（设置）· debug.js（链接调试）
-├── docs/previews/                # 卡片样式与配色预览图
-├── scripts/                      # 开发辅助脚本
-│   ├── dev_smoke_test.py         #   独立冒烟测试：扫码登录 + 链接解析（自带 astrbot 桩）
-│   ├── preview_layouts.py        #   卡片样式回归（全部样式 × 配色 × 全尺寸）
-│   ├── kaomoji_render_test.py    #   颜文字字体回退回归
-│   └── font_coverage_probe.py    #   字体覆盖探测
-└── link_parser/                  # 插件实现（按职责分层）
-    ├── adapters/                 # 平台解析适配器（每个平台一个模块，自注册）
-    │   ├── base.py               #   BaseParser 基类 + @handle 装饰器
-    │   ├── registry.py           #   适配器注册表（URL 触发正则 / 构建方式）
-    │   └── bilibili.py · douyin.py · kuaishou.py · weibo.py
-    │       xiaohongshu.py · twitter.py · nga.py · acfun.py
-    ├── models/                   # 数据类型
-    │   ├── content.py            #   媒体内容（图片 / 视频 / 音频）
-    │   ├── result.py             #   ParseResult / Platform / Author
-    │   ├── task.py               #   惰性下载路径包装 PathTask
-    │   └── platforms/            #   各平台接口返回结构（一个平台一个子包）
-    │       ├── acfun/            #     video_info.py
-    │       ├── bilibili/         #     author.py · video_info.py · dynamic.py
-    │       │                     #     opus.py · live_room.py · favorite_list.py
-    │       ├── douyin/           #     aweme.py
-    │       ├── kuaishou/         #     init_state.py
-    │       ├── weibo/            #     status.py · video_show.py · article.py
-    │       └── xiaohongshu/      #     note.py · explore_page.py · discovery_page.py
-    ├── services/                 #   有状态服务（一个服务一个模块）
-    │   ├── downloader.py         #   异步流式媒体下载
-    │   ├── cover.py              #   封面选取与落盘（视频封面 / 图文首图 / 动图静态图）
-    │   ├── card_render/          #   卡片渲染子系统
-    │   │   ├── renderer.py       #     编排：缓存 / 取图 / 样式分发 / 异常回退
-    │   │   ├── toolkit.py        #     FontBook（字体缓存）+ DrawingKit（绘图工具与组件）
-    │   │   ├── theme.py          #     L / THEMES / PLATFORM_COLORS / 颜色工具
-    │   │   └── styles/           #     卡片样式包（一个文件 = 一个完整样式，自注册）
-    │   │       ├── registry.py   #       StyleSpec / register_style / iter_styles
-    │   │       ├── base.py       #       CardStyle 基类
-    │   │       └── standard.py · magazine.py · immersive.py · feed.py
-    │   ├── debug_probe.py        #   链接调试探针（逐步跑主流程 + 打码出报告）
-    │   ├── web_screenshot.py     #   Cloudflare Browser Rendering 网页截图
-    │   ├── live_photo.py         #   实况照片（主图 + 短视频）单文件合成
-    │   └── bilibili_account.py   #   B站扫码登录 / Cookie 监控与自动应用
-    ├── output/                   # 输出构建
-    │   ├── builder.py            #   解析结果 → 合并转发 / 网页链接 / 纯文本消息链
-    │   ├── webpage.py            #   非 OneBot 平台「合并转发转网页」（页面渲染 + 文件服务注册 + 腾讯文档跳转）
-    │   ├── json_card.py          #   JSON 分享卡片识别与链接提取
-    │   ├── miniapp_card.py       #   QQ 官方机器人分享卡片（纯文本）识别与字段提取
-    │   ├── quoted.py             #   引用（回复）消息的文本与链接提取
-    │   └── replies.py            #   统一的回复构造（错误提示等）
-    ├── utils/                    # 无状态工具（cache / media / formatting / cookie / url）
-    ├── config.py                 # CONFIG_META（配置项唯一来源）+ 配置读写 / 迁移
-    ├── constants.py              # 请求头、超时、平台枚举、通用 URL 正则
-    ├── webui.py                  # 插件页面的后端接口（配置读写 + 链接调试）
-    └── exceptions.py             # 异常体系
+├── main.py                  # AstrBot 4.x 插件入口（Star + 事件 Handler）
+├── metadata.yaml            # 插件元数据（astrbot_version >= 4.0.0）
+├── logo.png                 # 插件图标
+├── _conf_schema.json        # 存储 Schema 契约
+├── .astrbot-plugin/i18n/    # 多语言文案
+├── views/rika/              # 插件控制面板前端与 themes/ 主题包
+├── link_parser/             # 核心包（adapters / config / models / output / services / utils / webui）
+├── docs/                    # 架构备忘 docs/ARCHITECTURE.md 与卡片预览图
+└── scripts/                 # 渲染回归与独立冒烟测试脚本
 ```
 
-**命名与归档约定**
-
-- 模块名一律自描述：`web_screenshot.py`（网页截图）、`bilibili_account.py`（B站账号）、
-  `formatting.py`（文本格式化）、`replies.py`（回复构造），不使用缩写或代号。
-- 一个平台 = `adapters/<平台>.py` + `models/platforms/<平台>/`，两侧一一对应。
-- 多模块子系统才用子包（`models/platforms/<平台>/`、`services/card_render/`），
-  单模块一律保持单文件，避免「同一层里既有文件夹又有文件」的歧义。
-- 子包的 `__init__.py` 显式导出对外接口，调用方只从包根导入，
-  这样调整子包内部拆分不会影响调用方。
+更多架构约定、扩展机制（新增平台 / 外部联动 / 新增卡片样式 / 新增网页主题）与历史变更请查阅：
+- 开发者备忘与架构文档：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- 完整变更日志：[`CHANGELOG.md`](CHANGELOG.md)
 
 ---
 
-## 🧩 扩展：新增一个平台
+## 致谢与协议
 
-适配器层是**自动发现 + 自注册**的：往 `link_parser/adapters/` 里放一个模块，
-它就会变成一个平台——不用改 `main.py`，不用改注册清单，不用改配置。
+- 核心解析移植并改进自 [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser)（[@fllesser](https://github.com/fllesser)）
+- 网页控制台初版参考了 [astrbot_plugin_denia_share](https://github.com/xiaoxi2760/astrbot_plugin_denia_share)
+- 非 OneBot 网页浏览页形态参考了 [qbob](https://github.com/Loping151/qbob)（页面代码已独立重写以遵守 MIT 协议）
+- 网易云音乐联动感谢 [astrbot_plugin_multincm](https://github.com/iris1598/astrbot_plugin_multincm)
 
-**只需一步**：在 `link_parser/adapters/` 下新建 `<平台名>.py`：
-
-```python
-import re
-
-from ..models import Platform
-from .base import BaseParser, handle
-from .registry import AdapterSpec, register_adapter
-
-
-class FooParser(BaseParser):
-    # 平台名用小写字母开头的标识符即可，不需要在任何枚举里登记
-    platform = Platform(name="foo", display_name="Foo")
-
-    @handle("foo.com", r"foo\.com/video/(?P<vid>\d+)")
-    async def _parse(self, searched: re.Match[str]):
-        return self.result(title="...", url="...", extra={"content_type": "视频"})
-
-
-ADAPTER = register_adapter(
-    AdapterSpec(
-        name="foo",
-        url_pattern=re.compile(r"foo\.com"),
-        parser_cls=FooParser,
-        description="视频",
-        # 需要额外参数时才写 build：
-        # build=lambda ctx: FooParser(ctx.downloader, ck=ctx.config.FOO_CK),
-    )
-)
-```
-
-自动生效的部分：
-
-| 环节 | 说明 |
-| :--- | :--- |
-| 导入与注册 | `adapters/__init__.py` 扫描本目录全部模块（`_` 前缀除外） |
-| 事件 Handler 与 URL 过滤器 | `main.py` 按注册表为每个平台生成一个 `@filter.regex` Handler |
-| 解析器实例化 | `_init_parsers()` 遍历注册表，跳过被关掉的平台 |
-| 启停开关 | 网页设置页的「解析器开关」按注册表动态渲染，存进 `DISABLED_PLATFORMS` |
-| 卡片配色 | `PLATFORM_COLORS` 查不到就用默认色（想定制加一行） |
-| 文本输出 | `output/builder.py` 走通用平台分支（想定制加分支） |
-
-平台的**先后顺序**由 `AdapterSpec.priority` 决定（内置平台占 10-80，新平台默认 100 排在末尾）；
-它同时是解析器构建顺序与设置页开关的排列顺序，需要抢占某个位置时才显式声明。
-
-### 外部插件作为解析器（联动）
-
-解析器也可以来自**其他插件**。其它插件在自己目录下放一个 `rikashare_bridge.py`，
-暴露 `register(api)` 即可——插件启动时（生成平台 Handler 之前）会自动发现并调用它：
-
-```python
-def register(api):
-    parser = api.parser(
-        name="foo",                  # 小写标识符：注册表键名 / 设置页开关
-        display_name="Foo 视频",      # 设置页展示名
-        url_pattern=r"foo\.com",     # 事件过滤器正则
-    )
-
-    @parser.handle("foo.com", r"foo\.com/video/(?P<vid>\d+)")   # 命名分组 = 缓存标识
-    async def _parse(ctx):
-        return ctx.result(
-            title=f"视频 {ctx.group('vid')}",
-            url=ctx.matched,
-            graphics=[ctx.image("https://foo.com/cover.jpg")],
-            extra={"content_type": "视频"},
-        )
-
-    parser.register()
-```
-
-`api` 是注入的 SDK 句柄（`link_parser/external.py`），外部插件**不需要 import 本插件的
-任何内部模块**。SDK 提供 `api.parser(...)` / `@parser.handle(...)` / `parser.register()`，
-以及 `ctx.result / author / image / images / audio / video`、`ctx.group / groups / matched`、
-`ctx.parse_redirect`，和 `api.ParseResult / ParseException / SilentException` 等类型与异常。
-注册后其余环节（事件过滤器、解析器实例化、设置页开关、卡片渲染）与内置平台完全一致。
-外部插件未安装时就没有这个解析器，仅记一条 DEBUG 日志。
-
-> 桥接模块名按约定（`rikashare_bridge.py`）即可被自动发现；需要别的文件名或固定接入顺序时，
-> 再登记到 `link_parser/adapters/_external.py` 的 `EXTERNAL_ADAPTERS` 清单。
-> 网易云音乐的解析正是这样由
-> [astrbot_plugin_multincm](https://github.com/iris1598/astrbot_plugin_multincm) 联动提供的。
-
-若平台返回结构较复杂，在 `link_parser/models/platforms/<平台名>/` 下新建子包：
-模块名按接口命名（如 `video_info.py`、`status.py`），并在子包 `__init__.py` 中导出
-响应结构与 `decoder`（多个模块都有 `decoder` 时按语义加前缀，如 `status_decoder`），
-适配器只从子包根导入（`from ..models.platforms.<平台> import ...`）。
-
-这一步只关乎解析代码怎么组织，**与注册无关**：直接解析 HTML 的平台（twitter / nga）就没有模型子包，
-返回结构简单时也可以把 `Struct` 直接写在适配器文件里（twitter 即如此）。
-
-若该平台的解析结果带**会随时间变化的实时数据**（如在线人数、直播场次信息），
-在适配器上声明 `CACHE_TTL_SECONDS`（秒），让结果缓存按时过期，避免长期展示过期数据。
-
----
-
-## 🎨 扩展：新增卡片样式
-
-卡片版式是**自动发现 + 自注册**的：在 `link_parser/services/card_render/styles/`
-下新建一个 `.py`，它就会成为一个可选样式——不用改 `renderer.py`、配置清单、
-设置页或 `main.py`。一个样式负责整张卡片的布局，不是只换配色。
-
-### 目录与注册
-
-```text
-link_parser/services/card_render/styles/
-├── __init__.py      # 自动导入本目录全部模块（_ 前缀、base、registry 除外）
-├── registry.py      # StyleSpec / register_style / get_style / iter_styles / style_names
-├── base.py          # CardStyle 基类（继承 DrawingKit）
-├── standard.py      # 内置：标准横幅（priority 10）
-├── magazine.py      # 内置：双栏杂志（priority 20）
-├── immersive.py     # 内置：沉浸全屏（priority 30，fallback=standard）
-└── feed.py          # 内置：社交动态（priority 40）
-```
-
-- `name` 必须是小写标识符（`^[a-z][a-z0-9_]*$`），它同时是注册表键名和 `RENDER_STYLE` 的取值。
-- `priority` 决定设置页下拉顺序与 `preview_layouts.py` 遍历顺序；内置样式占 10–40，新样式默认 100 排在末尾。
-- 单个样式模块导入失败只会跳过该样式并记 `ERROR`，不影响其他样式与插件加载。
-
-### `CardStyle` 元信息
-
-| 字段 | 说明 |
-| :--- | :--- |
-| `name` | 小写标识符，注册表键名 / `RENDER_STYLE` 取值 |
-| `display_name` | 设置页展示名 |
-| `description` | 设置页一句话说明 |
-| `version` | 视觉版本，改动版式时 `+1`（参与卡片文件名摘要） |
-| `priority` | 排序权重，默认 100 |
-| `fallback` | `can_render()` 为假时回退到哪个样式；内置 `immersive` 为 `"standard"` |
-| `palettes` | 支持的配色：`None` = `dark` / `light` 都支持；`()` = 固定配色，忽略 `RENDER_THEME` |
-
-`CardStyle` 继承 `DrawingKit`，所以样式里可以直接用：
-
-- **上下文**：`self.width` / `self.pad` / `self.inner_w` / `self.theme` / `self.theme_name` /
-  `self.accent` / `self.accent_rgb` / `self.result` / `self.images` / `self.out_path` / `self.gap`
-- **`self.data`**：标准化后的展示数据，字段见下表
-
-| `self.data` 字段 | 说明 |
-| :--- | :--- |
-| `platform_text` / `content_type` / `ts` | 平台展示名 / 内容类型 / 格式化时间 |
-| `title` / `text` | 已清洗 emoji 的标题 / 正文 |
-| `author` / `name` / `author_desc` | 作者对象 / 昵称 / 签名（截断 40 字） |
-| `stats` | `[(标签, 数值), ...]`，已合并时长 |
-| `online_text` / `warnings` | 在线人数文案 / `limit_warnings` 列表 |
-| `hero` / `grid` / `is_video_hero` | 视觉主图 / 剩余图集 / 主图是否为视频封面 |
-
-### `DrawingKit` 工具
-
-| 分组 | 方法 |
-| :--- | :--- |
-| 字体文本 | `font(size, bold=False)` · `text_width` · `wrap` · `fit_lines` · `line_height` · `draw_text` |
-| 图片 | `open_image` · `cover_fit` · `rounded_image` · `rounded_image_top` · `circle_avatar` · `gradient` |
-| 光影 | `glass` · `radial_glow` · `scrim` |
-| 卡片骨架 | `base_canvas(card_h)` · `header_badges(canvas, theme, accent_rgb, data)` · `save(canvas)` |
-| 组件 | `draw_hero_badge` · `draw_flat_badge` · `avatar_block` · `stat_rows_height` · `draw_stat_rows` · `draw_online` · `warning_block_height` · `draw_warning_block` · `hero_aspect_height` · `footer_block` · `draw_grid_block` · `measure_quote` · `draw_quote_block` · `grid_metrics` · `platform_pill_width` · `stat_pill_width` · `build_stat_rows` |
-
-绘图坐标以左上角为原点，`card_h` 不包含底部 14px 的投影空间（`base_canvas` 会自动加）。
-
-### 最小完整示例
-
-```python
-# link_parser/services/card_render/styles/minimal.py
-from pathlib import Path
-
-from ..theme import L
-from .base import CardStyle
-from .registry import StyleSpec, register_style
-
-
-class MinimalStyle(CardStyle):
-    name = "minimal"
-    display_name = "极简"
-    description = "纯文字信息流，无封面也能成立"
-    version = 1
-    priority = 50
-
-    def render(self) -> Path:
-        d = self.data
-        pad = self.pad
-        inner_w = self.inner_w
-
-        title_font = self.font(L.F_TITLE, bold=True)
-        title_lines = self.fit_lines(d["title"], title_font, inner_w, 3) if d["title"] else []
-        desc_font = self.font(L.F_DESC)
-        desc_lines = self.fit_lines(d["text"], desc_font, inner_w, 5) if d["text"] else []
-        grid_h = self.grid_metrics(len(d["grid"]), inner_w, self.gap)[0]
-
-        card_h = 36
-        card_h += len(title_lines) * L.F_TITLE_LINE_H + (14 if title_lines else 0)
-        card_h += len(desc_lines) * L.F_DESC_LINE_H + (16 if desc_lines else 0)
-        card_h += grid_h + (20 if grid_h else 0) + L.FOOTER_H
-
-        canvas, draw = self.base_canvas(card_h)
-        y = 36
-        for line in title_lines:
-            self.draw_text(draw, (pad, y), line, L.F_TITLE, self.theme.text_primary, bold=True)
-            y += L.F_TITLE_LINE_H
-        if title_lines:
-            y += 14
-        for line in desc_lines:
-            self.draw_text(draw, (pad, y), line, L.F_DESC, self.theme.text_secondary)
-            y += L.F_DESC_LINE_H
-        if desc_lines:
-            y += 16
-        y = self.draw_grid_block(canvas, draw, self.theme, d["grid"], y, inner_w, self.gap)
-        self.footer_block(
-            canvas, draw, self.theme, self.accent, self.accent_rgb,
-            self.result, y, inner_w,
-        )
-        return self.save(canvas, self.out_path)
-
-
-register_style(StyleSpec(style_cls=MinimalStyle, priority=50))
-```
-
-### 约束
-
-1. `render()` 必须返回已写入的 `self.out_path`（通常就是 `self.save(canvas)`）。
-2. 无封面、无图集、无头像、超长标题/正文、`limit_warnings` 都必须能降级绘制，不能抛异常；
-   抛异常时渲染器会记日志并回退文本输出。
-3. 想复用现有视觉，优先用 `base_canvas` / `header_badges` / `footer_block` 等组件；
-   想完全重做，直接 `Image.new` + `self.font` / `self.draw_text` 自绘即可，
-   `DrawingKit` 的图片与光影工具照样可用。
-4. 读取配色用 `self.theme`；读取平台色用 `self.accent` / `self.accent_for(...)`；
-   两者都可以完全忽略，按样式自己的固定配色绘制（同时把 `palettes` 设为 `()`）。
-5. 改视觉后把 `version` +1，否则同名旧卡片会被直接复用（也可 `/clear_cache` 强制重画）。
-6. 模块末尾只调用一次 `register_style(...)`；`StyleSpec` 只需要样式类，
-   展示字段都从类属性读取。
-
-### 生效与验证
-
-- 保存文件后重载插件（或重启 AstrBot），设置页「卡片样式」下拉会自动多出该项；
-  选中保存后无需再次重载，渲染器会按新样式重建。
-- 运行 `python scripts/preview_layouts.py`：脚本会遍历 `style_names()`，
-  新增样式自动纳入回归；末行的总数会随样式数量变化。
-- 当前只支持**插件内置目录**，不扫描外部插件或数据目录；样式导入失败时看日志
-  `卡片样式模块 xxx 导入失败`。
-
----
-
-## 🧑‍💻 开发与验证
-
-`scripts/` 下的脚本都自带 `astrbot` 桩，可脱离 AstrBot 运行环境直接执行。
-
-```bash
-# 静态检查（未定义名 / 未使用导入）
-python -m ruff check --select F,E9 --no-cache --exclude __pycache__ .
-
-# 卡片样式回归：全部样式 × 2 配色 × 全尺寸 × 6 样例
-# 内置 4 个样式时共 96 张，末行应为「共渲染 96 张，全部成功」
-python scripts/preview_layouts.py
-
-# 颜文字字体回退回归
-python scripts/kaomoji_render_test.py
-
-# 独立功能冒烟：扫码登录 + 链接解析（日志落在 scripts/dev_test_out/）
-python scripts/dev_smoke_test.py --login https://www.bilibili.com/video/BV1xx411c7mD
-```
-
-`dev_smoke_test.py` 使用**独立的数据目录**（`scripts/dev_test_out/`，已 gitignore），
-不会影响 AstrBot 里的真实登录态；输出中的「清晰度探测」段落会直接列出
-B站 给出的可用清晰度，是判断登录态是否生效最直接的证据。
-
----
-
-## 🙏 致谢
-
-- [nonebot-plugin-parser](https://github.com/fllesser/nonebot-plugin-parser) —— 原 NoneBot2 插件的优秀思路与解析逻辑。
-- [astrbot_plugin_denia_share](https://github.com/xiaoxi2760/astrbot_plugin_denia_share) —— 本插件的网页设置页来自该项目；该项目的卡片渲染最初源自本项目。
-- [qbob](https://github.com/Loping151/qbob)（AGPL-3.0）—— 非 OneBot 平台「合并转发转网页」的形态与交互设计参考自该项目的 `core/forwardpage.py`（实现为独立重写，不含其代码）。
-- [bilibili-api-python](https://github.com/Nemo2011/bilibili-api) —— B站接口封装与扫码登录实现。
-- [AstrBot](https://github.com/AstrBotDevs/AstrBot) —— 强大的多平台机器人框架。
-
----
-
-## 📄 开源许可
-
-本项目遵循 MIT 许可证。
+本项目以 [**MIT License**](LICENSE) 开源。

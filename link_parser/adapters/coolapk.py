@@ -16,7 +16,6 @@ from typing import ClassVar
 from bs4 import BeautifulSoup
 from httpx import AsyncClient
 
-from ..constants import COMMON_TIMEOUT
 from ..exceptions import ParseException
 from ..models import ParseResult, Platform
 from ..models.platforms.coolapk import feed_decoder

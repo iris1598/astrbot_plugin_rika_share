@@ -16,6 +16,7 @@ import astrbot.api.message_components as Comp
 
 from ..config import get_config
 from ..models import AudioContent, ImageContent, ParseResult, VideoContent
+from ..utils.persona import DEFAULT_BRAND_NAME
 
 __all__ = [
     "build_platform_output",
@@ -42,14 +43,18 @@ async def resolve_still_path(cont: VideoContent) -> Path | None:
 
 
 async def build_platform_output(
-    result: ParseResult, platform: str
+    result: ParseResult,
+    platform: str,
+    *,
+    brand_name: str = DEFAULT_BRAND_NAME,
 ) -> tuple[str, list[list]]:
     """构建各平台输出：返回 (标题头, 合并转发节点内容列表)"""
     platform_name = result.platform.display_name
     content_type = result.extra.get("content_type", "动态")
+    brand = (brand_name or DEFAULT_BRAND_NAME).strip() or DEFAULT_BRAND_NAME
 
     if platform == "bilibili":
-        header = f"莉卡解析 | {platform_name} - {content_type}"
+        header = f"{brand} | {platform_name} - {content_type}"
         # 第一条消息：链接 + 标题 + 封面
         node1_text = "\n".join([v for v in [result.url, result.title] if v])
         node1 = [Comp.Plain(node1_text)] if node1_text else []
@@ -98,7 +103,7 @@ async def build_platform_output(
         return header, nodes
 
     if platform == "xiaohongshu":
-        header = f"莉卡解析 | {platform_name} - {'视频' if result.extra.get('is_video') else '图文'}"
+        header = f"{brand} | {platform_name} - {'视频' if result.extra.get('is_video') else '图文'}"
         nodes = []
         # 正文文字
         if result.text:
@@ -139,7 +144,7 @@ async def build_platform_output(
             kind = "动图"
         else:
             kind = "图文"
-        header = f"莉卡解析 | {platform_name} - {kind}"
+        header = f"{brand} | {platform_name} - {kind}"
         nodes = []
         text_items = []
         if result.title:
@@ -175,7 +180,7 @@ async def build_platform_output(
 
     if platform == "kuaishou":
         is_video = any(isinstance(c, VideoContent) for c in result.contents)
-        header = f"莉卡解析 | {platform_name} - {'视频' if is_video else '图文'}"
+        header = f"{brand} | {platform_name} - {'视频' if is_video else '图文'}"
         nodes = []
         if result.title:
             nodes.append([Comp.Plain(result.title)])
@@ -191,7 +196,7 @@ async def build_platform_output(
         return header, nodes
 
     if platform == "github":
-        header = f"莉卡解析 | {platform_name} - {content_type}"
+        header = f"{brand} | {platform_name} - {content_type}"
         nodes = []
         # 第一条消息：仓库名 + 链接
         node1_text = "\n".join([v for v in [result.title, result.url] if v])
@@ -211,7 +216,7 @@ async def build_platform_output(
         return header, nodes
 
     if platform == "coolapk":
-        header = f"莉卡解析 | {platform_name} - {content_type}"
+        header = f"{brand} | {platform_name} - {content_type}"
         nodes = []
         # 正文 + 统计
         text_items = []
@@ -230,7 +235,7 @@ async def build_platform_output(
         return header, nodes
 
     # 通用平台
-    header = f"莉卡解析 | {platform_name} - {content_type}"
+    header = f"{brand} | {platform_name} - {content_type}"
     nodes = []
     if result.title:
         nodes.append([Comp.Plain(result.title)])

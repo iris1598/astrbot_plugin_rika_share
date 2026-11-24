@@ -24,12 +24,8 @@ from .styles import (
 from .text import format_timestamp, one_line, parse_stats_line, short_url, strip_emoji
 from .theme import PLATFORM_COLORS
 
-#: 旧脚本 / 旧调用方的兼容别名：现在的“布局”就是注册表里的样式
-LAYOUT_NAMES = STYLE_NAMES
-
 __all__ = [
     "DEFAULT_STYLE",
-    "LAYOUT_NAMES",
     "PLATFORM_COLORS",
     "STYLE_NAMES",
     "CardStyle",

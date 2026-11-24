@@ -2,15 +2,17 @@
 
 从插件入口抽离出来的有状态服务，负责：
 
-- ``/bili_login`` 扫码登录流程（生成二维码 → 轮询扫码状态 → 保存 Cookie）
+- ``/bili_login`` 与 WebUI 扫码登录流程（生成二维码 → 轮询扫码状态 → 保存 Cookie）
 - Cookie 的 Fernet 加密持久化（密钥文件与 Cookie 文件都在插件数据目录下）
-- 定时检测 Cookie 有效性，失效/恢复时通知管理员，并在响应头回传新 Cookie 时自动刷新
+- 定时检测 Cookie 有效性，并在响应头回传新 Cookie 时自动刷新、记录状态
 - 将最新 Cookie 自动应用到 ``BilibiliParser``
 
 插件入口只保留 AstrBot 指令装饰器与薄封装。
 """
 
 import asyncio
+import base64
+import io
 import json
 import os
 import re
@@ -149,6 +151,8 @@ class BiliAccountService:
         self._last_status: Optional[Dict] = None
         self._last_check_time: Optional[datetime] = None
         self._was_invalid: bool = False
+        self._web_qr_session: dict[str, Any] | None = None
+        self._web_qr_lock = asyncio.Lock()
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._status_file = self.data_dir / _STATUS_FILE_NAME
@@ -364,9 +368,8 @@ class BiliAccountService:
 
         if not self._cookie:
             return {"valid": False, "error": "Cookie为空"}
-        if not self._http_session:
-            return {"valid": False, "error": "HTTP会话未初始化"}
 
+        session = await self._ensure_http_session()
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Cookie": self._cookie,
@@ -374,7 +377,7 @@ class BiliAccountService:
         }
 
         try:
-            async with self._http_session.get(
+            async with session.get(
                 BILI_NAV_URL,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=15),
@@ -475,19 +478,14 @@ class BiliAccountService:
                 is_valid = result["valid"]
                 if is_valid:
                     if self._was_invalid:
-                        # 从失效→恢复，发一次通知
-                        await self._notify_admin(
-                            "✅ B站Cookie已恢复", f"用户: {result.get('username')}"
+                        logger.info(
+                            f"B站Cookie已恢复有效 (用户: {result.get('username', '')})"
                         )
                         self._was_invalid = False
                 else:
                     if not self._was_invalid:
-                        # 从有效→失效，发一次通知
-                        await self._notify_admin(
-                            "❌ B站Cookie已失效", f"错误: {result.get('error')}"
-                        )
                         self._was_invalid = True
-                    logger.warning(f"B站Cookie仍处于失效状态: {result.get('error')}")
+                    logger.warning(f"B站Cookie处于失效状态: {result.get('error')}")
 
             except asyncio.CancelledError:
                 break
@@ -576,47 +574,58 @@ class BiliAccountService:
                 except Exception:
                     pass
 
-    async def _on_login_success(
-        self, sender_id: str, set_cookie_headers: list, payload: Dict[str, Any]
-    ) -> None:
-        """扫码确认后：保存、应用、验证 Cookie 并通知用户。
+    async def _ensure_http_session(self) -> aiohttp.ClientSession:
+        """按需创建或复用 HTTP 会话。"""
+        if not self._http_session or self._http_session.closed:
+            self._http_session = aiohttp.ClientSession()
+        return self._http_session
 
-        ``payload`` 是轮询响应的**响应体**——SESSDATA / bili_jct / DedeUserID 与
-        ``refresh_token``（ac_time_value）都在这里面，只解析 Set-Cookie 会漏掉
-        最关键的续期凭据。
-        """
+    def is_refreshable(self) -> bool:
+        """当前生效的 Cookie 是否包含自动续期凭据（ac_time_value）。"""
+        raw = self._cookie or self._parser_cookie()
+        return bool(_parse_cookie_pairs(raw).get("ac_time_value"))
+
+    async def _apply_login_payload(
+        self, set_cookie_headers: list, payload: Dict[str, Any]
+    ) -> tuple[bool, bool, dict[str, Any]]:
+        """提取、加密落盘并立即应用扫码返回的 Cookie，再执行一次登录校验。"""
         cookie_dict = _cookies_from_login_payload(payload, set_cookie_headers)
-
         if not cookie_dict:
-            await self._notify_error_user(
-                sender_id, "❌ 登录成功但未获取到Cookie，请重试"
-            )
-            return
+            return False, False, {"valid": False, "error": "登录成功但未获取到Cookie，请重试"}
 
         cookie_str = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
         refreshable = bool(cookie_dict.get("ac_time_value"))
 
-        # 更新状态
         async with self._cookie_lock:
             self._cookie = cookie_str
 
-        # 持久化保存
         await self._save_cookie(cookie_str)
-
-        # 立即应用到BilibiliParser
         self.apply_cookie_to_parser(cookie_str)
 
-        # 如果监控未启动，启动监控
         if not self._monitor_running:
             self.start_monitor()
 
-        # 验证cookie
         result = await self.check_cookie_valid()
         self._last_status = result
         self._last_check_time = datetime.now()
+        self._was_invalid = not bool(result.get("valid"))
         await self._save_last_status()
+        return True, refreshable, result
 
-        if result["valid"]:
+    async def _on_login_success(
+        self, sender_id: str, set_cookie_headers: list, payload: Dict[str, Any]
+    ) -> None:
+        """聊天指令扫码确认后：保存、应用、验证 Cookie 并通知发起用户。"""
+        saved, refreshable, result = await self._apply_login_payload(
+            set_cookie_headers, payload
+        )
+        if not saved:
+            await self._notify_error_user(
+                sender_id, f"❌ {result.get('error', '登录成功但未获取到Cookie，请重试')}"
+            )
+            return
+
+        if result.get("valid"):
             await self._notify_user(
                 sender_id,
                 f"🎉 登录成功，B站Cookie已生效并自动应用！\n"
@@ -626,14 +635,169 @@ class BiliAccountService:
                 f"{'🔄 已取得续期凭据，凭证过期可自动刷新' if refreshable else '⚠️ 未取得 refresh_token，凭证过期后需重新扫码'}\n"
                 f"{'🚀 监控已自动启动' if self._monitor_running else '⚠️ 监控未运行'}",
             )
-            self._was_invalid = False
         else:
             await self._notify_error_user(
                 sender_id,
                 f"⚠️ Cookie已保存但验证失败: {result.get('error')}",
             )
 
-    # ==================== 通知 ====================
+    # ==================== WebUI 扫码登录 ====================
+
+    def web_qr_snapshot(self) -> dict[str, Any]:
+        """返回当前 WebUI 扫码会话的脱敏状态快照（不含二维码图片，适合高频轮询）。"""
+        sess = self._web_qr_session
+        if not sess:
+            return {
+                "active": False,
+                "qrcode_key": "",
+                "state": "idle",
+                "message": "",
+                "remaining_seconds": 0,
+                "refreshable": self.is_refreshable(),
+            }
+        elapsed = (datetime.now() - sess["created_at"]).total_seconds()
+        remaining = max(0, round(QR_CODE_EXPIRE_TIME - elapsed))
+        state = sess["state"]
+        message = sess["message"]
+        if state in ("waiting", "scanned") and remaining <= 0:
+            state = "expired"
+            message = "二维码已过期，请点击刷新获取新码"
+        return {
+            "active": state in ("waiting", "scanned"),
+            "qrcode_key": sess["qrcode_key"],
+            "state": state,
+            "message": message,
+            "remaining_seconds": remaining if state in ("waiting", "scanned") else 0,
+            "refreshable": sess.get("refreshable", self.is_refreshable()),
+        }
+
+    async def start_web_qr_login(self) -> dict[str, Any]:
+        """为 WebUI 生成B站登录二维码并创建扫码会话。"""
+        session = await self._ensure_http_session()
+        async with session.get(
+            BILI_QR_GENERATE_URL,
+            headers=self._api_headers(),
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            data = await resp.json()
+
+        if data.get("code") != 0:
+            raise RuntimeError(data.get("message") or "获取B站登录二维码失败")
+
+        payload_data = data.get("data") or {}
+        qrcode_url = payload_data.get("url") or ""
+        qrcode_key = payload_data.get("qrcode_key") or ""
+        if not qrcode_url or not qrcode_key:
+            raise RuntimeError("B站未返回有效的二维码凭据")
+
+        qr_image = self._build_qrcode_image(qrcode_url)
+        if qr_image is None:
+            raise RuntimeError("二维码图像生成失败，请检查 qrcode/Pillow 依赖")
+
+        buf = io.BytesIO()
+        qr_image.save(buf, format="PNG")
+        data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+        async with self._web_qr_lock:
+            self._web_qr_session = {
+                "qrcode_key": qrcode_key,
+                "created_at": datetime.now(),
+                "state": "waiting",
+                "message": "请使用手机 B站 App 扫描二维码",
+                "refreshable": self.is_refreshable(),
+            }
+            snap = self.web_qr_snapshot()
+        snap["qr_image"] = data_url
+        snap["expires_in"] = QR_CODE_EXPIRE_TIME
+        return snap
+
+    def cancel_web_qr_login(self) -> dict[str, Any]:
+        """关闭当前 WebUI 扫码会话。"""
+        self._web_qr_session = None
+        return self.web_qr_snapshot()
+
+    async def poll_web_qr_status(self, qrcode_key: str | None = None) -> dict[str, Any]:
+        """轮询一次 B站扫码端点并推进 WebUI 会话状态。"""
+        async with self._web_qr_lock:
+            sess = self._web_qr_session
+            if not sess or (qrcode_key and sess["qrcode_key"] != qrcode_key):
+                return self.web_qr_snapshot()
+            if sess["state"] in ("success", "expired", "error"):
+                return self.web_qr_snapshot()
+
+            elapsed = (datetime.now() - sess["created_at"]).total_seconds()
+            if elapsed >= QR_CODE_EXPIRE_TIME:
+                sess["state"] = "expired"
+                sess["message"] = "二维码已过期，请点击刷新获取新码"
+                return self.web_qr_snapshot()
+
+            key = sess["qrcode_key"]
+
+        session = await self._ensure_http_session()
+        try:
+            async with session.get(
+                BILI_QR_POLL_URL,
+                params={"qrcode_key": key},
+                headers=self._api_headers(),
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                poll_data = await resp.json()
+                set_cookie_headers = resp.headers.getall("Set-Cookie", [])
+        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+            async with self._web_qr_lock:
+                if self._web_qr_session and self._web_qr_session["qrcode_key"] == key:
+                    self._web_qr_session["message"] = f"网络波动，继续等待扫码 ({e})"
+                return self.web_qr_snapshot()
+
+        code = (poll_data.get("data") or {}).get("code", -1)
+
+        if code == QR_CODE_UNSCANNED:
+            async with self._web_qr_lock:
+                if self._web_qr_session and self._web_qr_session["qrcode_key"] == key:
+                    self._web_qr_session["state"] = "waiting"
+                    self._web_qr_session["message"] = "等待手机 B站 App 扫码…"
+                return self.web_qr_snapshot()
+
+        if code == QR_CODE_SCANNED:
+            async with self._web_qr_lock:
+                if self._web_qr_session and self._web_qr_session["qrcode_key"] == key:
+                    self._web_qr_session["state"] = "scanned"
+                    self._web_qr_session["message"] = "已扫码，请在手机上点击「确认登录」"
+                return self.web_qr_snapshot()
+
+        if code == QR_CODE_EXPIRED:
+            async with self._web_qr_lock:
+                if self._web_qr_session and self._web_qr_session["qrcode_key"] == key:
+                    self._web_qr_session["state"] = "expired"
+                    self._web_qr_session["message"] = "二维码已过期，请点击刷新获取新码"
+                return self.web_qr_snapshot()
+
+        if code == QR_CODE_SUCCESS:
+            saved, refreshable, result = await self._apply_login_payload(
+                set_cookie_headers, poll_data
+            )
+            async with self._web_qr_lock:
+                if self._web_qr_session and self._web_qr_session["qrcode_key"] == key:
+                    if not saved:
+                        self._web_qr_session["state"] = "error"
+                        self._web_qr_session["message"] = str(result.get("error") or "未获取到Cookie")
+                    elif result.get("valid"):
+                        self._web_qr_session["state"] = "success"
+                        self._web_qr_session["refreshable"] = refreshable
+                        uname = result.get("username") or "已登录"
+                        self._web_qr_session["message"] = f"登录成功！欢迎 {uname}"
+                    else:
+                        self._web_qr_session["state"] = "error"
+                        self._web_qr_session["refreshable"] = refreshable
+                        self._web_qr_session["message"] = (
+                            f"Cookie 已保存但验证失败：{result.get('error', '未知错误')}"
+                        )
+                return self.web_qr_snapshot()
+
+        async with self._web_qr_lock:
+            return self.web_qr_snapshot()
+
+    # ==================== 通知（仅用于 /bili_login 指令发起者） ====================
 
     async def _notify_error_user(self, sender_id: str, message: str) -> None:
         """向扫码登录用户发送错误消息，受错误消息发送开关控制。"""
@@ -648,20 +812,6 @@ class BiliAccountService:
             await self.context.send_message(umo, MessageChain().message(message))
         except Exception as e:
             logger.error(f"发送消息给 {sender_id} 失败: {e}")
-
-    async def _notify_admin(self, title: str, message: str) -> None:
-        """向配置的通知目标QQ号发送Cookie状态通知（只发一次，不重复）"""
-        pconfig = get_config()
-        user_id = pconfig.BILI_NOTIFY_USER_ID
-        if not user_id:
-            logger.info(f"[B站Cookie监控] {title}: {message} (未配置通知目标，仅记录日志)")
-            return
-        try:
-            umo = user_id if ":" in user_id else f"default:FriendMessage:{user_id}"
-            await self.context.send_message(umo, MessageChain().message(f"{title}\n{message}"))
-            logger.info(f"已发送B站Cookie通知到 {user_id}: {title}")
-        except Exception as e:
-            logger.error(f"发送B站Cookie通知失败: {e}")
 
     # ==================== 工具 ====================
 

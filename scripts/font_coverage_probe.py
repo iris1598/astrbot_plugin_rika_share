@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """探测 Windows 系统字体对颜文字字符的覆盖情况"""
+import sys
 from pathlib import Path
 from fontTools.ttLib import TTFont
 
@@ -9,7 +10,10 @@ print("涉及码点:")
 for cp in CODEPOINTS:
     print(f"  U+{cp:05X} {chr(cp)!r}")
 
-FONTS_DIR = Path("C:/Windows/Fonts")
+FONTS_DIR = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("C:/Windows/Fonts")
+if not FONTS_DIR.is_dir():
+    print(f"字体目录不存在，可通过命令行参数指定字体目录: {FONTS_DIR}")
+    sys.exit(0)
 candidates = [
     "msyh.ttc", "msyhbd.ttc", "simhei.ttf", "simsun.ttc", "Deng.ttf",
     "seguisym.ttf",   # Segoe UI Symbol

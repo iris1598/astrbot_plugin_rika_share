@@ -13,7 +13,6 @@ from ..text import (
     format_timestamp,
     one_line,
     parse_stats_line,
-    short_url,
     strip_emoji,
 )
 from ..theme import L, Image, ImageDraw, ImageFilter, mix, with_alpha
@@ -505,44 +504,17 @@ class StandardStyle(CardStyle):
             )
             y += quote_h + 20
 
-        # ============ 页脚（链接 + 「莉卡解析」徽标水印） ============
-        divider_layer = Image.new("RGBA", (inner_w, 1), (0, 0, 0, 0))
-        ImageDraw.Draw(divider_layer).line(
-            (0, 0, inner_w - 1, 0),
-            fill=with_alpha(theme.divider, theme.divider_alpha),
-            width=1,
+        # ============ 页脚（分隔线 + 链接 + 徽标水印） ============
+        self.footer_block(
+            canvas,
+            ImageDraw.Draw(canvas),
+            theme,
+            accent,
+            accent_rgb,
+            self.result,
+            y,
+            inner_w,
         )
-        canvas.alpha_composite(divider_layer, (pad, y + 12))
-        foot_y = y + 28
-
-        wm_text = "莉卡解析"
-        wm_font = self.font(L.F_FOOT, bold=True)
-        wm_text_w = self.text_width(wm_text, wm_font)
-        wm_lh = self.line_height(wm_font)
-        dot_d = L.WM_DOT
-        wm_group_w = dot_d + L.WM_DOT_GAP + wm_text_w
-        wm_x = self.width - pad - wm_group_w
-        # 水印：accent 小圆点 + 文字
-        dot_cy = foot_y + wm_lh // 2
-        draw.ellipse(
-            (wm_x, dot_cy - dot_d // 2, wm_x + dot_d, dot_cy + dot_d // 2),
-            fill=(*accent_rgb, 255),
-        )
-        self.draw_text(
-            draw, (wm_x + dot_d + L.WM_DOT_GAP, foot_y),
-            wm_text, L.F_FOOT, accent, bold=True,
-        )
-
-        url_text = short_url(self.result.url)
-        if url_text:
-            url_font = self.font(L.F_FOOT)
-            avail_w = wm_x - pad - 20
-            while url_text and self.text_width(url_text, url_font) > avail_w:
-                url_text = url_text[:-1]
-            if url_text:
-                self.draw_text(
-                    draw, (pad, foot_y), url_text, L.F_FOOT, theme.text_tertiary
-                )
 
         # ---------- 保存 ----------
         return self.save(canvas, self.out_path)

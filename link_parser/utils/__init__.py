@@ -18,8 +18,10 @@ from .media import (
     merge_av,
     safe_unlink,
 )
+from .persona import DEFAULT_BRAND_NAME, format_brand_name, resolve_brand_name
 
 __all__ = [
+    "DEFAULT_BRAND_NAME",
     "ck2dict",
     "cleanup_cache_dir",
     "clear_cache_dir",
@@ -28,7 +30,9 @@ __all__ = [
     "extract_video_first_frame",
     "fmt_duration",
     "fmt_size",
+    "format_brand_name",
     "generate_file_name",
     "merge_av",
+    "resolve_brand_name",
     "safe_unlink",
 ]

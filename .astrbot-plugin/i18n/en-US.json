@@ -1,0 +1,19 @@
+{
+  "metadata": {
+    "display_name": "Rika Share",
+    "short_desc": "Auto-parse shared links across Bilibili, Douyin, Kuaishou, Weibo, Xiaohongshu, X, AcFun, NGA, GitHub, and CoolApk with card rendering.",
+    "desc": "Automatically parses shared links and mini-app/JSON cards in chat, extracts media, and renders share summary cards."
+  },
+  "views": {
+    "rika": {
+      "title": "Rika Share",
+      "description": "Overview, platform switches, rendering & output settings, web themes, and link diagnostics."
+    }
+  },
+  "pages": {
+    "rika": {
+      "title": "Rika Share",
+      "description": "Overview, platform switches, rendering & output settings, web themes, and link diagnostics."
+    }
+  }
+}

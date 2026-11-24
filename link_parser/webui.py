@@ -1,23 +1,24 @@
-"""插件网页设置页的后端接口层。
+"""插件网页控制面板（views/rika）的后端接口层。
 
-页面在 ``pages/rika/``，通过 AstrBot 的 bridge 调用这里注册的接口。分工：
+页面在 ``views/rika/``，通过 AstrBot 4.x 的 ``window.AstrBotPluginView`` bridge 调用本模块注册的接口。
+接口分工：
 
-- 本模块只做「取参数 → 校验 → 调用 :mod:`link_parser.config` 的读写能力 → 拼 JSON」，
-  不重复实现解析/渲染/登录逻辑。
-- 路由统一带插件名前缀（``/astrbot_plugin_rika_share/xxx``），这是 AstrBot 的要求；
-  页面侧通过 bridge 写的是去掉前缀的相对路径。
-- 只暴露**配置读写**与**链接调试**：保存后由 ``ParserPlugin.apply_runtime_config()`` 把新值应用到
-  渲染器 / 解析器 / 截图客户端，不需要重载插件；调试接口只读地跑一遍流程并回传报告，不改运行时状态。
-
-安全约定：页面运行在受限 iframe 里，但后端仍按「不可信输入」处理——
-配置只接受 :data:`~link_parser.config.CONFIG_META` 白名单里的键，
-且每个值都要过 :func:`~link_parser.config.coerce_value` 的类型与范围校验。
+- 本模块只做「参数提取 → 校验 → 调用运行时服务与 :mod:`link_parser.config` → 返回 JSON」，
+  不重复实现解析、渲染或账号登录业务逻辑。
+- 路由统一带插件名前缀（``/astrbot_plugin_rika_share/...``）；页面侧通过 bridge 传入去掉前缀的相对路径。
+- 页面运行在受限 iframe 中，但后端仍按不可信输入处理：
+  配置更新仅接受 :data:`~link_parser.config.CONFIG_META` 白名单内的键，并通过
+  :func:`~link_parser.config.coerce_value` 做类型与范围校验；状态接口只暴露脱敏后的摘要，不返回任何密钥或 Cookie 原文。
 """
 
 from __future__ import annotations
 
+import asyncio
+import base64
+from datetime import datetime
 import re
 from pathlib import Path
+import time
 from typing import Any, Callable
 
 from astrbot.api import logger
@@ -28,6 +29,14 @@ from .config import (
     platform_options,
     verify_schema_alignment,
 )
+from .services.card_render import ShareCardRenderer, iter_styles
+from .services.card_render.preview import (
+    PREVIEW_SAMPLE_SPECS,
+    build_preview_sample,
+    preview_images_for,
+)
+from .services.card_render.toolkit import FontBook
+from .utils.persona import DEFAULT_BRAND_NAME, format_brand_name
 
 PLUGIN_NAME = "astrbot_plugin_rika_share"
 
@@ -51,23 +60,42 @@ def _error(message: str, status_code: int = 400):
 
 
 def _plugin_version() -> str:
-    """读 ``metadata.yaml`` 里的版本号（取不到返回空串）。"""
+    """读取 ``metadata.yaml`` 中的版本号。"""
     try:
         path = Path(__file__).resolve().parent.parent / "metadata.yaml"
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.startswith("version:"):
                 return line.split(":", 1)[1].strip().strip('"').strip("'")
-    except Exception:  # noqa: BLE001 - 版本号只用于展示，读不到就留空
+    except Exception:  # noqa: BLE001 - 版本号仅作展示
         logger.debug("[link_parser] 读取 metadata.yaml 版本号失败", exc_info=True)
     return ""
 
 
-def _ensure_current_style(payload: dict[str, Any], current: Any) -> None:
-    """若当前样式不在动态下拉里（已删除/改名），补一条「未注册」选项。
+def _registered_style_cards() -> list[dict[str, str]]:
+    """读取卡片样式元数据，供前端渲染可视化样式选择器。"""
+    try:
+        from .services.card_render.styles import iter_styles
 
-    下拉的 options 来自注册表；配置里残留的样式名不在其中时，浏览器会显示空白，
-    用户看不出到底选中了什么。补一个只用于展示的选项，保存后渲染器仍会回退。
-    """
+        return [
+            {
+                "name": spec.name,
+                "display_name": spec.display_name,
+                "description": spec.description,
+            }
+            for spec in iter_styles()
+        ]
+    except Exception:  # noqa: BLE001 - 样式注册表异常不影响设置页可用
+        logger.debug("[link_parser] 读取卡片样式详情失败", exc_info=True)
+        return [
+            {"name": "standard", "display_name": "标准横幅", "description": "顶部全宽封面 + 纵向信息流"},
+            {"name": "magazine", "display_name": "双栏杂志", "description": "封面左置、标题作者右置"},
+            {"name": "immersive", "display_name": "沉浸全屏", "description": "封面铺满整卡，无图回退 standard"},
+            {"name": "feed", "display_name": "社交动态", "description": "作者行置顶，媒体内嵌为圆角块"},
+        ]
+
+
+def _ensure_current_style(payload: dict[str, Any], current: Any) -> None:
+    """若当前样式不在动态下拉中，补充一条提示项防止选择器空白。"""
     name = str(current or "").strip()
     if not name:
         return
@@ -78,14 +106,118 @@ def _ensure_current_style(payload: dict[str, Any], current: Any) -> None:
         if name in options:
             return
         options.append(name)
-        item.setdefault("labels", []).append(
-            f"{name}（未注册，渲染时回退 standard）"
-        )
+        item.setdefault("labels", []).append(f"{name}（未注册，渲染时回退 standard）")
         return
 
 
+def _scan_dir_stats(directory: Path | None) -> tuple[int, int]:
+    """统计目录下的文件数与总字节数（在后台线程运行，避免阻塞事件循环）。"""
+    if directory is None or not directory.exists():
+        return 0, 0
+    files = 0
+    total_bytes = 0
+    try:
+        for entry in directory.rglob("*"):
+            try:
+                if entry.is_file():
+                    files += 1
+                    total_bytes += entry.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        return files, total_bytes
+    return files, total_bytes
+
+
+def _serialize_bili_status(bili: Any) -> dict[str, Any]:
+    """构造脱敏的 B 站账号状态摘要（不返回 Cookie 原文）。"""
+    if bili is None:
+        return {
+            "available": False,
+            "has_cookie": False,
+            "refreshable": False,
+            "monitor_running": False,
+            "valid": None,
+            "username": "",
+            "uid": 0,
+            "vip": False,
+            "error": "账号服务未初始化",
+            "last_check_time": "",
+            "status_text": "B站账号服务未初始化",
+            "qr": {"active": False, "state": "idle", "message": "", "remaining_seconds": 0},
+        }
+
+    parser_cookie = ""
+    getter = getattr(bili, "_parser_cookie", None)
+    if callable(getter):
+        try:
+            parser_cookie = getter() or ""
+        except Exception:  # noqa: BLE001
+            parser_cookie = ""
+
+    has_cookie = bool(getattr(bili, "_cookie", "") or parser_cookie)
+    refreshable_fn = getattr(bili, "is_refreshable", None)
+    refreshable = bool(refreshable_fn()) if callable(refreshable_fn) else False
+    qr_fn = getattr(bili, "web_qr_snapshot", None)
+    qr_snapshot = qr_fn() if callable(qr_fn) else {"active": False, "state": "idle", "message": "", "remaining_seconds": 0}
+    last_status = getattr(bili, "_last_status", None)
+    last_status_dict = last_status if isinstance(last_status, dict) else {}
+    last_time = getattr(bili, "_last_check_time", None)
+    last_time_str = (
+        last_time.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(last_time, datetime)
+        else ""
+    )
+
+    try:
+        status_text = bili.status_text()
+    except Exception:  # noqa: BLE001
+        status_text = ""
+
+    return {
+        "available": True,
+        "has_cookie": has_cookie,
+        "refreshable": refreshable,
+        "monitor_running": bool(getattr(bili, "_monitor_running", False)),
+        "valid": last_status_dict.get("valid") if last_status_dict else None,
+        "username": str(last_status_dict.get("username") or ""),
+        "uid": int(last_status_dict.get("uid") or 0),
+        "vip": bool(last_status_dict.get("vip", False)),
+        "error": str(last_status_dict.get("error") or ""),
+        "last_check_time": last_time_str,
+        "status_text": status_text,
+        "qr": qr_snapshot,
+    }
+
+
+async def _collect_cache_stats(plugin: Any) -> dict[str, Any]:
+    """收集磁盘缓存与内存缓存统计信息。"""
+    pconfig = get_config()
+    cache_dir = getattr(plugin, "cache_dir", None)
+    webpage_dir = getattr(plugin, "webpage_dir", None)
+    (cache_files, cache_bytes), (webpage_files, webpage_bytes) = await asyncio.gather(
+        asyncio.to_thread(_scan_dir_stats, cache_dir),
+        asyncio.to_thread(_scan_dir_stats, webpage_dir),
+    )
+    content_cache = getattr(plugin, "_content_cache", None)
+    identity_cache = getattr(plugin, "_identity_cache", None)
+    webpage_links = getattr(plugin, "_webpage_links", None)
+    return {
+        "ttl_hours": pconfig.CACHE_TTL_HOURS,
+        "cleanup_interval_minutes": pconfig.CACHE_CLEANUP_INTERVAL_MINUTES,
+        "files": cache_files + webpage_files,
+        "bytes": cache_bytes + webpage_bytes,
+        "cache_files": cache_files,
+        "cache_bytes": cache_bytes,
+        "webpage_files": webpage_files,
+        "webpage_bytes": webpage_bytes,
+        "memory_entries": len(content_cache or {}) + len(identity_cache or {}),
+        "active_webpage_links": len(webpage_links or {}),
+    }
+
+
 def read_schema_problems() -> list[str]:
-    """读 ``_conf_schema.json`` 并自检它与 CONFIG_META 是否一致。"""
+    """读取 ``_conf_schema.json`` 并校验它与 :data:`CONFIG_META` 的一致性。"""
     try:
         import json
 
@@ -101,24 +233,337 @@ def read_schema_problems() -> list[str]:
 
 
 class WebUIApi:
-    """插件网页设置页的接口集合。"""
+    """插件网页控制面板的接口集合。"""
 
     def __init__(self, plugin: Any):
         self.plugin = plugin
+        self._font_book_cache: dict[str, FontBook] = {}
+        self._style_thumb_cache: dict[tuple[Any, ...], str] = {}
 
     # ==================== 注册 ==================== #
 
     def register(self) -> None:
         context = self.plugin.context
         routes: tuple[tuple[str, Callable[..., Any], tuple[str, ...], str], ...] = (
-            ("/config", self.get_config, ("GET",), "读取全部配置项"),
-            ("/config", self.save_config, ("POST",), "保存配置项"),
+            ("/config", self.get_config, ("GET",), "读取全部配置项与元数据"),
+            ("/config", self.save_config, ("POST",), "保存配置项并热更新运行时"),
             ("/config/reset", self.reset_config, ("POST",), "恢复默认配置"),
-            ("/debug/run", self.debug_run, ("POST",), "对链接跑一遍解析流程并生成日志"),
-            ("/debug/log", self.debug_log, ("GET",), "下载调试日志"),
+            ("/overview", self.get_overview, ("GET",), "获取插件运行状态与资源总览"),
+            ("/cache/clear", self.clear_cache, ("POST",), "清理插件磁盘与内存缓存"),
+            ("/bili/check", self.check_bili_cookie, ("POST",), "立即检测B站Cookie有效性"),
+            ("/bili/login", self.bili_qr_login, ("POST",), "生成或取消B站WebUI扫码登录二维码"),
+            ("/bili/status", self.bili_status, ("GET",), "查询B站登录态并轮询扫码结果"),
+            ("/preview/card", self.preview_card, ("POST",), "实时渲染一张卡片预览图"),
+            ("/preview/styles", self.preview_styles, ("GET",), "渲染全部已注册卡片样式缩略图"),
+            ("/debug/run", self.debug_run, ("POST",), "对链接执行解析诊断并生成日志"),
+            ("/debug/log", self.debug_log, ("GET",), "下载链接解析调试日志"),
         )
         for suffix, handler, methods, desc in routes:
             context.register_web_api(f"/{PLUGIN_NAME}{suffix}", handler, list(methods), desc)
+
+    # ==================== 总览与运维 ==================== #
+
+    async def get_overview(self):
+        pconfig = get_config()
+        renderer = getattr(self.plugin, "_renderer", None)
+        cf_client = getattr(self.plugin, "_cloudflare_client", None)
+        cache_stats = await _collect_cache_stats(self.plugin)
+
+        return _json_response(
+            {
+                "version": _plugin_version(),
+                "problems": read_schema_problems(),
+                "platforms": platform_options(pconfig),
+                "styles": _registered_style_cards(),
+                "renderer": {
+                    "enabled": bool(getattr(renderer, "enabled", pconfig.RENDER_ENABLED)),
+                    "style": pconfig.RENDER_STYLE,
+                    "theme": pconfig.RENDER_THEME,
+                    "width": pconfig.RENDER_WIDTH,
+                    "cover_full_size": pconfig.RENDER_COVER_FULL_SIZE,
+                    "persona_watermark": pconfig.RENDER_PERSONA_WATERMARK,
+                    "brand_name": pconfig.RENDER_BRAND_NAME,
+                },
+                "fallback": {
+                    "cloudflare_enabled": pconfig.CLOUDFLARE_FALLBACK_ENABLED,
+                    "cloudflare_configured": bool(
+                        cf_client and getattr(cf_client, "is_configured", False)
+                    ),
+                    "debug_log_enabled": pconfig.DEBUG_LOG_ENABLED,
+                    "send_error_messages": pconfig.SEND_ERROR_MESSAGES,
+                },
+                "webpage_share": {
+                    "enabled": pconfig.WEBPAGE_FALLBACK_ENABLED,
+                    "tdocs_jump": pconfig.WEBPAGE_TDOCS_JUMP,
+                    "public_url_configured": bool(
+                        getattr(self.plugin, "_get_callback_base", lambda: "")()
+                    ),
+                    "active_links": cache_stats["active_webpage_links"],
+                },
+                "bili": _serialize_bili_status(getattr(self.plugin, "bili", None)),
+                "cache": cache_stats,
+                "appearance": {
+                    "theme": pconfig.WEBUI_THEME,
+                    "color_mode": pconfig.WEBUI_COLOR_MODE,
+                },
+            }
+        )
+
+    async def clear_cache(self):
+        try:
+            cleaned = await self.plugin.clear_all_caches()
+            cache_stats = await _collect_cache_stats(self.plugin)
+            return _json_response({"cleaned": cleaned, "cache": cache_stats})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[link_parser] WebUI 清理缓存失败")
+            return _error(f"清理缓存失败：{str(exc)[:160]}", status_code=500)
+
+    async def check_bili_cookie(self):
+        bili = getattr(self.plugin, "bili", None)
+        if bili is None:
+            return _error("B站账号服务未初始化", status_code=503)
+
+        live_cookie = ""
+        getter = getattr(bili, "_parser_cookie", None)
+        if callable(getter):
+            try:
+                live_cookie = getter() or ""
+            except Exception:  # noqa: BLE001
+                live_cookie = ""
+        if live_cookie and not getattr(bili, "_cookie", ""):
+            bili._cookie = live_cookie
+
+        if not getattr(bili, "_cookie", ""):
+            return _json_response(
+                {
+                    "checked": False,
+                    "message": "尚未配置B站 Cookie，请点击「扫码登录」或填写 BILI_CK",
+                    "bili": _serialize_bili_status(bili),
+                }
+            )
+
+        try:
+            result = await bili.check_cookie_valid()
+            bili._last_status = result
+            bili._last_check_time = datetime.now()
+            bili._was_invalid = not bool(result.get("valid"))
+            saver = getattr(bili, "_save_last_status", None)
+            if callable(saver):
+                await saver()
+            return _json_response(
+                {
+                    "checked": True,
+                    "result": result,
+                    "bili": _serialize_bili_status(bili),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[link_parser] WebUI 检测 B站 Cookie 失败")
+            return _error(f"检测B站 Cookie 失败：{str(exc)[:160]}", status_code=500)
+
+    async def bili_qr_login(self):
+        """生成或取消 B站 WebUI 扫码登录二维码。"""
+        from astrbot.api.web import request
+
+        bili = getattr(self.plugin, "bili", None)
+        if bili is None:
+            return _error("B站账号服务未初始化", status_code=503)
+
+        body = await request.json(default={}) or {}
+        action = str(body.get("action") or "start").strip().lower() if isinstance(body, dict) else "start"
+        if action == "cancel":
+            qr = bili.cancel_web_qr_login()
+            return _json_response({"qr": qr, "bili": _serialize_bili_status(bili)})
+
+        try:
+            qr = await bili.start_web_qr_login()
+            return _json_response({"qr": qr, "bili": _serialize_bili_status(bili)})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[link_parser] WebUI 生成 B站登录二维码失败")
+            return _error(f"获取登录二维码失败：{str(exc)[:160]}", status_code=502)
+
+    async def bili_status(self):
+        """返回当前 B站登录状态；如传入或存在进行中的扫码会话则轮询一次状态。"""
+        from astrbot.api.web import request
+
+        bili = getattr(self.plugin, "bili", None)
+        if bili is None:
+            return _error("B站账号服务未初始化", status_code=503)
+
+        qrcode_key = str(request.query.get("qrcode_key") or "").strip() or None
+        try:
+            qr = await bili.poll_web_qr_status(qrcode_key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[link_parser] 轮询 B站扫码状态异常", exc_info=True)
+            qr = {
+                **bili.web_qr_snapshot(),
+                "message": f"轮询异常：{str(exc)[:120]}",
+            }
+        return _json_response({"qr": qr, "bili": _serialize_bili_status(bili)})
+
+    # ==================== 实时卡片预览 ==================== #
+
+    def _get_font_book(self, font_path: str | None) -> FontBook:
+        key = str(font_path or "").strip()
+        book = self._font_book_cache.get(key)
+        if book is None:
+            if len(self._font_book_cache) >= 6:
+                self._font_book_cache.clear()
+            book = FontBook(key or None)
+            self._font_book_cache[key] = book
+        return book
+
+    def _make_preview_renderer(
+        self,
+        *,
+        style: str,
+        theme: str,
+        width: int,
+        cover_full_size: bool,
+        font_path: str | None,
+    ) -> ShareCardRenderer:
+        cache_dir = Path(getattr(self.plugin, "cache_dir", "."))
+        renderer = ShareCardRenderer(
+            cache_dir,
+            enabled=True,
+            width=width,
+            theme=theme,
+            font_path=font_path or None,
+            cover_full_size=cover_full_size,
+            style=style,
+        )
+        renderer._font_book = self._get_font_book(font_path)
+        return renderer
+
+    @staticmethod
+    def _preview_watermark(
+        persona_watermark: bool,
+        persona_name: str,
+        brand_name: str = DEFAULT_BRAND_NAME,
+    ) -> str:
+        fallback_brand = str(brand_name or "").strip()[:16] or DEFAULT_BRAND_NAME
+        if not persona_watermark:
+            return fallback_brand
+        return format_brand_name(persona_name or "达妮娅", default=fallback_brand)
+
+    async def preview_card(self):
+        """使用当前未保存或已生效参数实时渲染单张卡片预览（内存 PNG → base64）。"""
+        from astrbot.api.web import request
+
+        body = await request.json(default={}) or {}
+        if not isinstance(body, dict):
+            return _error("请求参数格式不正确")
+
+        pconfig = get_config()
+        sample_id = str(body.get("sample") or "video").strip().lower()
+        style = str(body.get("style") or pconfig.RENDER_STYLE).strip().lower() or pconfig.RENDER_STYLE
+        theme = str(body.get("theme") or pconfig.RENDER_THEME).strip().lower()
+        if theme not in {"dark", "light"}:
+            theme = "dark"
+        try:
+            width = max(520, min(1080, int(body.get("width", pconfig.RENDER_WIDTH))))
+        except (TypeError, ValueError):
+            width = pconfig.RENDER_WIDTH
+        cover_full_size = bool(body.get("cover_full_size", pconfig.RENDER_COVER_FULL_SIZE))
+        font_path = str(body.get("font_path") if "font_path" in body else pconfig.RENDER_FONT_PATH).strip()
+        persona_watermark = bool(body.get("persona_watermark", pconfig.RENDER_PERSONA_WATERMARK))
+        persona_name = str(body.get("persona_name") or "达妮娅").strip()
+        brand_name = str(body.get("brand_name") if "brand_name" in body else pconfig.RENDER_BRAND_NAME).strip()
+        watermark = self._preview_watermark(persona_watermark, persona_name, brand_name)
+
+        try:
+            started = time.monotonic()
+            asset_dir = Path(self.plugin.cache_dir) / "_preview_assets"
+            resolved_sample, sample_result = await asyncio.to_thread(
+                build_preview_sample, sample_id, asset_dir
+            )
+            images = await asyncio.to_thread(preview_images_for, resolved_sample, asset_dir)
+            renderer = self._make_preview_renderer(
+                style=style,
+                theme=theme,
+                width=width,
+                cover_full_size=cover_full_size,
+                font_path=font_path,
+            )
+            png_bytes, used_style = await renderer.render_preview_png(
+                sample_result, images, watermark=watermark
+            )
+            render_ms = round((time.monotonic() - started) * 1000)
+            b64 = base64.b64encode(png_bytes).decode("ascii")
+            return _json_response(
+                {
+                    "image": f"data:image/png;base64,{b64}",
+                    "sample": resolved_sample,
+                    "requested_style": style,
+                    "used_style": used_style,
+                    "fallback": used_style != style,
+                    "theme": theme,
+                    "width": renderer.width,
+                    "watermark": watermark,
+                    "render_ms": render_ms,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[link_parser] 实时卡片预览渲染失败")
+            return _error(f"卡片预览渲染失败：{str(exc)[:160]}", status_code=500)
+
+    async def preview_styles(self):
+        """渲染全部已注册样式的真实样貌缩略图（含后续新增自定义样式）。"""
+        from astrbot.api.web import request
+
+        pconfig = get_config()
+        theme = str(request.query.get("theme") or pconfig.RENDER_THEME).strip().lower()
+        if theme not in {"dark", "light"}:
+            theme = "dark"
+        persona_raw = str(request.query.get("persona_watermark") or "").strip().lower()
+        persona_watermark = (
+            persona_raw in {"1", "true", "yes"}
+            if persona_raw
+            else pconfig.RENDER_PERSONA_WATERMARK
+        )
+        persona_name = str(request.query.get("persona_name") or "达妮娅").strip()
+        brand_name = str(request.query.get("brand_name") or pconfig.RENDER_BRAND_NAME).strip()
+        watermark = self._preview_watermark(persona_watermark, persona_name, brand_name)
+        font_path = pconfig.RENDER_FONT_PATH
+
+        try:
+            asset_dir = Path(self.plugin.cache_dir) / "_preview_assets"
+            _, sample_result = await asyncio.to_thread(
+                build_preview_sample, "video", asset_dir
+            )
+            images = await asyncio.to_thread(preview_images_for, "video", asset_dir)
+
+            items: list[dict[str, str]] = []
+            for spec in iter_styles():
+                cache_key = (spec.name, spec.version, theme, watermark, font_path)
+                data_url = self._style_thumb_cache.get(cache_key)
+                if data_url is None:
+                    renderer = self._make_preview_renderer(
+                        style=spec.name,
+                        theme=theme,
+                        width=560,
+                        cover_full_size=False,
+                        font_path=font_path,
+                    )
+                    png_bytes, _ = await renderer.render_preview_png(
+                        sample_result, images, watermark=watermark
+                    )
+                    data_url = "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
+                    if len(self._style_thumb_cache) >= 48:
+                        self._style_thumb_cache.clear()
+                    self._style_thumb_cache[cache_key] = data_url
+                items.append(
+                    {
+                        "name": spec.name,
+                        "display_name": spec.display_name,
+                        "description": spec.description,
+                        "image": data_url,
+                    }
+                )
+            return _json_response({"theme": theme, "watermark": watermark, "styles": items})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[link_parser] 生成样式列表预览失败")
+            return _error(f"样式预览生成失败：{str(exc)[:160]}", status_code=500)
 
     # ==================== 配置 ==================== #
 
@@ -129,9 +574,38 @@ class WebUIApi:
         _ensure_current_style(payload, payload["values"].get("RENDER_STYLE"))
         payload["problems"] = read_schema_problems()
         payload["version"] = _plugin_version()
-        # 解析器开关的平台清单来自适配器注册表，新增平台自动出现
         payload["platforms"] = platform_options(pconfig)
+        payload["styles"] = _registered_style_cards()
+        payload["preview_samples"] = list(PREVIEW_SAMPLE_SPECS)
         return _json_response(payload)
+
+    async def _apply_and_respond(
+        self,
+        pconfig: Any,
+        changed: list[str],
+        errors: list[str],
+        *,
+        fail_prefix: str,
+    ):
+        """同步应用运行时配置并返回标准保存响应。"""
+        runtime_ok = True
+        runtime: dict[str, Any] = {}
+        if changed:
+            try:
+                runtime = await self.plugin.apply_runtime_config()
+            except Exception as exc:  # noqa: BLE001 - 热更新失败不能吞掉已保存的配置
+                runtime_ok = False
+                logger.warning("[link_parser] 应用新配置失败", exc_info=True)
+                errors.append(f"{fail_prefix}，但运行时热更新失败：{str(exc)[:120]}")
+        return _json_response(
+            {
+                "changed": changed,
+                "errors": errors,
+                "runtime_ok": runtime_ok,
+                "runtime": runtime,
+                "values": pconfig.current_values(),
+            }
+        )
 
     async def save_config(self):
         from astrbot.api.web import request
@@ -143,23 +617,15 @@ class WebUIApi:
 
         pconfig = get_config()
         changed, errors = pconfig.apply_updates(values)
-        runtime_ok = True
-        runtime: dict[str, Any] = {}
-        if changed:
-            try:
-                runtime = await self.plugin.apply_runtime_config()
-            except Exception as exc:  # noqa: BLE001 - 热更新失败不能吞掉已保存的配置
-                runtime_ok = False
-                logger.warning("[link_parser] 应用新配置失败", exc_info=True)
-                errors.append(f"配置已保存，但运行时热更新失败：{str(exc)[:120]}")
-        return _json_response(
-            {
-                "changed": changed,
-                "errors": errors,
-                "runtime_ok": runtime_ok,
-                "runtime": runtime,
-                "values": pconfig.current_values(),
-            }
+        return await self._apply_and_respond(
+            pconfig, changed, errors, fail_prefix="配置已保存"
+        )
+
+    async def reset_config(self):
+        pconfig = get_config()
+        changed = pconfig.reset_to_defaults()
+        return await self._apply_and_respond(
+            pconfig, changed, [], fail_prefix="已恢复默认"
         )
 
     # ==================== 链接调试 ==================== #
@@ -179,7 +645,6 @@ class WebUIApi:
         if not url.lower().startswith(("http://", "https://")):
             return _error("链接需要以 http:// 或 https:// 开头")
 
-        # 页面给的是「是否执行」的开关，缺省都执行
         download_media = body.get("download_media", True) is not False
         render_card = body.get("render_card", True) is not False
 
@@ -206,7 +671,6 @@ class WebUIApi:
             return _error("无效的日志标识")
 
         directory = debug_dir(self.plugin)
-        # 不记内存状态：按 token 后缀找（重载插件后依然能下载）
         matches = sorted(directory.glob(f"debug_*_{token}.log"), reverse=True)
         if not matches:
             return _error("日志已不存在（可能已被缓存清理），请重新测试")
@@ -215,27 +679,4 @@ class WebUIApi:
             path,
             filename=f"rika_debug_{token}.log",
             content_type="text/plain; charset=utf-8",
-        )
-
-    async def reset_config(self):
-        pconfig = get_config()
-        changed = pconfig.reset_to_defaults()
-        runtime_ok = True
-        runtime: dict[str, Any] = {}
-        errors: list[str] = []
-        if changed:
-            try:
-                runtime = await self.plugin.apply_runtime_config()
-            except Exception as exc:  # noqa: BLE001 - 同上
-                runtime_ok = False
-                logger.warning("[link_parser] 恢复默认配置后热更新失败", exc_info=True)
-                errors.append(f"已恢复默认，但运行时热更新失败：{str(exc)[:120]}")
-        return _json_response(
-            {
-                "changed": changed,
-                "errors": errors,
-                "runtime_ok": runtime_ok,
-                "runtime": runtime,
-                "values": pconfig.current_values(),
-            }
         )

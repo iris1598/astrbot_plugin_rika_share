@@ -1,7 +1,28 @@
 name: astrbot_plugin_rika_share
 display_name: "莉卡解析"
+short_desc: "多平台分享链接自动解析与卡片渲染（B站/抖音/快手/微博/小红书/Twitter/AcFun/NGA/GitHub/酷安）"
 desc: 莉卡解析 - 链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA|GitHub|酷安。内置B站扫码登录、Cookie监控与自动应用。安装 astrbot_plugin_multincm 后自动接入网易云音乐解析。
-version: v3.4.0
+version: v3.5.0
 author: iris1598
 repo: https://github.com/iris1598/astrbot_plugin_rika_share
-astrbot_version: ">=3.5.13"
+astrbot_version: ">=4.0.0"
+support_platforms:
+  - aiocqhttp
+  - qq_official
+  - qq_official_webhook
+  - telegram
+  - discord
+  - lark
+  - dingtalk
+  - wecom
+  - wecom_ai_bot
+  - slack
+  - kook
+  - satori
+  - matrix
+  - webchat
+tags:
+  - 链接解析
+  - 媒体下载
+  - B站
+  - 卡片渲染

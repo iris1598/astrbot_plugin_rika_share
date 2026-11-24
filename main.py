@@ -1,44 +1,41 @@
 """莉卡解析 - 链接分享解析插件
 
-支持 B站 | 抖音 | 快手 | 微博 | 小红书 | Twitter | AcFun | NGA
+支持 B站 | 抖音 | 快手 | 微博 | 小红书 | Twitter | AcFun | NGA | GitHub | 酷安
 网易云音乐由外部插件联动提供（安装 astrbot_plugin_multincm 后自动接入）
 
 移植自 nonebot-plugin-parser (https://github.com/fllesser/nonebot-plugin-parser)
-内置B站扫码登录、Cookie监控、自动应用Cookie功能
+内置 B站扫码登录、Cookie 监控、自动应用 Cookie 功能
 
-本文件承载 AstrBot 要求的插件类与事件处理器（Handler 必须归属在插件模块下才能被
-框架注册）。其中各平台的 Handler 由 ``link_parser.adapters`` 的注册表自动生成
-（见 ``_PLATFORM_HANDLERS``），因此**新增平台不需要改动本文件**。
+本文件承载 AstrBot 4.x 插件类（基于 ``Star`` + ``metadata.yaml`` 自动识别）与
+事件处理器（Handler 必须归属在插件模块下才能被框架注册）。其中各平台的 Handler 由
+``link_parser.adapters`` 的注册表自动生成（见 ``_PLATFORM_HANDLERS``），
 具体实现按职责分层放在 ``link_parser`` 包中：
 
     link_parser/adapters   平台解析适配器（自动发现 + 自注册 + 外部插件接入）
+    link_parser/config     配置元数据、Schema 自检与运行时配置
     link_parser/models     数据类型
     link_parser/services   下载 / 渲染 / 截图 / 实况照片 / B站账号
     link_parser/output     解析结果到消息链的输出构建
     link_parser/utils      通用工具
+    link_parser/webui.py   插件设置页（views/rika）后端 API
 """
 
 import asyncio
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult, MessageChain
 import astrbot.api.message_components as Comp
-from astrbot.api.star import Context, Star, register, StarTools
+from astrbot.api.star import Context, Star, StarTools
 
 from .link_parser.adapters import iter_adapters
 from .link_parser.adapters._external import register_external_adapters
 from .link_parser.adapters.registry import AdapterBuildContext
-from .link_parser.config import (
-    get_config,
-    init_config,
-    migrate_card_style,
-    migrate_grouped_config,
-)
+from .link_parser.config import get_config, init_config
 from .link_parser.constants import (
     COVER_COMMAND_PATTERN,
     GENERIC_URL_PATTERN,
@@ -81,21 +78,20 @@ from .link_parser.services.web_screenshot import (
     fetch_page_title,
     is_url_blacklisted,
 )
-from .link_parser.utils import clear_cache_dir, cleanup_cache_dir
+from .link_parser.utils import (
+    DEFAULT_BRAND_NAME,
+    cleanup_cache_dir,
+    clear_cache_dir,
+    resolve_brand_name,
+)
 from .link_parser.webui import WebUIApi, read_schema_problems
-
-
-def _get_plugin_data_dir() -> Path:
-    from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-
-    return Path(get_astrbot_data_path()) / "plugin_data" / "astrbot_plugin_rika_share"
 
 
 def _make_platform_handler(name: str, pattern: str):
     """按适配器注册表生成一个平台 Handler。
 
     框架以 ``handler.__module__`` **精确匹配**插件模块路径来归属 Handler
-    （见 agent.md 铁律 1），所以函数必须在本模块内构造，并显式改写
+    （见 docs/ARCHITECTURE.md），所以函数必须在本模块内构造，并显式改写
     ``__module__`` / ``__name__`` 后再套 ``@filter.regex``。
     """
 
@@ -150,7 +146,8 @@ class _ContentCacheEntry:
 
     result: ParseResult
     parsed_at: float
-    render_path: Path | None = None
+    #: (渲染器配置快照, 署名文案) → 成品卡片路径（跨人格共用底卡，成品按署名分开记录）
+    render_paths: dict[tuple[tuple[Any, ...], str], Path] = field(default_factory=dict)
     #: 重新解析的次数：>0 时卡片文件名会带上代次，避免复用（或覆盖）上一代卡片
     generation: int = 0
 
@@ -161,9 +158,9 @@ class _ContentCacheEntry:
         return (now if now is not None else time.monotonic()) - self.parsed_at > ttl
 
 
-@register("莉卡解析", "iris1598",
-          "链接分享自动解析插件，支持 B站|抖音|快手|微博|小红书|Twitter|AcFun|NGA|网易云(联动)", "v3.4.0")
 class ParserPlugin(Star):
+    """莉卡解析插件主类（AstrBot 4.x 自动通过 Star 子类与 metadata.yaml 加载）。"""
+
     # 合并转发（Comp.Nodes）是 OneBot v11 独有特性，其他平台均不支持
     @staticmethod
     def _is_onebot(event: AstrMessageEvent) -> bool:
@@ -183,8 +180,9 @@ class ParserPlugin(Star):
         super().__init__(context)
         self.config = config
 
-        data_dir = _get_plugin_data_dir()
+        data_dir = Path(StarTools.get_data_dir("astrbot_plugin_rika_share"))
         data_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir = data_dir
         self.cache_dir = data_dir / "cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.config_dir = data_dir / "config"
@@ -198,20 +196,6 @@ class ParserPlugin(Star):
         self._webpage_links: dict[str, tuple[str, str]] = {}
 
         pconfig = init_config(config, self.cache_dir, self.config_dir)
-
-        # 将旧版扁平配置迁移到分组配置，避免设置页整理后已有设置丢失
-        try:
-            changed = migrate_grouped_config(config)
-            if migrate_card_style(config):
-                changed = True
-                logger.info("已迁移旧版 RENDER_LAYOUT 到 RENDER_STYLE")
-            if changed:
-                save = getattr(config, "save_config", None)
-                if callable(save):
-                    save()
-                logger.info("已迁移旧版扁平配置到分组配置")
-        except Exception:
-            logger.warning("旧版配置迁移失败，将使用兼容回退读取", exc_info=True)
 
         self.downloader = StreamDownloader(self.cache_dir)
         self.disabled_platforms = pconfig.DISABLED_PLATFORMS
@@ -241,7 +225,7 @@ class ParserPlugin(Star):
         # ========== B站 Cookie 监控 / 扫码登录 ==========
         self.bili = BiliAccountService(
             context,
-            StarTools.get_data_dir("astrbot_plugin_rika_share"),
+            data_dir,
             self.parsers,
         )
 
@@ -249,7 +233,7 @@ class ParserPlugin(Star):
         self._cloudflare_client: CloudflareScreenshotClient | None = None
         self._cloudflare_sig = self._cloudflare_signature()
         if pconfig.CLOUDFLARE_FALLBACK_ENABLED:
-            self._cloudflare_client = CloudflareScreenshotClient(config)
+            self._cloudflare_client = CloudflareScreenshotClient(pconfig)
             if self._cloudflare_client.is_configured:
                 logger.info("Cloudflare 网页截图 Fallback 已启用")
             else:
@@ -263,7 +247,7 @@ class ParserPlugin(Star):
     # ==================== 网页设置页 ==================== #
 
     def _register_webui(self) -> None:
-        """注册插件网页设置页（``pages/rika``）的后端接口。
+        """注册插件网页设置页（``views/rika``）的后端接口。
 
         老版本 AstrBot 没有 ``register_web_api``，此时静默跳过——
         聊天命令与解析功能都不受影响，只是没有网页设置页。
@@ -278,7 +262,7 @@ class ParserPlugin(Star):
         try:
             self._webui = WebUIApi(self)
             self._webui.register()
-            logger.info("[link_parser] WebUI 接口已注册（插件页面 pages/rika）")
+            logger.info("[link_parser] WebUI 接口已注册（插件页面 views/rika）")
         except Exception:
             logger.warning("[link_parser] WebUI 接口注册失败，网页设置页不可用", exc_info=True)
 
@@ -306,7 +290,7 @@ class ParserPlugin(Star):
         if self._cloudflare_signature() != self._cloudflare_sig:
             self._cloudflare_sig = self._cloudflare_signature()
             self._cloudflare_client = (
-                CloudflareScreenshotClient(self.config)
+                CloudflareScreenshotClient(pconfig)
                 if self._cloudflare_sig is not None
                 else None
             )
@@ -524,6 +508,16 @@ class ParserPlugin(Star):
 
     # ==================== Cloudflare 截图 Fallback ====================
 
+    async def _resolve_brand_name(self, event: AstrMessageEvent) -> str:
+        """根据配置解析当前会话署名（关闭人格跟随或使用默认人格时回退自定义署名）。"""
+        pconfig = get_config()
+        return await resolve_brand_name(
+            self.context,
+            event,
+            enabled=pconfig.RENDER_PERSONA_WATERMARK,
+            default=pconfig.RENDER_BRAND_NAME or DEFAULT_BRAND_NAME,
+        )
+
     def _is_cloudflare_available(self) -> bool:
         """Cloudflare 截图 Fallback 是否可用"""
         if self._cloudflare_client is None:
@@ -536,14 +530,15 @@ class ParserPlugin(Star):
         """Cloudflare 网页截图 fallback 处理：渲染网页并发送截图"""
         # 先获取标题（并发：和截图并行）
         title_task = asyncio.create_task(fetch_page_title(url))
+        brand_task = asyncio.create_task(self._resolve_brand_name(event))
 
         save_dir = self.cache_dir / "cloudflare_screenshots"
         path = await self._cloudflare_client.screenshot(url, save_dir)
 
-        title = await title_task
-        # 对齐其它解析器的 header 格式：平台名 | 标题
+        title, brand_name = await asyncio.gather(title_task, brand_task)
+        # 对齐其它解析器的 header 格式：署名 | 标题
         fallback_title = title or url[:80]
-        header = f"莉卡解析 | 网站 - {fallback_title}"
+        header = f"{brand_name} | 网站 - {fallback_title}"
 
         if path is None:
             # 静默失败：出错不回复；是否记录日志由“启用详细错误日志”开关控制
@@ -750,23 +745,27 @@ class ParserPlugin(Star):
                         "回退常规解析输出（卡片图 + 语音）"
                     )
 
+            brand_name = await self._resolve_brand_name(event)
+
             # 根据平台构建：标题头 + 合并转发内容列表
             header, nodes_content = await build_platform_output(
-                result, result.platform.name
+                result, result.platform.name, brand_name=brand_name
             )
 
             # 渲染精美解析卡片（失败时 render_path 为 None，自动回退文本输出）
             render_path: Path | None = None
             if self._renderer is not None and self._renderer.enabled:
+                render_cache_key = (self._renderer_sig, brand_name)
                 render_path = await self._renderer.render(
                     result,
                     cache_key=cache_key,
-                    existing=entry.render_path,
+                    existing=entry.render_paths.get(render_cache_key),
                     # 代次 >0 表示内容被重新解析过，卡片文件名要跟着换代
                     salt=str(entry.generation) if entry.generation else None,
+                    watermark=brand_name,
                 )
                 if render_path is not None:
-                    entry.render_path = render_path
+                    entry.render_paths[render_cache_key] = render_path
 
             warnings = result.extra.get("limit_warnings") or []
             is_video = any(
@@ -1031,7 +1030,8 @@ class ParserPlugin(Star):
                 yield event.plain_result("⚠️ 封面下载失败")
                 return
 
-            header = f"莉卡解析 | {parser.platform.display_name} - {pick.label}"
+            brand_name = await self._resolve_brand_name(event)
+            header = f"{brand_name} | {parser.platform.display_name} - {pick.label}"
             logger.info(f"封面已下载: {url[:80]} → {path.name}")
             if self._is_onebot(event):
                 yield event.chain_result([
@@ -1091,16 +1091,21 @@ class ParserPlugin(Star):
         """查看B站Cookie状态"""
         yield event.plain_result(self.bili.status_text())
 
+    async def clear_all_caches(self) -> int:
+        """清理磁盘缓存、临时分享网页与内存解析缓存，返回删除的文件总数。"""
+        cleaned = await clear_cache_dir(self.cache_dir)
+        cleaned += await clear_cache_dir(self.webpage_dir)
+        self._content_cache.clear()
+        self._identity_cache.clear()
+        self._webpage_links.clear()
+        return cleaned
+
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("clear_cache", alias={"清理缓存"})
     async def clear_cache(self, event: AstrMessageEvent):
         """手动清理插件缓存。"""
         try:
-            cleaned = await clear_cache_dir(self.cache_dir)
-            cleaned += await clear_cache_dir(self.webpage_dir)
-            self._content_cache.clear()
-            self._identity_cache.clear()
-            self._webpage_links.clear()
+            cleaned = await self.clear_all_caches()
             yield event.plain_result(f"✅ 莉卡解析缓存清理完成，共清理 {cleaned} 个文件")
         except Exception as exc:
             logger.exception("手动清理莉卡解析缓存失败")

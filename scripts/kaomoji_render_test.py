@@ -41,7 +41,7 @@ def make_result(title: str, text: str) -> ParseResult:
 
 
 async def main() -> None:
-    out_dir = PLUGIN_DIR / "scripts" / "previews"
+    out_dir = PLUGIN_DIR / "scripts" / ".out" / "kaomoji"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     title = "៸៸᳐⦁⩊⦁៸៸᳐ ੭ﾞ 周末治愈日常 ᯠ_ ̫ _ᯄ"

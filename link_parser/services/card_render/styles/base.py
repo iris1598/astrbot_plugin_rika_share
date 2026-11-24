@@ -31,6 +31,8 @@ class CardStyle(DrawingKit):
     fallback: ClassVar[str | None] = None
     #: 支持的配色轴；``None`` 表示 dark / light 都支持，``()`` 表示固定配色
     palettes: ClassVar[tuple[str, ...] | None] = None
+    #: 是否支持「无水印底卡 + 动态叠印署名」跨人格共享缓存
+    supports_dynamic_footer: ClassVar[bool] = True
 
     def can_render(self) -> bool:
         """当前内容是否适用本样式；默认适用。"""

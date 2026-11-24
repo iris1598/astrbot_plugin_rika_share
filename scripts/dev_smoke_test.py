@@ -15,7 +15,7 @@
     # 只看解析结果，不下载媒体
     python scripts/dev_smoke_test.py --no-download <url>
 
-产物（默认在 ``scripts/dev_test_out/``）::
+产物（默认在 ``scripts/.out/smoke/``）::
 
     dev_smoke_<时间戳>.log   ← 完整日志（就是要发给开发者的那个文件）
     config/                  ← 本次测试的 cookie（bilibili_cookies.json），与真实插件数据隔离
@@ -23,7 +23,7 @@
     cache/                   ← 下载的媒体与渲染卡片
 
 注意：数据目录是**独立的**，不会动 AstrBot 里的真实登录态；如需复用真实 cookie，
-把 ``scripts/dev_test_out/config/bilibili_cookies.json`` 拷过去即可。
+把 ``scripts/.out/smoke/config/bilibili_cookies.json`` 拷过去即可。
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ PLUGIN_ROOT = SCRIPT.parent.parent          # .../astrbot_plugin_rika_share
 sys.path.insert(0, str(SCRIPT.parent))
 
 from dev_logger import StubLogger  # noqa: E402
-OUT_ROOT = SCRIPT.parent / "dev_test_out"
+OUT_ROOT = SCRIPT.parent / ".out" / "smoke"
 
 #: 日志与终端输出共用一条流：写到哪里都同时进日志文件
 _ORIG_STDOUT = sys.stdout
