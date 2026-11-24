@@ -11,12 +11,43 @@ from __future__ import annotations
 import re
 from typing import Any, TYPE_CHECKING
 
+from .nodes import coerce_node_rules, node_schema_payload
+
 if TYPE_CHECKING:
     from .runtime import ParserConfig
 
 #: ``CONFIG_META`` 中不走通用控件渲染的特殊钩子标识
 CONTROL_PLATFORMS = "platforms"
 CONTROL_THEME = "theme"
+CONTROL_NODE_RULES = "node_rules"
+
+#: 支持按群组/会话覆写的零重解析代价配置键白名单
+GROUP_OVERRIDABLE_KEYS: tuple[str, ...] = (
+    "DISABLED_PLATFORMS",
+    "FORWARD_MAX_NODES",
+    "FORWARD_MAX_BATCH_MB",
+    "RENDER_ENABLED",
+    "RENDER_STYLE",
+    "RENDER_THEME",
+    "RENDER_WIDTH",
+    "RENDER_COVER_FULL_SIZE",
+    "RENDER_FONT_PATH",
+    "RENDER_PERSONA_WATERMARK",
+    "RENDER_BRAND_NAME",
+    "NODE_RULES",
+    "WEBPAGE_FALLBACK_ENABLED",
+    "WEBPAGE_TDOCS_JUMP",
+    "CLOUDFLARE_FALLBACK_ENABLED",
+    "CLOUDFLARE_BLACKLIST",
+    "DEBUG_LOG_ENABLED",
+    "SEND_ERROR_MESSAGES",
+)
+_GROUP_OVERRIDABLE_SET: frozenset[str] = frozenset(GROUP_OVERRIDABLE_KEYS)
+
+
+def is_group_overridable(key: str) -> bool:
+    """配置键是否允许按群覆写（严格限定零重解析代价项）。"""
+    return key in _GROUP_OVERRIDABLE_SET
 
 #: 文本类配置项的长度上限
 _MAX_TEXT_LENGTH = 8000
@@ -36,6 +67,7 @@ CONFIG_GROUPS: tuple[tuple[str, str, str], ...] = (
     ("B站设置", "B站 Cookie、下载清晰度、编码偏好与失效监控", "platforms"),
     ("Twitter 设置", "Twitter/X 反代（媒体 CDN 与解析接口改走自定义 Worker）", "platforms"),
     ("解析图片渲染", "Pillow 分享卡片样式、配色与字体设置", "output"),
+    ("输出节点设置", "按视频 / 图文 / 动态模式自定义各节点开关、顺序与是否放入合并转发", "output"),
     ("网页分享设置", "非 OneBot 平台将合并转发转为网页链接发送", "output"),
     ("缓存设置", "缓存文件过期时间与自动清理间隔", "output"),
     ("Cloudflare 基础设置", "未适配链接的网页截图兜底开关、凭据与黑名单", "fallback"),
@@ -256,6 +288,16 @@ CONFIG_META: tuple[dict[str, Any], ...] = (
         "max_length": 16,
         "placeholder": "莉卡解析",
         "hint": "关闭「随会话人格署名」（或当前会话使用系统默认人格）时卡片右下角与纯文本消息头的署名",
+    },
+    # ---------------- 输出节点设置 ---------------- #
+    {
+        "key": "NODE_RULES",
+        "group": "输出节点设置",
+        "label": "解析输出节点编排规则",
+        "type": "node_rules",
+        "default": "",
+        "control": CONTROL_NODE_RULES,
+        "hint": "按视频 / 图文 / 动态三种模式分别开关节点、拖动或上下调整顺序并决定是否并入合并转发",
     },
     # ---------------- 网页分享设置 ---------------- #
     {
@@ -601,7 +643,7 @@ def _dynamic_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def config_meta_payload() -> dict[str, Any]:
-    """返回供 WebUI 渲染的配置元数据（分类分组 + 全部配置项定义）。"""
+    """返回供 WebUI 渲染的配置元数据（分类分组 + 全部配置项定义 + 节点模式规格）。"""
     return {
         "groups": [
             {
@@ -613,6 +655,8 @@ def config_meta_payload() -> dict[str, Any]:
             for name, description, category in CONFIG_GROUPS
         ],
         "items": [_dynamic_item(item) for item in CONFIG_META],
+        "group_overridable_keys": list(GROUP_OVERRIDABLE_KEYS),
+        "node_schema": node_schema_payload(),
     }
 
 
@@ -621,6 +665,9 @@ def coerce_value(item: dict[str, Any], raw: Any) -> tuple[Any, str | None]:
     key = item["key"]
     label = item.get("label", key)
     kind = item["type"]
+
+    if kind == "node_rules":
+        return coerce_node_rules(raw)
 
     if kind == "bool":
         if isinstance(raw, bool):
@@ -775,12 +822,15 @@ __all__ = [
     "CONFIG_GROUPS",
     "CONFIG_GROUP_KEYS",
     "CONFIG_META",
+    "CONTROL_NODE_RULES",
     "CONTROL_PLATFORMS",
     "CONTROL_THEME",
+    "GROUP_OVERRIDABLE_KEYS",
     "_ITEM_BY_KEY",
     "_KEY_GROUP_MAP",
     "coerce_value",
     "config_meta_payload",
+    "is_group_overridable",
     "platform_options",
     "registered_platforms",
     "registered_styles",

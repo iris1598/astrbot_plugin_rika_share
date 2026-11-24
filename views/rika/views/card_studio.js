@@ -1,4 +1,16 @@
 import { buildControlRow, clear, h, icon } from "../ui.js";
+import { createNodeRulesPanel } from "./node_editor.js";
+
+const CARD_RENDER_KEYS = [
+  "RENDER_ENABLED",
+  "RENDER_STYLE",
+  "RENDER_THEME",
+  "RENDER_WIDTH",
+  "RENDER_COVER_FULL_SIZE",
+  "RENDER_BRAND_NAME",
+  "RENDER_PERSONA_WATERMARK",
+  "RENDER_FONT_PATH",
+];
 
 const DELIVERY_CACHE_KEYS = [
   "WEBPAGE_FALLBACK_ENABLED",
@@ -9,6 +21,7 @@ const DELIVERY_CACHE_KEYS = [
 
 export function createCardStudioView(store) {
   const root = h("div", { class: "page-stack" });
+  const nodeEditor = createNodeRulesPanel(store);
 
   let sampleId = "video";
   let previewPersonaName = "达妮娅";
@@ -331,6 +344,13 @@ export function createCardStudioView(store) {
     });
     fontInput.value = String(store.draft.RENDER_FONT_PATH || "");
 
+    const isGroup = Boolean(store.scope);
+    const cardOverridden =
+      isGroup &&
+      CARD_RENDER_KEYS.some(
+        (k) => store.overrideKeys?.has(k) && !store.pendingUnset?.has(k),
+      );
+
     const leftPane = h(
       "div",
       { class: "studio-controls-pane" },
@@ -344,23 +364,53 @@ export function createCardStudioView(store) {
           h(
             "div",
             null,
-            h("h2", { class: "surface-title" }, "卡片渲染与真实版式"),
+            h(
+              "div",
+              { class: "setting-label-row" },
+              h("h2", { class: "surface-title" }, "卡片渲染与真实版式"),
+              isGroup && cardOverridden
+                ? h("span", { class: "pill pill-info" }, "本群独立卡片样式")
+                : isGroup
+                  ? h("span", { class: "pill" }, "继承全局卡片样式")
+                  : null,
+            ),
             h("p", { class: "surface-desc" }, "缩略图由后台真实渲染引擎实时生成；后续新增自定义样式会自动在此呈现"),
           ),
           h(
-            "label",
-            { class: "switch" },
-            h("input", {
-              type: "checkbox",
-              checked: Boolean(store.draft.RENDER_ENABLED),
-              onchange: (e) => {
-                store.setDraftValue("RENDER_ENABLED", Boolean(e.target.checked));
-                render();
-                updatePreviewStage();
-              },
-            }),
-            h("span", { class: "switch-track" }),
-            h("span", { class: "switch-text" }, store.draft.RENDER_ENABLED ? "卡片开启" : "纯文本"),
+            "div",
+            { class: "btn-group" },
+            isGroup && cardOverridden
+              ? h(
+                  "button",
+                  {
+                    type: "button",
+                    class: "btn btn-ghost btn-sm",
+                    onclick: () => {
+                      for (const k of CARD_RENDER_KEYS) {
+                        if (store.overrideKeys?.has(k)) {
+                          store.revertKeyToInherit(k);
+                        }
+                      }
+                    },
+                  },
+                  "卡片配置恢复继承",
+                )
+              : null,
+            h(
+              "label",
+              { class: "switch" },
+              h("input", {
+                type: "checkbox",
+                checked: Boolean(store.draft.RENDER_ENABLED),
+                onchange: (e) => {
+                  store.setDraftValue("RENDER_ENABLED", Boolean(e.target.checked));
+                  render();
+                  updatePreviewStage();
+                },
+              }),
+              h("span", { class: "switch-track" }),
+              h("span", { class: "switch-text" }, store.draft.RENDER_ENABLED ? "卡片开启" : "纯文本"),
+            ),
           ),
         ),
         renderStyleGrid(),
@@ -539,6 +589,8 @@ export function createCardStudioView(store) {
           ),
         ),
       ),
+      // 输出节点编排（分模式开关 · 顺序 · 合并）
+      nodeEditor.element,
       // 分发与缓存（同属内容产出流，集中收纳于此）
       h(
         "section",
@@ -577,6 +629,12 @@ export function createCardStudioView(store) {
     }
   }
 
+  function sync() {
+    render();
+    nodeEditor.sync();
+  }
+
   render();
-  return { element: root, sync: render, onActivated, refreshPreview: () => schedulePreview(0) };
+  nodeEditor.sync();
+  return { element: root, sync, onActivated, refreshPreview: () => schedulePreview(0), syncNodeEditor: () => nodeEditor.sync() };
 }

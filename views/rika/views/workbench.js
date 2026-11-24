@@ -81,6 +81,7 @@ export function createWorkbenchView(store) {
     render();
     try {
       probeReport = await store.bridge.apiPost("debug/run", {
+        scope: store.scope,
         url: trimmed,
         download_media: downloadMedia,
         render_card: renderCard,
@@ -124,6 +125,7 @@ export function createWorkbenchView(store) {
             { class: `pill ${probeReport.ok ? "pill-ok" : "pill-err"}` },
             probeReport.ok ? "诊断通过" : "存在异常",
           ),
+          probeReport.scope_label ? h("span", { class: "pill pill-neutral" }, probeReport.scope_label) : null,
           probeReport.platform ? h("span", { class: "pill pill-info" }, probeReport.platform) : null,
           probeReport.elapsed_ms != null
             ? h("span", { class: "pill" }, `${probeReport.elapsed_ms} ms`)
@@ -251,7 +253,11 @@ export function createWorkbenchView(store) {
           h(
             "p",
             { class: "kpi-sub" },
-            extCount > 0 ? `含 ${extCount} 个外部联动插件` : "全部使用内置适配器",
+            `${extCount > 0 ? `含 ${extCount} 个外部联动插件` : "全部使用内置适配器"}${
+              (store.groupProfiles || []).some((g) => g.has_override)
+                ? ` · ${(store.groupProfiles || []).filter((g) => g.has_override).length} 个独立分群`
+                : ""
+            }`,
           ),
           h(
             "button",
@@ -442,7 +448,13 @@ export function createWorkbenchView(store) {
             "div",
             null,
             h("h2", { class: "surface-title" }, "链接链路快速诊断"),
-            h("p", { class: "surface-desc" }, "定位解析失败、媒体跳过或卡片渲染问题（只读，不发消息）"),
+            h(
+              "p",
+              { class: "surface-desc" },
+              store.scope
+                ? `当前将按「${store.scopeLabel}」分群配置模拟解析与节点编排（只读，不发消息）`
+                : "定位解析失败、媒体跳过或卡片渲染问题（只读，不发消息）",
+            ),
           ),
         ),
         h(

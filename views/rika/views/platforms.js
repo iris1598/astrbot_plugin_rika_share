@@ -388,6 +388,11 @@ export function createPlatformsView(store) {
     });
     searchInput.value = filterText;
 
+    const isGroup = Boolean(store.scope);
+    const platPendingUnset = Boolean(store.pendingUnset?.has("DISABLED_PLATFORMS"));
+    const platHasOverride =
+      isGroup && Boolean(store.overrideKeys?.has("DISABLED_PLATFORMS")) && !platPendingUnset;
+
     root.appendChild(
       h(
         "section",
@@ -398,12 +403,32 @@ export function createPlatformsView(store) {
           h(
             "div",
             null,
-            h("h2", { class: "surface-title" }, "支持平台开关"),
+            h(
+              "div",
+              { class: "setting-label-row" },
+              h("h2", { class: "surface-title" }, "支持平台开关"),
+              isGroup && platHasOverride
+                ? h("span", { class: "pill pill-info" }, "本群独立")
+                : isGroup
+                  ? h("span", { class: "pill" }, "继承全局")
+                  : null,
+            ),
             h("p", { class: "surface-desc" }, "点击平台卡片即切换启停；外部联动插件安装后会自动出现在此列表"),
           ),
           h(
             "div",
             { class: "btn-group" },
+            isGroup && (platHasOverride || platPendingUnset)
+              ? h(
+                  "button",
+                  {
+                    type: "button",
+                    class: "btn btn-ghost btn-sm",
+                    onclick: () => store.revertKeyToInherit("DISABLED_PLATFORMS"),
+                  },
+                  "恢复继承",
+                )
+              : null,
             h(
               "button",
               {
@@ -453,6 +478,7 @@ export function createPlatformsView(store) {
             h("h2", { class: "surface-title" }, "B站扫码登录与账号凭据"),
             h("p", { class: "surface-desc" }, "支持直接在面板扫码授权 B站并加密落盘（含自动续期凭据），下方也可手动管理 B站与小红书 Cookie"),
           ),
+          isGroup ? h("span", { class: "pill" }, "账号凭据全局共用") : null,
         ),
         renderBiliStatusBox(),
         accountItems.length > 0
@@ -487,6 +513,7 @@ export function createPlatformsView(store) {
               h("h2", { class: "surface-title" }, "画质、代理与发送策略"),
               h("p", { class: "surface-desc" }, "控制视频最大时长、编码偏好、Twitter 反代及 OneBot 合并转发分批上限"),
             ),
+            isGroup ? h("span", { class: "pill" }, "转发上限可分群，画质与代理仅全局") : null,
           ),
           h(
             "div",

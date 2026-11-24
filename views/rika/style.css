@@ -1648,3 +1648,281 @@ body {
     font-size: 12.5px;
   }
 }
+
+
+/* ============================================================
+   Stage 3：分群作用域切换条、全局锁定态 & 输出节点编排器
+   ============================================================ */
+
+.btn-xs {
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+}
+
+.scope-bar {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(var(--blur));
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.scope-bar.is-group-scope {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+  background: color-mix(in srgb, var(--accent-soft) 36%, var(--surface));
+}
+
+.scope-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scope-bar-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.scope-label {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.scope-select {
+  width: auto;
+  min-width: 240px;
+  max-width: 380px;
+}
+
+.scope-tip {
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+
+.scope-bar-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.scope-add-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.scope-add-id {
+  flex: 1.3;
+  min-width: 210px;
+}
+
+.scope-add-label {
+  flex: 1;
+  min-width: 150px;
+}
+
+.setting-item.is-global-locked,
+.layout-theme-grid.is-global-locked,
+.colormode-bar.is-global-locked,
+.node-list.is-global-locked {
+  opacity: 0.62;
+}
+
+.setting-item.is-global-locked input,
+.setting-item.is-global-locked select,
+.setting-item.is-global-locked textarea,
+.layout-theme-grid.is-global-locked button,
+.colormode-bar.is-global-locked button,
+.node-list.is-global-locked button,
+.node-list.is-global-locked input {
+  cursor: not-allowed;
+}
+
+.node-mode-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.node-mode-tabs {
+  flex-shrink: 0;
+}
+
+.mode-custom-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  margin-left: 5px;
+  vertical-align: middle;
+}
+
+.node-mode-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.node-mode-desc {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.node-flow-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  margin-bottom: 12px;
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+}
+
+.node-flow-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.node-flow-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.node-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  transition: border-color 0.14s ease, opacity 0.14s ease;
+}
+
+.node-row.is-merged {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
+}
+
+.node-row.is-disabled {
+  opacity: 0.56;
+}
+
+.node-order-badge {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.node-main {
+  flex: 1;
+  min-width: 210px;
+}
+
+.node-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.node-title {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.node-desc {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.node-subnote {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
+.node-subnote.is-warn {
+  color: var(--warn);
+  font-weight: 500;
+}
+
+.node-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.node-move-group {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.node-move-btn {
+  min-width: 28px;
+  padding: 4px 8px;
+}
+
+.node-switch.is-locked {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
+@media (max-width: 760px) {
+  .scope-select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .node-row {
+    align-items: flex-start;
+  }
+
+  .node-controls {
+    width: 100%;
+    justify-content: space-between;
+  }
+}

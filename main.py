@@ -21,6 +21,7 @@
 """
 
 import asyncio
+import hashlib
 import re
 import time
 from dataclasses import dataclass, field
@@ -35,7 +36,13 @@ from astrbot.api.star import Context, Star, StarTools
 from .link_parser.adapters import iter_adapters
 from .link_parser.adapters._external import register_external_adapters
 from .link_parser.adapters.registry import AdapterBuildContext
-from .link_parser.config import get_config, init_config
+from .link_parser.config import (
+    detect_content_mode,
+    get_config,
+    get_global_config,
+    init_config,
+    scoped_config_for,
+)
 from .link_parser.constants import (
     COVER_COMMAND_PATTERN,
     GENERIC_URL_PATTERN,
@@ -47,11 +54,10 @@ from .link_parser.exceptions import (
     ParseException,
     SilentException,
 )
-from .link_parser.models import ParseResult, VideoContent
+from .link_parser.models import ParseResult
 from .link_parser.output import (
     EventUrlWrapper,
     build_official_card_assets,
-    build_platform_output,
     create_webpage,
     error_result,
     extract_card_link,
@@ -62,15 +68,16 @@ from .link_parser.output import (
     has_json_component,
     is_miniapp_card,
     parse_miniapp_card,
+    plan_output_segments,
     quoted_links,
     quoted_text,
     send_nodes_batched,
     send_plain_output,
-    try_send_media,
     webpage_token_expired,
 )
 from .link_parser.services.bilibili_account import BiliAccountService
 from .link_parser.services.card_render import ShareCardRenderer
+from .link_parser.services.card_render.toolkit import FontBook
 from .link_parser.services.cover import CoverPick, download_cover
 from .link_parser.services.downloader import StreamDownloader
 from .link_parser.services.web_screenshot import (
@@ -208,10 +215,10 @@ class ParserPlugin(Star):
         self._identity_cache: dict[str, str] = {}
         self._cache_cleanup_task: asyncio.Task | None = None
 
-        # ========== 解析图片渲染 ==========
-        self._renderer = self._build_renderer()
-        # 构造参数快照：网页保存配置后据此判断要不要重建渲染器
-        self._renderer_sig = self._renderer_signature()
+        self._renderers: dict[tuple, ShareCardRenderer] = {}
+        self._font_books: dict[str, FontBook] = {}
+        self._renderer_sig = self._renderer_signature(pconfig)
+        self._renderer = self._renderer_for(pconfig)
         if self._renderer.enabled:
             logger.info(
                 f"解析图片渲染已启用 (配色: {pconfig.RENDER_THEME}, "
@@ -231,10 +238,11 @@ class ParserPlugin(Star):
 
         # ========== Cloudflare 截图 Fallback ==========
         self._cloudflare_client: CloudflareScreenshotClient | None = None
-        self._cloudflare_sig = self._cloudflare_signature()
-        if pconfig.CLOUDFLARE_FALLBACK_ENABLED:
+        self._cloudflare_sig = self._cloudflare_signature(pconfig)
+        if self._cloudflare_sig is not None:
             self._cloudflare_client = CloudflareScreenshotClient(pconfig)
-            if self._cloudflare_client.is_configured:
+        if pconfig.CLOUDFLARE_FALLBACK_ENABLED:
+            if self._cloudflare_client and self._cloudflare_client.is_configured:
                 logger.info("Cloudflare 网页截图 Fallback 已启用")
             else:
                 logger.warning(
@@ -267,103 +275,158 @@ class ParserPlugin(Star):
             logger.warning("[link_parser] WebUI 接口注册失败，网页设置页不可用", exc_info=True)
 
     async def apply_runtime_config(self) -> dict[str, Any]:
-        """把刚保存的配置应用到运行中的组件，避免用户还要重载插件。
-
-        ``self.parsers`` 用原地更新的方式重建：B站账号服务持有的是同一个 dict 引用，
-        换成新 dict 会让它继续操作已经被丢弃的解析器。
-        """
+        """把刚保存的配置应用到运行中的组件，避免用户还要重载插件。"""
         result: dict[str, Any] = {}
+        pconfig = get_global_config()
 
-        if self._renderer_signature() != self._renderer_sig:
-            self._renderer = self._build_renderer()
-            self._renderer_sig = self._renderer_signature()
+        sig = self._renderer_signature(pconfig)
+        if sig != self._renderer_sig:
+            self._renderers.clear()
+            self._renderer = self._renderer_for(pconfig)
+            self._renderer_sig = sig
             result["renderer"] = self._renderer.enabled
 
-        pconfig = get_config()
         disabled = pconfig.DISABLED_PLATFORMS
         if disabled != self.disabled_platforms:
             self.disabled_platforms = disabled
-            self.parsers.clear()
-            self._init_parsers()
-            result["platforms"] = sorted(self.parsers)
+        result["platforms"] = sorted(
+            name for name in self.parsers if name not in set(self.disabled_platforms)
+        )
 
-        if self._cloudflare_signature() != self._cloudflare_sig:
-            self._cloudflare_sig = self._cloudflare_signature()
+        cf_sig = self._cloudflare_signature(pconfig)
+        if cf_sig != self._cloudflare_sig:
+            self._cloudflare_sig = cf_sig
             self._cloudflare_client = (
-                CloudflareScreenshotClient(pconfig)
-                if self._cloudflare_sig is not None
-                else None
+                CloudflareScreenshotClient(pconfig) if cf_sig is not None else None
             )
-            result["cloudflare"] = bool(
-                self._cloudflare_client and self._cloudflare_client.is_configured
-            )
+        result["cloudflare"] = bool(
+            pconfig.CLOUDFLARE_FALLBACK_ENABLED
+            and self._cloudflare_client
+            and self._cloudflare_client.is_configured
+        )
 
         return result
 
-    def _cloudflare_signature(self) -> tuple | None:
-        """Cloudflare 截图客户端的构造参数快照（``None`` 表示未启用）。"""
-        pconfig = get_config()
-        if not pconfig.CLOUDFLARE_FALLBACK_ENABLED:
+    def _cloudflare_signature(self, pconfig: Any = None) -> tuple | None:
+        """Cloudflare 截图客户端的凭据与浏览器参数快照（凭据完整时即就绪，供分群开启）。"""
+        cfg = pconfig or get_global_config()
+        if not cfg.CLOUDFLARE_ACCOUNT_ID or not cfg.CLOUDFLARE_API_TOKEN:
             return None
         return (
-            pconfig.CLOUDFLARE_ACCOUNT_ID,
-            pconfig.CLOUDFLARE_API_TOKEN,
-            pconfig.CLOUDFLARE_TIMEOUT,
-            pconfig.CLOUDFLARE_VIEWPORT_WIDTH,
-            pconfig.CLOUDFLARE_VIEWPORT_HEIGHT,
-            pconfig.CLOUDFLARE_WAIT_UNTIL,
-            pconfig.CLOUDFLARE_GOTO_TIMEOUT,
-            pconfig.CLOUDFLARE_FULL_PAGE,
-            pconfig.CLOUDFLARE_DEVICE_SCALE_FACTOR,
-            pconfig.CLOUDFLARE_SCREENSHOT_TYPE,
-            pconfig.CLOUDFLARE_SCREENSHOT_QUALITY,
-            pconfig.CLOUDFLARE_OMIT_BACKGROUND,
-            pconfig.CLOUDFLARE_SELECTOR,
-            pconfig.CLOUDFLARE_WAIT_FOR_SELECTOR,
-            pconfig.CLOUDFLARE_WAIT_FOR_TIMEOUT,
-            pconfig.CLOUDFLARE_USER_AGENT,
-            pconfig.CLOUDFLARE_EXTRA_HEADERS,
-            pconfig.CLOUDFLARE_COOKIES,
-            pconfig.CLOUDFLARE_CACHE_TTL,
+            cfg.CLOUDFLARE_ACCOUNT_ID,
+            cfg.CLOUDFLARE_API_TOKEN,
+            cfg.CLOUDFLARE_TIMEOUT,
+            cfg.CLOUDFLARE_VIEWPORT_WIDTH,
+            cfg.CLOUDFLARE_VIEWPORT_HEIGHT,
+            cfg.CLOUDFLARE_WAIT_UNTIL,
+            cfg.CLOUDFLARE_GOTO_TIMEOUT,
+            cfg.CLOUDFLARE_FULL_PAGE,
+            cfg.CLOUDFLARE_DEVICE_SCALE_FACTOR,
+            cfg.CLOUDFLARE_SCREENSHOT_TYPE,
+            cfg.CLOUDFLARE_SCREENSHOT_QUALITY,
+            cfg.CLOUDFLARE_OMIT_BACKGROUND,
+            cfg.CLOUDFLARE_SELECTOR,
+            cfg.CLOUDFLARE_WAIT_FOR_SELECTOR,
+            cfg.CLOUDFLARE_WAIT_FOR_TIMEOUT,
+            cfg.CLOUDFLARE_USER_AGENT,
+            cfg.CLOUDFLARE_EXTRA_HEADERS,
+            cfg.CLOUDFLARE_COOKIES,
+            cfg.CLOUDFLARE_CACHE_TTL,
         )
+
+    def _renderer_for(self, pconfig: Any = None) -> ShareCardRenderer:
+        """按生效配置获取或懒构造共享字体表的卡片渲染器。"""
+        cfg = pconfig or get_config()
+        sig = self._renderer_signature(cfg)
+        renderer = self._renderers.get(sig)
+        if renderer is not None:
+            return renderer
+        font_key = cfg.RENDER_FONT_PATH or ""
+        font_book = self._font_books.get(font_key)
+        if font_book is None:
+            font_book = FontBook(cfg.RENDER_FONT_PATH or None)
+            if len(self._font_books) >= 8:
+                self._font_books.clear()
+            self._font_books[font_key] = font_book
+        renderer = ShareCardRenderer(
+            self.cache_dir,
+            enabled=cfg.RENDER_ENABLED,
+            width=cfg.RENDER_WIDTH,
+            theme=cfg.RENDER_THEME,
+            font_path=cfg.RENDER_FONT_PATH or None,
+            style=cfg.RENDER_STYLE,
+            cover_full_size=cfg.RENDER_COVER_FULL_SIZE,
+            font_book=font_book,
+        )
+        if len(self._renderers) >= 16:
+            self._renderers.clear()
+        self._renderers[sig] = renderer
+        return renderer
 
     def _build_renderer(self) -> ShareCardRenderer:
-        """按当前配置构造卡片渲染器。"""
-        pconfig = get_config()
-        return ShareCardRenderer(
-            self.cache_dir,
-            enabled=pconfig.RENDER_ENABLED,
-            width=pconfig.RENDER_WIDTH,
-            theme=pconfig.RENDER_THEME,
-            font_path=pconfig.RENDER_FONT_PATH or None,
-            style=pconfig.RENDER_STYLE,
-            cover_full_size=pconfig.RENDER_COVER_FULL_SIZE,
-        )
+        """按当前生效配置构造或获取卡片渲染器。"""
+        return self._renderer_for(get_config())
 
-    def _renderer_signature(self) -> tuple:
-        """渲染器的构造参数快照，用于判断保存配置后是否需要重建。"""
-        pconfig = get_config()
+    def _renderer_signature(self, pconfig: Any = None) -> tuple:
+        """渲染器的构造参数快照。"""
+        cfg = pconfig or get_config()
         return (
-            pconfig.RENDER_ENABLED,
-            pconfig.RENDER_WIDTH,
-            pconfig.RENDER_THEME,
-            pconfig.RENDER_FONT_PATH,
-            pconfig.RENDER_STYLE,
-            pconfig.RENDER_COVER_FULL_SIZE,
+            cfg.RENDER_ENABLED,
+            cfg.RENDER_WIDTH,
+            cfg.RENDER_THEME,
+            cfg.RENDER_FONT_PATH,
+            cfg.RENDER_STYLE,
+            cfg.RENDER_COVER_FULL_SIZE,
         )
 
     def _init_parsers(self) -> None:
-        """按适配器注册表实例化已启用的平台解析器。"""
+        """按适配器注册表实例化全部平台解析器；分群启用状态在调度时动态过滤。"""
         build_context = AdapterBuildContext(
             downloader=self.downloader,
-            config=get_config(),
+            config=get_global_config(),
             config_dir=self.config_dir,
         )
         for spec in iter_adapters():
-            if spec.name in self.disabled_platforms:
-                continue
             self.parsers[spec.name] = spec.create(build_context)
-        logger.info(f"已启用平台: {', '.join(self.parsers.keys())}")
+        enabled = [
+            k for k in self.parsers if k not in set(self.disabled_platforms)
+        ]
+        logger.info(
+            f"已加载适配器 {len(self.parsers)} 个；全局启用平台: {', '.join(enabled)}"
+        )
+
+    @staticmethod
+    def _is_platform_enabled(name: str, pconfig: Any = None) -> bool:
+        cfg = pconfig or get_config()
+        return name not in set(cfg.DISABLED_PLATFORMS)
+
+    @staticmethod
+    def _event_scope_info(event: AstrMessageEvent) -> tuple[str, str, str]:
+        """提取事件所属的 ``(umo, group_id, platform_id)``。"""
+        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        gid = ""
+        pid = ""
+        try:
+            gid = str(event.get_group_id() or "").strip()
+        except Exception:
+            gid = ""
+        try:
+            pid = str(event.get_platform_id() or "").strip()
+        except Exception:
+            pid = ""
+        return umo, gid, pid
+
+    def _enter_event_scope(self, event: AstrMessageEvent):
+        """记录活跃群组并返回绑定的配置作用域上下文管理器。"""
+        umo, gid, pid = self._event_scope_info(event)
+        if umo or gid:
+            try:
+                get_global_config().groups.record_seen_group(
+                    umo, group_id=gid, platform_id=pid
+                )
+            except Exception:
+                logger.debug("[link_parser] 记录活跃群信息失败", exc_info=True)
+        return scoped_config_for(umo=umo, group_id=gid)
 
     async def initialize(self):
         pconfig = get_config()
@@ -405,8 +468,11 @@ class ParserPlugin(Star):
         parser = self.parsers.get(name)
         if not parser:
             return
-        async for r in self._process_url(event, parser):
-            yield r
+        with self._enter_event_scope(event) as pconfig:
+            if not self._is_platform_enabled(name, pconfig):
+                return
+            async for r in self._process_url(event, parser):
+                yield r
 
     # ==================== 平台处理器 ====================
     #
@@ -423,16 +489,19 @@ class ParserPlugin(Star):
         if not links:
             return
         unique_links = list(dict.fromkeys(links))
-        for link in unique_links:
-            for _, parser in self.parsers.items():
-                try:
-                    _, _ = parser.search_url(link)
-                    wrapped = EventUrlWrapper(event, link)
-                    async for r in self._process_url(wrapped, parser):
-                        yield r
-                    return
-                except ParseException:
-                    continue
+        with self._enter_event_scope(event) as pconfig:
+            for link in unique_links:
+                for pname, parser in self.parsers.items():
+                    if not self._is_platform_enabled(pname, pconfig):
+                        continue
+                    try:
+                        _, _ = parser.search_url(link)
+                        wrapped = EventUrlWrapper(event, link)
+                        async for r in self._process_url(wrapped, parser):
+                            yield r
+                        return
+                    except ParseException:
+                        continue
 
     # ==================== 官方机器人分享卡片处理器 ====================
 
@@ -460,51 +529,56 @@ class ParserPlugin(Star):
         fields = parse_miniapp_card(event.message_str)
         if fields is None:
             return
-        # 「图文H5」等带 jump_url 的卡片**优先按链接解析**：链接能被已启用的平台
-        # 认领时交给平台 Handler（其 filter 已命中并先行处理），这里不再按标题
-        # 搜索，避免同一条卡片解析两次；认领不了才回退标题搜索
-        link = extract_card_link(fields)
-        if link:
-            for existing in self.parsers.values():
-                try:
-                    existing.search_url(link)
-                except Exception:
-                    continue
-            return
-        title = extract_card_title(fields)
-        if not title:
-            return
-        # 「小程序」卡片的平台字段是 source，「图文H5」卡片是 tag
-        parser = self._card_source_parser(fields.get("source") or fields.get("tag") or "")
-        search_fn = getattr(parser, "search_video_by_title", None) if parser else None
-        if search_fn is None:
-            return  # 非已支持平台的卡片，或不支持按标题搜索
-        try:
-            url = await search_fn(title)
-        except ParseException as e:
-            result = error_result(event, f"❌ 解析失败: {e.message}")
-            if result is not None:
-                yield result
-            return
-        except Exception:
-            logger.exception("小程序卡片标题搜索异常")
-            result = error_result(event, "❌ 处理出错: 标题搜索失败")
-            if result is not None:
-                yield result
-            return
-        if not url:
-            result = error_result(
-                event,
-                f"❌ 未能在{parser.platform.display_name}找到与「{title[:40]}」匹配的内容",
-            )
-            if result is not None:
-                yield result
-            return
-        logger.info(f"小程序卡片标题搜索命中: {title[:50]} → {url}")
-        # 命中后包装成链接，复用与 JSON 卡片相同的解析主干（缓存 / 渲染 / 输出全一致）
-        wrapped = EventUrlWrapper(event, url)
-        async for r in self._process_url(wrapped, parser):
-            yield r
+        with self._enter_event_scope(event) as pconfig:
+            # 「图文H5」等带 jump_url 的卡片**优先按链接解析**：链接能被已启用的平台
+            # 认领时交给平台 Handler（其 filter 已命中并先行处理），这里不再按标题
+            # 搜索，避免同一条卡片解析两次；认领不了才回退标题搜索
+            link = extract_card_link(fields)
+            if link:
+                for pname, existing in self.parsers.items():
+                    if not self._is_platform_enabled(pname, pconfig):
+                        continue
+                    try:
+                        existing.search_url(link)
+                    except Exception:
+                        continue
+                return
+            title = extract_card_title(fields)
+            if not title:
+                return
+            # 「小程序」卡片的平台字段是 source，「图文H5」卡片是 tag
+            parser = self._card_source_parser(fields.get("source") or fields.get("tag") or "")
+            if parser is not None and not self._is_platform_enabled(parser.platform.name, pconfig):
+                return
+            search_fn = getattr(parser, "search_video_by_title", None) if parser else None
+            if search_fn is None:
+                return  # 非已支持平台的卡片，或不支持按标题搜索
+            try:
+                url = await search_fn(title)
+            except ParseException as e:
+                result = error_result(event, f"❌ 解析失败: {e.message}")
+                if result is not None:
+                    yield result
+                return
+            except Exception:
+                logger.exception("小程序卡片标题搜索异常")
+                result = error_result(event, "❌ 处理出错: 标题搜索失败")
+                if result is not None:
+                    yield result
+                return
+            if not url:
+                result = error_result(
+                    event,
+                    f"❌ 未能在{parser.platform.display_name}找到与「{title[:40]}」匹配的内容",
+                )
+                if result is not None:
+                    yield result
+                return
+            logger.info(f"小程序卡片标题搜索命中: {title[:50]} → {url}")
+            # 命中后包装成链接，复用与 JSON 卡片相同的解析主干（缓存 / 渲染 / 输出全一致）
+            wrapped = EventUrlWrapper(event, url)
+            async for r in self._process_url(wrapped, parser):
+                yield r
 
     # ==================== Cloudflare 截图 Fallback ====================
 
@@ -518,8 +592,11 @@ class ParserPlugin(Star):
             default=pconfig.RENDER_BRAND_NAME or DEFAULT_BRAND_NAME,
         )
 
-    def _is_cloudflare_available(self) -> bool:
-        """Cloudflare 截图 Fallback 是否可用"""
+    def _is_cloudflare_available(self, pconfig: Any = None) -> bool:
+        """Cloudflare 截图 Fallback 是否可用（凭据全局就绪 + 当前作用域已启用）。"""
+        cfg = pconfig or get_config()
+        if not cfg.CLOUDFLARE_FALLBACK_ENABLED:
+            return False
         if self._cloudflare_client is None:
             return False
         return self._cloudflare_client.is_configured
@@ -586,42 +663,45 @@ class ParserPlugin(Star):
         self, event: AstrMessageEvent, matched: re.Match | None = None
     ):
         """通用 URL 兜底处理：不匹配任何适配器的链接 → Cloudflare 网页截图"""
-        if not self._is_cloudflare_available():
-            return
-        # JSON 卡片由 json_card_handler 处理，避免重复
-        if has_json_component(event):
-            return
-        # 官方机器人的小程序卡片（纯文本）由 miniapp_card_handler 处理：
-        # 卡片文本里的 source_logo / preview URL 不是网页，不该被截图
-        if is_miniapp_card(event.message_str):
-            return
+        with self._enter_event_scope(event) as pconfig:
+            if not self._is_cloudflare_available(pconfig):
+                return
+            # JSON 卡片由 json_card_handler 处理，避免重复
+            if has_json_component(event):
+                return
+            # 官方机器人的小程序卡片（纯文本）由 miniapp_card_handler 处理：
+            # 卡片文本里的 source_logo / preview URL 不是网页，不该被截图
+            if is_miniapp_card(event.message_str):
+                return
 
-        # 注意：AstrBot 的 @filter.regex 不传递 match 对象给 handler
-        # 需要自己从 event.message_str 中提取 URL
-        msg = event.message_str.strip()
-        m = GENERIC_URL_PATTERN.search(msg)
-        if not m:
-            return
-        url = m.group(0)
-        # 清理 URL 尾部可能带上的标点
-        url = url.rstrip(".,!?;:)'\"】」》）")
+            # 注意：AstrBot 的 @filter.regex 不传递 match 对象给 handler
+            # 需要自己从 event.message_str 中提取 URL
+            msg = event.message_str.strip()
+            m = GENERIC_URL_PATTERN.search(msg)
+            if not m:
+                return
+            url = m.group(0)
+            # 清理 URL 尾部可能带上的标点
+            url = url.rstrip(".,!?;:)'\"】」》）")
 
-        # 遍历所有已启用的解析器，若已有适配器能处理则跳过
-        for parser in self.parsers.values():
-            try:
-                parser.search_url(url)
-                return  # 已有适配器，让平台专用 handler 处理
-            except Exception:
-                continue
+            # 遍历所有已启用的解析器，若已有适配器能处理则跳过
+            for pname, parser in self.parsers.items():
+                if not self._is_platform_enabled(pname, pconfig):
+                    continue
+                try:
+                    parser.search_url(url)
+                    return  # 已有适配器，让平台专用 handler 处理
+                except Exception:
+                    continue
 
-        # 命中黑名单则跳过 Cloudflare 截图
-        if is_url_blacklisted(url, get_config().CLOUDFLARE_BLACKLIST):
-            logger.info(f"Cloudflare Fallback: URL 命中黑名单，跳过: {url[:80]}")
-            return
+            # 命中黑名单则跳过 Cloudflare 截图
+            if is_url_blacklisted(url, pconfig.CLOUDFLARE_BLACKLIST):
+                logger.info(f"Cloudflare Fallback: URL 命中黑名单，跳过: {url[:80]}")
+                return
 
-        logger.info(f"Cloudflare Fallback: 未匹配适配器，渲染网页截图: {url[:80]}")
-        async for r in self._do_cloudflare_fallback(event, url):
-            yield r
+            logger.info(f"Cloudflare Fallback: 未匹配适配器，渲染网页截图: {url[:80]}")
+            async for r in self._do_cloudflare_fallback(event, url):
+                yield r
 
     # ==================== 核心处理流程 ====================
 
@@ -720,6 +800,31 @@ class ParserPlugin(Star):
             )
         return cache_key, entry
 
+    async def _video_service_url(self, path: Path) -> str | None:
+        """若 AstrBot 配置了 callback_api_base，则将视频注册为 /api/file URL 以兼容跨容器合并转发。"""
+        if not self._get_callback_base():
+            return None
+        try:
+            return await Comp.Video.fromFileSystem(str(path)).register_to_file_service()
+        except Exception:
+            logger.debug(f"[link_parser] 注册合并视频文件服务链接失败: {path.name}", exc_info=True)
+            return None
+
+    async def _emit_proactive_or_yield(
+        self, event: AstrMessageEvent, item: list[Any]
+    ) -> AsyncGenerator[MessageEventResult, None]:
+        """优先主动发送独立图片（防 @ 引用污染），失败或平台不支持时回退事件回复。"""
+        try:
+            sent = await self.context.send_message(
+                event.unified_msg_origin,
+                MessageChain(chain=list(item)),
+            )
+            if sent:
+                return
+        except Exception as e:
+            logger.debug(f"独立图片主动发送回退管线回复: {e}")
+        yield event.chain_result(item)
+
     async def _process_url(
         self, event: AstrMessageEvent, parser: Any
     ) -> AsyncGenerator[MessageEventResult, None]:
@@ -728,12 +833,8 @@ class ParserPlugin(Star):
         try:
             cache_key, entry = await self._resolve_entry(parser, url)
             result = entry.result
+            pconfig = get_config()
 
-            # ========== 音乐卡片模式（外部解析器联动，见 5.14） ==========
-            # 外部解析器按其插件设置（multincm 的 use_music_card）要求发音乐卡片时：
-            # 先发解析卡片（渲染图；未启用/失败时回退文本），再发音乐卡片。
-            # 音乐卡片替代音频：发送后不再走 try_send_media，避免重复发语音。
-            # 平台不支持或构造失败则继续走常规输出（音频内容仍在，回退为语音发送）。
             music_card_spec = result.extra.get("music_card")
             music_card = None
             if music_card_spec:
@@ -747,16 +848,17 @@ class ParserPlugin(Star):
 
             brand_name = await self._resolve_brand_name(event)
 
-            # 根据平台构建：标题头 + 合并转发内容列表
-            header, nodes_content = await build_platform_output(
-                result, result.platform.name, brand_name=brand_name
-            )
+            # 仅当当前内容模式的规则启用了 card 节点时才渲染卡片图
+            mode = detect_content_mode(result)
+            mode_rules = pconfig.NODE_RULES.get(mode) or []
+            card_enabled = any(r.get("id") == "card" and r.get("enabled") for r in mode_rules)
 
-            # 渲染精美解析卡片（失败时 render_path 为 None，自动回退文本输出）
+            renderer = self._renderer_for(pconfig)
+            renderer_sig = self._renderer_signature(pconfig)
             render_path: Path | None = None
-            if self._renderer is not None and self._renderer.enabled:
-                render_cache_key = (self._renderer_sig, brand_name)
-                render_path = await self._renderer.render(
+            if card_enabled and renderer is not None and renderer.enabled:
+                render_cache_key = (renderer_sig, brand_name)
+                render_path = await renderer.render(
                     result,
                     cache_key=cache_key,
                     existing=entry.render_paths.get(render_cache_key),
@@ -767,71 +869,70 @@ class ParserPlugin(Star):
                 if render_path is not None:
                     entry.render_paths[render_cache_key] = render_path
 
-            warnings = result.extra.get("limit_warnings") or []
-            is_video = any(
-                isinstance(c, VideoContent) and not c.is_image_like
-                for c in result.contents
+            is_onebot = self._is_onebot(event)
+            try:
+                chat_platform = event.get_platform_name() or ""
+            except Exception:
+                chat_platform = ""
+
+            plan = await plan_output_segments(
+                result,
+                pconfig=pconfig,
+                is_onebot=is_onebot,
+                chat_platform=chat_platform,
+                brand_name=brand_name,
+                render_path=render_path,
+                music_card=music_card,
+                video_url_resolver=self._video_service_url,
             )
-            # 外部解析器声明「卡片已承载全部信息」（如网易云歌曲 / 歌单）：
-            # 卡片渲染成功时不再重复发送文本输出；渲染关闭或失败时文本仍是信息载体，不受影响
-            suppress_text = bool(result.extra.get("suppress_text_output"))
 
-            if render_path is not None:
-                # 渲染图单独发送（主动发送，不经过事件回复管线，
-                # 避免被 AstrBot 的“回复时引用原消息”设置附加引用回复）
-                try:
-                    sent = await self.context.send_message(
-                        event.unified_msg_origin,
-                        MessageChain().file_image(str(render_path)),
-                    )
-                    if not sent:
-                        logger.warning(f"解析卡片主动发送未找到匹配平台会话: {render_path.name}")
+            rules_digest = hashlib.md5(
+                repr((plan["mode"], plan["rules"], brand_name)).encode("utf-8")
+            ).hexdigest()[:8]
+
+            for seg_idx, seg in enumerate(plan["segments"]):
+                if seg["kind"] == "merge":
+                    if is_onebot:
+                        async for r in send_nodes_batched(
+                            event,
+                            seg["header"] or plan["header"],
+                            seg["items"],
+                            header_inline=bool(seg["header"]),
+                        ):
+                            yield r
                     else:
-                        logger.info(f"解析卡片已单独发送: {render_path.name}")
-                except Exception as e:
-                    logger.warning(f"解析卡片主动发送异常: {e}")
-
-                if is_video or suppress_text:
-                    # 视频 / 外部解析器声明抑制：卡片已承载全部信息（含警告块），
-                    # 不再重复发送文字摘要或警告
-                    header_text = ""
-                    text_items = []
+                        seg_items = list(seg["items"])
+                        seg_header = seg["header"] or plan["header"]
+                        if seg["header"] and seg["has_non_header"]:
+                            seg_items = [
+                                item
+                                for item in seg_items
+                                if not (
+                                    len(item) == 1
+                                    and isinstance(item[0], Comp.Plain)
+                                    and item[0].text == seg["header"]
+                                )
+                            ]
+                        if not seg_items:
+                            seg_items = [[Comp.Plain(seg_header)]]
+                        webpage_key = f"{cache_key}:{rules_digest}:{seg_idx}"
+                        async for r in self._send_text_output(
+                            event, seg_header, seg_items, webpage_key
+                        ):
+                            yield r
                 else:
-                    # 图文 / 动态：保留文字部分与图集图片，按平台规则发送（警告已合并在卡片图中）
-                    header_text = header
-                    text_items = list(nodes_content)
-            else:
-                # 未启用 / 渲染失败：保持原有文本输出逻辑
-                header_text = header
-                text_items = list(nodes_content)
-                for w in warnings:
-                    text_items.append([Comp.Plain(w)])
-
-            if text_items:
-                # 按平台规则发送剩余内容：OneBot 使用合并转发，其他平台转网页链接
-                if self._is_onebot(event):
-                    async for r in send_nodes_batched(event, header_text, text_items):
-                        yield r
-                else:
-                    # 其他平台（QQ Official / Telegram 等）：内容全部转网页，聊天里只发链接
-                    async for r in self._send_text_output(
-                        event, header_text, text_items, cache_key
-                    ):
-                        yield r
-
-            # 音乐卡片在解析卡片之后发送（两者都保留），并替代音频
-            if music_card is not None:
-                logger.info(
-                    f"[link_parser] 发送音乐卡片 ({music_card_spec.get('type')}) "
-                    f"ID={music_card_spec.get('id')}"
-                )
-                yield event.chain_result([music_card])
-                return
-
-            # 单独发送媒体文件（Video / Audio）
-            # 注意：图片已在 Nodes（OneBot）或 send_plain_output（其他平台）中处理
-            async for r in try_send_media(event, result):
-                yield r
+                    nid = seg.get("nid")
+                    if nid == "music_card" and music_card_spec:
+                        logger.info(
+                            f"[link_parser] 发送音乐卡片 ({music_card_spec.get('type')}) "
+                            f"ID={music_card_spec.get('id')}"
+                        )
+                    for item in seg["items"]:
+                        if seg.get("proactive_image"):
+                            async for r in self._emit_proactive_or_yield(event, item):
+                                yield r
+                        else:
+                            yield event.chain_result(item)
 
         except SilentException:
             return  # 匹配不到模式时静默失败，不发送通知
@@ -965,9 +1066,12 @@ class ParserPlugin(Star):
         没被任何已启用解析器认领的链接（普通网页、已关闭的平台）不算命中——
         与其对无关链接回一句「解析失败」，不如让调用方按「没找到」处理。
         """
+        pconfig = get_config()
         for link in links:
             link = link.rstrip(".,!?;:)'\"】」》）")
-            for parser in self.parsers.values():
+            for pname, parser in self.parsers.items():
+                if not self._is_platform_enabled(pname, pconfig):
+                    continue
                 try:
                     parser.search_url(link)
                 except Exception:
@@ -1008,8 +1112,9 @@ class ParserPlugin(Star):
                 )
             return
 
-        async for r in self._download_cover(event):
-            yield r
+        with self._enter_event_scope(event):
+            async for r in self._download_cover(event):
+                yield r
 
     async def _download_cover(
         self, event: AstrMessageEvent

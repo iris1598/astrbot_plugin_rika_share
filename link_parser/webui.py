@@ -26,7 +26,10 @@ from astrbot.api import logger
 from .config import (
     config_meta_payload,
     get_config,
+    get_global_config,
+    normalize_scope_id,
     platform_options,
+    scoped_config_for,
     verify_schema_alignment,
 )
 from .services.card_render import ShareCardRenderer, iter_styles
@@ -232,6 +235,116 @@ def read_schema_problems() -> list[str]:
     return problems
 
 
+def _safe_query_scope() -> str:
+    """读取可选 ``scope`` 查询参数；无绑定请求上下文时返回全局空串。"""
+    try:
+        from astrbot.api.web import request
+
+        return normalize_scope_id(request.query.get("scope"))
+    except Exception:
+        return ""
+
+
+async def _collect_group_catalog(plugin: Any, global_cfg: Any) -> list[dict[str, Any]]:
+    """汇总已保存的分群配置、近期活跃群与 AstrBot 会话库中的已知群组。"""
+    entries: dict[str, dict[str, Any]] = {}
+
+    def _ensure(scope_id: str) -> dict[str, Any]:
+        node = entries.get(scope_id)
+        if node is not None:
+            return node
+        parts = scope_id.split(":", 2)
+        platform_id = parts[0] if len(parts) == 3 else ""
+        gid = parts[2] if len(parts) == 3 else (scope_id.split(":", 1)[1] if scope_id.startswith("group:") else "")
+        node = {
+            "scope_id": scope_id,
+            "label": "",
+            "alias_name": "",
+            "platform_id": platform_id,
+            "group_id": gid,
+            "has_override": False,
+            "override_keys": [],
+            "override_count": 0,
+            "updated_at": "",
+            "last_seen": 0.0,
+        }
+        entries[scope_id] = node
+        return node
+
+    for prof in global_cfg.groups.list_profiles():
+        sid = prof["scope_id"]
+        row = _ensure(sid)
+        row["has_override"] = prof["override_count"] > 0
+        row["override_keys"] = prof["override_keys"]
+        row["override_count"] = prof["override_count"]
+        row["updated_at"] = prof["updated_at"]
+        if prof["label"]:
+            row["label"] = prof["label"]
+
+    for seen in global_cfg.groups.list_seen_groups():
+        sid = normalize_scope_id(seen.get("umo"))
+        if not sid:
+            continue
+        row = _ensure(sid)
+        if seen.get("platform_id") and not row["platform_id"]:
+            row["platform_id"] = seen["platform_id"]
+        if seen.get("group_id") and not row["group_id"]:
+            row["group_id"] = seen["group_id"]
+        if seen.get("name") and not row["alias_name"]:
+            row["alias_name"] = seen["name"]
+        row["last_seen"] = max(row["last_seen"], float(seen.get("last_seen") or 0.0))
+
+    ctx = getattr(plugin, "context", None)
+    db_getter = getattr(ctx, "get_db", None)
+    if callable(db_getter):
+        try:
+            db = db_getter()
+            if db is not None:
+                alias_map: dict[str, str] = {}
+                get_aliases = getattr(db, "get_umo_aliases", None)
+                if callable(get_aliases):
+                    aliases = await get_aliases()
+                    for al in aliases or ():
+                        umo = str(getattr(al, "umo", "") or "").strip()
+                        name = str(
+                            getattr(al, "user_alias", "") or getattr(al, "auto_name", "") or ""
+                        ).strip()
+                        if umo and name:
+                            alias_map[umo] = name
+                            if ":group:" in umo.lower() or ":groupmessage:" in umo.lower():
+                                row = _ensure(umo)
+                                row["alias_name"] = name
+
+                get_convs = getattr(db, "get_all_conversations", None)
+                if callable(get_convs):
+                    convs = await get_convs(page=1, page_size=200)
+                    for cv in convs or ():
+                        umo = str(getattr(cv, "user_id", "") or "").strip()
+                        if umo and (":group:" in umo.lower() or ":groupmessage:" in umo.lower()):
+                            row = _ensure(umo)
+                            if umo in alias_map and not row["alias_name"]:
+                                row["alias_name"] = alias_map[umo]
+        except Exception:
+            logger.debug("[link_parser] 读取 AstrBot 群会话列表失败，跳过合并", exc_info=True)
+
+    result: list[dict[str, Any]] = []
+    for row in entries.values():
+        display = row["label"] or row["alias_name"] or (
+            f"群 {row['group_id']}" if row["group_id"] else row["scope_id"]
+        )
+        row["display_name"] = display
+        result.append(row)
+
+    result.sort(
+        key=lambda item: (
+            0 if item["has_override"] else 1,
+            -float(item.get("last_seen") or 0),
+            item["scope_id"],
+        )
+    )
+    return result
+
+
 class WebUIApi:
     """插件网页控制面板的接口集合。"""
 
@@ -248,6 +361,8 @@ class WebUIApi:
             ("/config", self.get_config, ("GET",), "读取全部配置项与元数据"),
             ("/config", self.save_config, ("POST",), "保存配置项并热更新运行时"),
             ("/config/reset", self.reset_config, ("POST",), "恢复默认配置"),
+            ("/groups", self.groups_list, ("GET",), "列出已知群组及分群覆写状态"),
+            ("/groups", self.groups_manage, ("POST",), "新建、重命名或移除分群配置"),
             ("/overview", self.get_overview, ("GET",), "获取插件运行状态与资源总览"),
             ("/cache/clear", self.clear_cache, ("POST",), "清理插件磁盘与内存缓存"),
             ("/bili/check", self.check_bili_cookie, ("POST",), "立即检测B站Cookie有效性"),
@@ -264,14 +379,23 @@ class WebUIApi:
     # ==================== 总览与运维 ==================== #
 
     async def get_overview(self):
-        pconfig = get_config()
-        renderer = getattr(self.plugin, "_renderer", None)
+        scope = _safe_query_scope()
+        global_cfg = get_global_config()
+        _, pconfig = global_cfg.scoped(umo=scope) if scope else ("", global_cfg)
+        renderer = (
+            self.plugin._renderer_for(pconfig)
+            if hasattr(self.plugin, "_renderer_for")
+            else getattr(self.plugin, "_renderer", None)
+        )
         cf_client = getattr(self.plugin, "_cloudflare_client", None)
         cache_stats = await _collect_cache_stats(self.plugin)
+        configured_groups = sum(1 for p in global_cfg.groups.list_profiles() if p["override_count"] > 0)
 
         return _json_response(
             {
                 "version": _plugin_version(),
+                "scope": scope,
+                "configured_groups": configured_groups,
                 "problems": read_schema_problems(),
                 "platforms": platform_options(pconfig),
                 "styles": _registered_style_cards(),
@@ -565,19 +689,69 @@ class WebUIApi:
             logger.exception("[link_parser] 生成样式列表预览失败")
             return _error(f"样式预览生成失败：{str(exc)[:160]}", status_code=500)
 
-    # ==================== 配置 ==================== #
+    # ==================== 配置与分群管理 ==================== #
 
-    async def get_config(self):
-        pconfig = get_config()
+    async def groups_list(self):
+        global_cfg = get_global_config()
+        catalog = await _collect_group_catalog(self.plugin, global_cfg)
+        return _json_response({"groups": catalog})
+
+    async def groups_manage(self):
+        from astrbot.api.web import request
+
+        body = await request.json(default={}) or {}
+        action = str(body.get("action") or "").strip().lower()
+        scope = normalize_scope_id(body.get("scope") or body.get("scope_id"))
+        if not scope:
+            return _error("请提供有效的群号或 UMO")
+
+        global_cfg = get_global_config()
+        if action == "delete":
+            removed = global_cfg.groups.delete_profile(scope)
+            catalog = await _collect_group_catalog(self.plugin, global_cfg)
+            return _json_response({"removed": removed, "groups": catalog})
+
+        if action in {"create", "upsert", "rename"}:
+            label = body.get("label")
+            _, errors, _ = global_cfg.groups.upsert_overrides(
+                scope,
+                {},
+                label="" if label is None and action == "create" else str(label or ""),
+            )
+            if action == "create" and not global_cfg.groups.get_profile(scope)["label"]:
+                gid = scope.split(":", 2)[-1] if ":" in scope else scope
+                global_cfg.groups.upsert_overrides(scope, {}, label=f"群 {gid}")
+            catalog = await _collect_group_catalog(self.plugin, global_cfg)
+            return _json_response({"scope": scope, "errors": errors, "groups": catalog})
+
+        return _error(f"不支持的群组操作：{action}")
+
+    async def _build_config_response(self, scope: str) -> dict[str, Any]:
+        global_cfg = get_global_config()
+        _, effective_cfg = global_cfg.scoped(umo=scope) if scope else ("", global_cfg)
         payload = config_meta_payload()
-        payload["values"] = pconfig.current_values()
+        payload["scope"] = scope
+        payload["global_values"] = global_cfg.current_values()
+        payload["values"] = effective_cfg.current_values()
+        profile = (
+            global_cfg.groups.get_profile(scope)
+            if scope
+            else {"label": "全局默认", "override_keys": []}
+        )
+        payload["scope_label"] = profile.get("label") or ("全局默认" if not scope else scope)
+        payload["override_keys"] = list(profile.get("override_keys") or [])
+        payload["group_profiles"] = await _collect_group_catalog(self.plugin, global_cfg)
         _ensure_current_style(payload, payload["values"].get("RENDER_STYLE"))
         payload["problems"] = read_schema_problems()
         payload["version"] = _plugin_version()
-        payload["platforms"] = platform_options(pconfig)
+        payload["platforms"] = platform_options(effective_cfg)
         payload["styles"] = _registered_style_cards()
         payload["preview_samples"] = list(PREVIEW_SAMPLE_SPECS)
-        return _json_response(payload)
+        return payload
+
+    async def get_config(self):
+        scope = _safe_query_scope()
+        return _json_response(await self._build_config_response(scope))
 
     async def _apply_and_respond(
         self,
@@ -586,24 +760,37 @@ class WebUIApi:
         errors: list[str],
         *,
         fail_prefix: str,
+        scope: str = "",
     ):
         """同步应用运行时配置并返回标准保存响应。"""
         runtime_ok = True
         runtime: dict[str, Any] = {}
-        if changed:
+        if changed and not scope:
             try:
                 runtime = await self.plugin.apply_runtime_config()
             except Exception as exc:  # noqa: BLE001 - 热更新失败不能吞掉已保存的配置
                 runtime_ok = False
                 logger.warning("[link_parser] 应用新配置失败", exc_info=True)
                 errors.append(f"{fail_prefix}，但运行时热更新失败：{str(exc)[:120]}")
+        global_cfg = get_global_config()
+        _, effective_cfg = global_cfg.scoped(umo=scope) if scope else ("", pconfig)
+        profile = (
+            global_cfg.groups.get_profile(scope)
+            if scope
+            else {"label": "全局默认", "override_keys": []}
+        )
         return _json_response(
             {
+                "scope": scope,
                 "changed": changed,
                 "errors": errors,
                 "runtime_ok": runtime_ok,
                 "runtime": runtime,
-                "values": pconfig.current_values(),
+                "values": effective_cfg.current_values(),
+                "global_values": global_cfg.current_values(),
+                "override_keys": list(profile.get("override_keys") or []),
+                "scope_label": profile.get("label") or ("全局默认" if not scope else scope),
+                "group_profiles": await _collect_group_catalog(self.plugin, global_cfg),
             }
         )
 
@@ -611,21 +798,58 @@ class WebUIApi:
         from astrbot.api.web import request
 
         body = await request.json(default={}) or {}
-        values = body.get("values") if isinstance(body, dict) else None
-        if not isinstance(values, dict) or not values:
+        if not isinstance(body, dict):
+            return _error("提交数据格式无效")
+        scope = normalize_scope_id(body.get("scope"))
+        values = body.get("values") if isinstance(body.get("values"), dict) else {}
+        unset = body.get("unset") if isinstance(body.get("unset"), list) else []
+        label = body.get("label")
+
+        if scope:
+            if not values and not unset and label is None:
+                return _error("没有需要保存的分群配置项")
+            global_cfg = get_global_config()
+            changed, errors, _ = global_cfg.groups.upsert_overrides(
+                scope,
+                values,
+                unset=[str(k) for k in unset],
+                label=str(label) if label is not None else None,
+            )
+            return await self._apply_and_respond(
+                global_cfg, changed, errors, fail_prefix="分群配置已保存", scope=scope
+            )
+
+        if not values:
             return _error("没有需要保存的配置项")
 
-        pconfig = get_config()
+        pconfig = get_global_config()
         changed, errors = pconfig.apply_updates(values)
         return await self._apply_and_respond(
             pconfig, changed, errors, fail_prefix="配置已保存"
         )
 
     async def reset_config(self):
-        pconfig = get_config()
-        changed = pconfig.reset_to_defaults()
+        from astrbot.api.web import request
+
+        body = await request.json(default={}) or {}
+        scope = normalize_scope_id(body.get("scope") if isinstance(body, dict) else "")
+        global_cfg = get_global_config()
+        if scope:
+            removed = global_cfg.groups.delete_profile(scope)
+            return await self._apply_and_respond(
+                global_cfg,
+                ["__reset_group__"] if removed else [],
+                [],
+                fail_prefix="已恢复继承全局默认",
+                scope=scope,
+            )
+
+        changed = global_cfg.reset_to_defaults()
         return await self._apply_and_respond(
-            pconfig, changed, [], fail_prefix="已恢复默认"
+            pconfig=global_cfg,
+            changed=changed,
+            errors=[],
+            fail_prefix="已恢复默认",
         )
 
     # ==================== 链接调试 ==================== #
@@ -647,18 +871,27 @@ class WebUIApi:
 
         download_media = body.get("download_media", True) is not False
         render_card = body.get("render_card", True) is not False
+        scope = normalize_scope_id(body.get("scope"))
 
         try:
-            report = await run_debug_probe(
-                self.plugin,
-                url,
-                download_media=download_media,
-                render_card=render_card,
-            )
+            with scoped_config_for(umo=scope):
+                report = await run_debug_probe(
+                    self.plugin,
+                    url,
+                    download_media=download_media,
+                    render_card=render_card,
+                )
         except Exception as exc:  # noqa: BLE001 - 调试接口本身也不能把栈抛给页面
             logger.exception("[link_parser] 调试流程异常")
             return _error(f"调试流程异常：{str(exc)[:200]}", status_code=500)
-        return _json_response(report.payload())
+        payload = report.payload()
+        payload["scope"] = scope
+        if scope:
+            profile = get_global_config().groups.get_profile(scope)
+            payload["scope_label"] = profile.get("label") or scope
+        else:
+            payload["scope_label"] = ""
+        return _json_response(payload)
 
     async def debug_log(self):
         """下载调试日志文本。``token`` 只允许十六进制，防止目录穿越。"""

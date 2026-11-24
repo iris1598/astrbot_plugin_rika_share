@@ -37,7 +37,7 @@ astrbot_plugin_rika_share/
 ├── docs/                        # 架构备忘（本文）与预览图
 ├── scripts/                     # 独立辅助/回归脚本（输出统一落在 scripts/.out/）
 └── link_parser/
-    ├── config/                  # 配置子包：schema（唯一来源）/ runtime
+    ├── config/                  # 配置子包：schema（唯一来源）/ nodes（分模式节点规则）/ groups（分群稀疏覆写）/ runtime（ContextVar 作用域）
     ├── adapters/                # 平台适配器（自动发现 + priority 排序 + 外部桥接 _external.py）
     ├── models/                  # ParseResult / MediaContent / PathTask / 平台响应模型
     ├── services/                # 流式下载 / 封面 / 实况合成 / B站账号 / CF 截图 / 调试探针 / card_render
@@ -66,8 +66,8 @@ astrbot_plugin_rika_share/
 
 - **数据目录**：`data/plugin_data/astrbot_plugin_rika_share/`（由 `StarTools.get_data_dir` 获取），包含：
   - `cache/`（媒体缓存、渲染卡片 `card_*.png`、CF 截图 `cloudflare_screenshots/`、调试日志 `debug/`）
-  - `webpage/`（非 OneBot 分享页 `.html` 与封面 JPEG）
-  - `config/bilibili_cookies.json`、`bili_cookie_encrypted.json`、`bili_cookie_status.json`、`.bili_cookie_key`
+  - `webpage/`（非 OneBot 分享页 `.html` 与封面 JPEG；复用键含 `:{rules_digest}:{seg_idx}` 以隔离不同节点编排）
+  - `config/group_configs.json`、`bilibili_cookies.json`、`bili_cookie_encrypted.json`、`bili_cookie_status.json`、`.bili_cookie_key`
 - **缓存两级失效**：
   - **内容标识键**（`BaseParser.cache_identity`）：优先命名分组（如 `bvid`/`aweme_id`/`tid`）→ 短链跳转 → URL 去跟踪参数归一化，确保同一内容不同短链共用缓存。
   - **实时数据 TTL**：带实时人数的平台（如 B站 `CACHE_TTL_SECONDS = 300`）超时后重新解析，卡片 `generation + 1` 换新文件名避免覆盖旧图。
@@ -79,11 +79,13 @@ astrbot_plugin_rika_share/
 
 ## 4. 配置契约与 WebUI 受限沙箱备忘
 
-1. **配置单一来源**：`link_parser/config/schema.py` 的 `CONFIG_META` 同时驱动 WebUI 表单、类型校验（`coerce_value`）与 `_conf_schema.json` 一致性自检（`verify_schema_alignment`）。
-2. **动态平台开关为什么用单键 `DISABLED_PLATFORMS`**：AstrBot 在实例化插件前用 `_conf_schema.json` 做完整性校验并剔除未知键，动态注入的 `PLATFORM_*_ENABLED` 键在下次重载时会静默丢失；因此平台列表由注册表动态下发，禁用结果按注册表顺序拼回静态逗号串 `DISABLED_PLATFORMS`。
-3. **WebUI 沙箱约束**：AstrBot 插件 View 运行在 `sandbox="allow-scripts allow-forms allow-downloads"` 的受限 iframe 中（无 `allow-same-origin`），无法依赖 `localStorage` 持久化主题等偏好，须走 Bridge API 保存至后端配置（`WEBUI_THEME` / `WEBUI_COLOR_MODE`），危险操作使用行内确认替代 `window.confirm()`。
-4. **表单控件赋值**：构造 `<textarea>` 与 `<select>` 时必须写 `node.value = ...` DOM 属性，不可用 `setAttribute("value", ...)`（否则 textarea 页面显示空框、保存时清空原配置）。
-5. **官方机器人纯文本卡片与引用下载封面**：
+1. **配置单一来源**：`link_parser/config/schema.py` 的 `CONFIG_META`（51 项 / 11 组，含「输出节点设置」与 `NODE_RULES`）同时驱动 WebUI 表单、类型校验（`coerce_value`）与 `_conf_schema.json` 一致性自检（`verify_schema_alignment`）。根 `.gitignore` 必须使用锚定前缀 `/cache/` 与 `/config/`，切勿屏蔽 `link_parser/config/` 源码包。
+2. **分群稀疏覆写（零重解析代价）**：`link_parser/config/groups.py` 仅允许 `GROUP_OVERRIDABLE_KEYS`（18 项不触发重新解析/下载的参数）存入 `<data_dir>/config/group_configs.json`，匹配优先级为 `精确 UMO > group:<gid> > 通配符`；`config/runtime.py` 通过 `ContextVar`（`_active_config_var` / `scoped_config_for`）在消息入口 `_enter_event_scope` 与 WebUI 调试探测中激活有效配置。`main.py` 保持全量适配器常驻加载，按作用域动态检查 `DISABLED_PLATFORMS`，并用参数元组索引多 `ShareCardRenderer` 缓存（共享同一 `FontBook`），避免切换全局/分群时反复探测系统字体或污染 `_content_cache`。
+3. **分模式输出节点规划与媒体合并规则**：`link_parser/config/nodes.py` 按内容形态分为 `video` / `gallery` / `dynamic` 三种模式，`output/builder.py::plan_output_segments()` 将启用的节点按顺序聚合为连续合并转发段与独立段。OneBot 下 `video.merge=True` 若 AstrBot 已配置 `callback_api_base` 则经文件服务下发 `Video.fromURL`，否则回退 `Video.fromFileSystem`；非 OneBot 平台自动保持 `video` / `audio` 独立发送以维持 `link_parser/output/webpage.py` 不变。`music_card` 强制 `supports_merge=False`（`merge=False`），启用且生效时按排序位置独立发送并自动抑制原生 `audio`。
+4. **动态平台开关为什么用单键 `DISABLED_PLATFORMS`**：AstrBot 在实例化插件前用 `_conf_schema.json` 做完整性校验并剔除未知键，动态注入的 `PLATFORM_*_ENABLED` 键在下次重载时会静默丢失；因此平台列表由注册表动态下发，禁用结果按注册表顺序拼回静态逗号串 `DISABLED_PLATFORMS`。
+5. **WebUI 沙箱约束**：AstrBot 插件 View 运行在 `sandbox="allow-scripts allow-forms allow-downloads"` 的受限 iframe 中（无 `allow-same-origin`），无法依赖 `localStorage` 持久化主题等偏好，须走 Bridge API 保存至后端配置（`WEBUI_THEME` / `WEBUI_COLOR_MODE`），危险操作使用行内确认替代 `window.confirm()`。分群接口包括 `GET/POST /groups` 与支持 `?scope=` 的 `/config`、`/config/reset`、`/overview`、`/debug/run`。
+6. **表单控件赋值**：构造 `<textarea>` 与 `<select>` 时必须写 `node.value = ...` DOM 属性，不可用 `setAttribute("value", ...)`（否则 textarea 页面显示空框、保存时清空原配置）。
+7. **官方机器人纯文本卡片与引用下载封面**：
    - `miniapp_card_handler` 与 `cloudflare_fallback_handler` 通过 `is_miniapp_card` 互斥；带 `jump_url` 的卡片优先让路给平台正则 Handler，纯标题小程序卡片才调用 `search_video_by_title`（带标题去前缀变体与严格标题前缀匹配）。
    - 「下载封面」使用 `@filter.regex` 而非 `@filter.command`（引用别人消息不算唤醒），且**只从被引用消息取链接**（优先框架 `quoted_message`、回退 `Reply` 组件），不猜测会话历史。
 

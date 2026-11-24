@@ -15,7 +15,7 @@ import { createSystemView } from "./views/system.js";
 const TABS = [
   { id: "workbench", label: "总览与诊断", icon: "dashboard", desc: "状态监控与链接测试" },
   { id: "platforms", label: "平台与账号", icon: "platforms", desc: "开关矩阵、凭据与代理" },
-  { id: "studio", label: "卡片工作室", icon: "studio", desc: "样式、人格署名与实时预览" },
+  { id: "studio", label: "卡片工作室", icon: "studio", desc: "样式、节点编排、署名与实时预览" },
   { id: "system", label: "主题与兜底", icon: "sliders", desc: "布局主题与 Cloudflare 兜底" },
 ];
 
@@ -44,8 +44,8 @@ async function boot() {
     const ctx = await bridge.ready();
 
     const [configPayload, overviewPayload] = await Promise.all([
-      bridge.apiGet("config"),
-      bridge.apiGet("overview").catch(() => null),
+      bridge.apiGet("config", { scope: "" }),
+      bridge.apiGet("overview", { scope: "" }).catch(() => null),
     ]);
 
     const tabButtons = new Map();
@@ -54,6 +54,11 @@ async function boot() {
     let activeTitleEl = null;
     let activeDescEl = null;
     let saveStripEl = null;
+    let scopeBarEl = null;
+    let addingGroup = false;
+    let newGroupInput = "";
+    let newGroupLabel = "";
+    let scopeBusy = false;
     let saving = false;
 
     const store = {
@@ -62,18 +67,31 @@ async function boot() {
       context: ctx || {},
       systemIsDark: Boolean(ctx?.isDark),
       meta: configPayload,
+      scope: String(configPayload.scope || ""),
+      scopeLabel: String(configPayload.scope_label || "全局默认"),
+      globalValues: cloneValues(configPayload.global_values || configPayload.values),
+      overrideKeys: new Set(configPayload.override_keys || []),
+      overridableSet: new Set(configPayload.group_overridable_keys || []),
+      pendingUnset: new Set(),
+      groupProfiles: Array.isArray(configPayload.group_profiles) ? configPayload.group_profiles : [],
       draft: cloneValues(configPayload.values),
       overview: overviewPayload,
       activeTab: "workbench",
       showDevKeys: false,
       views: {},
 
+      isOverridable(key) {
+        return store.overridableSet.has(key);
+      },
+
       dirtyKeys() {
         const saved = store.meta?.values || {};
         const changed = [];
         for (const item of store.meta?.items || []) {
-          if (!valuesEqual(store.draft[item.key], saved[item.key])) {
-            changed.push(item.key);
+          const k = item.key;
+          if (store.scope && !store.overridableSet.has(k)) continue;
+          if (store.pendingUnset.has(k) || !valuesEqual(store.draft[k], saved[k])) {
+            changed.push(k);
           }
         }
         return changed;
@@ -95,28 +113,200 @@ async function boot() {
         }
       },
 
+      applyConfigSnapshot(res, { syncTheme = true } = {}) {
+        if (!res) return;
+        if (res.scope !== undefined) {
+          store.scope = String(res.scope || "");
+        }
+        store.scopeLabel = String(res.scope_label || (store.scope ? store.scope : "全局默认"));
+        if (res.values) {
+          store.meta.values = res.values;
+          store.draft = cloneValues(res.values);
+        }
+        if (res.global_values) {
+          store.globalValues = cloneValues(res.global_values);
+        } else if (!store.scope && res.values) {
+          store.globalValues = cloneValues(res.values);
+        }
+        if (Array.isArray(res.override_keys)) {
+          store.overrideKeys = new Set(res.override_keys);
+        } else if (!store.scope) {
+          store.overrideKeys = new Set();
+        }
+        store.pendingUnset.clear();
+        if (Array.isArray(res.group_overridable_keys)) {
+          store.overridableSet = new Set(res.group_overridable_keys);
+        }
+        if (Array.isArray(res.group_profiles)) {
+          store.groupProfiles = res.group_profiles;
+        }
+        if (res.node_schema) {
+          store.meta.node_schema = res.node_schema;
+        }
+        if (Array.isArray(store.meta.platforms)) {
+          const disabledSet = new Set(
+            String(store.meta.values?.DISABLED_PLATFORMS || "")
+              .split(",")
+              .map((s) => s.trim().toLowerCase())
+              .filter(Boolean),
+          );
+          store.meta.platforms = store.meta.platforms.map((p) => ({
+            ...p,
+            enabled: !disabledSet.has(p.name.toLowerCase()),
+          }));
+        }
+        if (syncTheme) {
+          store.applyCurrentTheme();
+        }
+      },
+
       setDraftValue(key, val, { rerender = true } = {}) {
+        if (store.scope && !store.overridableSet.has(key)) {
+          toast("该配置项仅全局生效，请切回「全局默认」修改", "warn");
+          return;
+        }
+        store.pendingUnset.delete(key);
         store.draft[key] = val;
         if (key === "WEBUI_THEME" || key === "WEBUI_COLOR_MODE") {
           store.applyCurrentTheme();
         }
         // 就地更新行脏状态，不摧毁正在输入的 DOM 节点
         const savedVal = store.meta?.values?.[key];
-        const isDirty = !valuesEqual(val, savedVal);
+        const isDirty = store.pendingUnset.has(key) || !valuesEqual(val, savedVal);
         if (typeof document.querySelectorAll === "function") {
           for (const row of document.querySelectorAll(`.setting-item[data-key="${key}"]`)) {
             row.classList.toggle("is-dirty", isDirty);
           }
         }
         renderSaveStrip();
-        if (rerender && key === "RENDER_PERSONA_WATERMARK") {
+        if (rerender && (key === "RENDER_PERSONA_WATERMARK" || key === "NODE_RULES")) {
           store.views.workbench?.sync?.();
+        }
+      },
+
+      revertKeyToInherit(key) {
+        if (!store.scope || !store.overridableSet.has(key)) return;
+        const gVal = store.globalValues?.[key];
+        store.draft[key] = Array.isArray(gVal) ? [...gVal] : gVal;
+        if (store.overrideKeys.has(key)) {
+          store.pendingUnset.add(key);
+        } else {
+          store.pendingUnset.delete(key);
+        }
+        renderSaveStrip();
+        syncAllViews();
+        store.views.studio?.refreshPreview?.();
+      },
+
+      async switchScope(nextScope) {
+        const target = String(nextScope || "").trim();
+        if (target === store.scope) {
+          renderScopeBar();
+          return;
+        }
+        if (store.dirtyKeys().length > 0) {
+          toast("当前作用域有未保存改动，请先保存或点击放弃后再切换", "warn");
+          renderScopeBar();
+          return;
+        }
+        scopeBusy = true;
+        renderScopeBar();
+        try {
+          const [cfgRes, ovRes] = await Promise.all([
+            bridge.apiGet("config", { scope: target }),
+            bridge.apiGet("overview", { scope: target }).catch(() => null),
+          ]);
+          if (cfgRes) {
+            store.applyConfigSnapshot(cfgRes);
+          }
+          if (ovRes) {
+            store.overview = ovRes;
+          }
+          renderSaveStrip();
+          syncAllViews();
+          store.views.studio?.refreshPreview?.();
+          toast(`已切换配置作用域：${store.scopeLabel}`, "info");
+        } catch (err) {
+          toast(`切换作用域失败：${err.message || err}`, "err");
+        } finally {
+          scopeBusy = false;
+          renderScopeBar();
+        }
+      },
+
+      async createGroupScope(rawScope, label) {
+        const trimmed = String(rawScope || "").trim();
+        if (!trimmed) {
+          toast("请输入群号（如 123456）或 UMO 标识", "warn");
+          return false;
+        }
+        if (store.dirtyKeys().length > 0) {
+          toast("当前作用域有未保存改动，请先保存或点击放弃", "warn");
+          return false;
+        }
+        scopeBusy = true;
+        renderScopeBar();
+        try {
+          const res = await bridge.apiPost("groups", {
+            action: "create",
+            scope: trimmed,
+            label: String(label || "").trim(),
+          });
+          if (res?.errors?.length) {
+            toast(res.errors[0], "err");
+            return false;
+          }
+          if (Array.isArray(res?.groups)) {
+            store.groupProfiles = res.groups;
+          }
+          addingGroup = false;
+          newGroupInput = "";
+          newGroupLabel = "";
+          scopeBusy = false;
+          await store.switchScope(res.scope || trimmed);
+          return true;
+        } catch (err) {
+          toast(`添加分群失败：${err.message || err}`, "err");
+          return false;
+        } finally {
+          scopeBusy = false;
+          renderScopeBar();
+        }
+      },
+
+      async deleteGroupScope(targetScope) {
+        const target = String(targetScope || "").trim();
+        if (!target) return;
+        scopeBusy = true;
+        renderScopeBar();
+        try {
+          const res = await bridge.apiPost("groups", { action: "delete", scope: target });
+          if (res?.errors?.length) {
+            toast(res.errors[0], "err");
+            return;
+          }
+          if (Array.isArray(res?.groups)) {
+            store.groupProfiles = res.groups;
+          }
+          if (target === store.scope) {
+            store.pendingUnset.clear();
+            store.draft = cloneValues(store.meta.values);
+            scopeBusy = false;
+            await store.switchScope("");
+          } else {
+            toast("已移除该分群档案", "ok");
+          }
+        } catch (err) {
+          toast(`移除分群档案失败：${err.message || err}`, "err");
+        } finally {
+          scopeBusy = false;
+          renderScopeBar();
         }
       },
 
       async refreshOverview(notify = false) {
         try {
-          store.overview = await bridge.apiGet("overview");
+          store.overview = await bridge.apiGet("overview", { scope: store.scope });
           store.views.workbench?.sync?.();
           if (notify) toast("运行状态已刷新", "ok");
         } catch (err) {
@@ -125,10 +315,12 @@ async function boot() {
       },
 
       discardDraft() {
+        store.pendingUnset.clear();
         store.draft = cloneValues(store.meta.values);
         store.applyCurrentTheme();
         syncAllViews();
         renderSaveStrip();
+        renderScopeBar();
         store.views.studio?.refreshPreview?.();
         toast("已放弃未保存改动", "info");
       },
@@ -140,32 +332,32 @@ async function boot() {
         renderSaveStrip();
         try {
           const payload = {};
-          for (const k of changed) payload[k] = store.draft[k];
-          const res = await bridge.apiPost("config", { values: payload });
-          if (res?.values) {
-            store.meta.values = res.values;
-            store.draft = cloneValues(res.values);
-            if (Array.isArray(store.meta.platforms)) {
-              const disabledSet = new Set(
-                String(res.values.DISABLED_PLATFORMS || "")
-                  .split(",")
-                  .map((s) => s.trim().toLowerCase())
-                  .filter(Boolean),
-              );
-              store.meta.platforms = store.meta.platforms.map((p) => ({
-                ...p,
-                enabled: !disabledSet.has(p.name.toLowerCase()),
-              }));
+          const unset = [];
+          for (const k of changed) {
+            if (store.scope && store.pendingUnset.has(k)) {
+              unset.push(k);
+            } else {
+              payload[k] = store.draft[k];
             }
           }
-          store.applyCurrentTheme();
+          const res = await bridge.apiPost("config", {
+            scope: store.scope,
+            values: payload,
+            ...(unset.length ? { unset } : {}),
+          });
+          if (res?.values) {
+            store.applyConfigSnapshot(res);
+          }
           syncAllViews();
+          renderScopeBar();
           store.refreshOverview(false);
           const errs = res?.errors || [];
           if (errs.length > 0) {
             toast(`保存提醒：${errs[0]}`, "warn", 4800);
+          } else if (store.scope) {
+            toast(`已更新「${store.scopeLabel}」分群设置并热生效`, "ok");
           } else {
-            toast(`已保存 ${res?.changed?.length ?? changed.length} 项设置并热更新`, "ok");
+            toast(`已保存 ${res?.changed?.length ?? changed.length} 项全局设置并热更新`, "ok");
           }
         } catch (err) {
           toast(`保存失败：${err.message || err}`, "err");
@@ -179,16 +371,15 @@ async function boot() {
         saving = true;
         renderSaveStrip();
         try {
-          const res = await bridge.apiPost("config/reset", {});
+          const res = await bridge.apiPost("config/reset", { scope: store.scope });
           if (res?.values) {
-            store.meta.values = res.values;
-            store.draft = cloneValues(res.values);
+            store.applyConfigSnapshot(res);
           }
-          store.applyCurrentTheme();
           syncAllViews();
+          renderScopeBar();
           store.refreshOverview(false);
           store.views.studio?.refreshPreview?.();
-          toast("已恢复全部默认设置", "ok");
+          toast(store.scope ? "已清空本群独立覆写并恢复继承全局" : "已恢复全部默认设置", "ok");
         } catch (err) {
           toast(`恢复默认失败：${err.message || err}`, "err");
         } finally {
@@ -249,8 +440,8 @@ async function boot() {
 
       saveStripEl.appendChild(
         createInlineConfirmButton({
-          label: "恢复默认",
-          confirmLabel: "确认重置",
+          label: store.scope ? "清空覆写" : "恢复默认",
+          confirmLabel: store.scope ? "确认清空" : "确认重置",
           variant: "ghost",
           size: "sm",
           onConfirm: () => store.resetConfig(),
@@ -327,6 +518,194 @@ async function boot() {
     activeTitleEl = h("h1", { class: "stage-title" }, TABS[0].label);
     activeDescEl = h("p", { class: "stage-sub" }, TABS[0].desc);
     saveStripEl = h("div", { class: "save-strip" });
+    scopeBarEl = h("section", { class: "scope-bar", "aria-label": "分群配置作用域" });
+
+    function renderScopeBar() {
+      if (!scopeBarEl) return;
+      clear(scopeBarEl);
+
+      const profiles = Array.isArray(store.groupProfiles) ? store.groupProfiles : [];
+      const overridden = profiles.filter((p) => p.has_override);
+      const known = profiles.filter((p) => !p.has_override);
+      const inProfiles = profiles.some((p) => p.scope_id === store.scope);
+
+      const selectEl = h(
+        "select",
+        {
+          class: "ctrl-input ctrl-sm scope-select",
+          disabled: scopeBusy || saving,
+          onchange: (e) => store.switchScope(e.target.value),
+        },
+        h("option", { value: "" }, "全局默认（所有未单独配置的群）"),
+        overridden.length > 0
+          ? h(
+              "optgroup",
+              { label: "已独立配置的分群" },
+              overridden.map((p) =>
+                h(
+                  "option",
+                  { value: p.scope_id },
+                  `${p.display_name || p.scope_id}（独立 ${p.override_count || 0} 项 · ${p.scope_id}）`,
+                ),
+              ),
+            )
+          : null,
+        known.length > 0
+          ? h(
+              "optgroup",
+              { label: "已知 / 活跃群聊" },
+              known.map((p) =>
+                h(
+                  "option",
+                  { value: p.scope_id },
+                  `${p.display_name || p.scope_id}（${p.scope_id}）`,
+                ),
+              ),
+            )
+          : null,
+        store.scope && !inProfiles
+          ? h("option", { value: store.scope }, `${store.scopeLabel}（${store.scope}）`)
+          : null,
+      );
+      selectEl.value = store.scope;
+
+      const statusBadge = store.scope
+        ? h(
+            "span",
+            { class: `pill ${store.overrideKeys.size > 0 ? "pill-info" : ""}` },
+            store.overrideKeys.size > 0
+              ? `本群独立 ${store.overrideKeys.size} 项`
+              : "继承全局（尚未单独覆盖）",
+          )
+        : h(
+            "span",
+            { class: `pill ${overridden.length > 0 ? "pill-info" : ""}` },
+            overridden.length > 0 ? `已单独配置 ${overridden.length} 个分群` : "全局生效",
+          );
+
+      scopeBarEl.classList.toggle("is-group-scope", Boolean(store.scope));
+      scopeBarEl.appendChild(
+        h(
+          "div",
+          { class: "scope-bar-row" },
+          h(
+            "div",
+            { class: "scope-bar-left" },
+            h("span", { class: "scope-label" }, "作用域"),
+            selectEl,
+            statusBadge,
+            store.scope
+              ? h(
+                  "span",
+                  { class: "scope-tip" },
+                  "仅分群可覆写零重解析代价项，账号凭据/清晰度/代理/布局主题锁定为全局",
+                )
+              : null,
+          ),
+          h(
+            "div",
+            { class: "scope-bar-actions" },
+            store.scope
+              ? h(
+                  "button",
+                  {
+                    type: "button",
+                    class: "btn btn-ghost btn-sm",
+                    disabled: scopeBusy,
+                    onclick: () => store.switchScope(""),
+                  },
+                  "返回全局",
+                )
+              : null,
+            h(
+              "button",
+              {
+                type: "button",
+                class: "btn btn-soft btn-sm",
+                disabled: scopeBusy,
+                onclick: () => {
+                  addingGroup = !addingGroup;
+                  renderScopeBar();
+                },
+              },
+              addingGroup ? "收起添加" : "+ 添加分群",
+            ),
+            store.scope
+              ? createInlineConfirmButton({
+                  label: "移除档案",
+                  confirmLabel: "确认移除",
+                  variant: "ghost",
+                  size: "sm",
+                  onConfirm: () => store.deleteGroupScope(store.scope),
+                })
+              : null,
+          ),
+        ),
+      );
+
+      if (addingGroup) {
+        const idInp = h("input", {
+          type: "text",
+          class: "ctrl-input ctrl-sm mono scope-add-id",
+          placeholder: "群号（如 123456）或 UMO（如 napcat:GroupMessage:123456）",
+          oninput: (e) => {
+            newGroupInput = e.target.value;
+          },
+          onkeydown: (e) => {
+            if (e.key === "Enter" && !scopeBusy) {
+              store.createGroupScope(newGroupInput, newGroupLabel);
+            }
+          },
+        });
+        idInp.value = newGroupInput;
+        const labelInp = h("input", {
+          type: "text",
+          class: "ctrl-input ctrl-sm scope-add-label",
+          placeholder: "群备注名称（可选，如 测试群）",
+          oninput: (e) => {
+            newGroupLabel = e.target.value;
+          },
+          onkeydown: (e) => {
+            if (e.key === "Enter" && !scopeBusy) {
+              store.createGroupScope(newGroupInput, newGroupLabel);
+            }
+          },
+        });
+        labelInp.value = newGroupLabel;
+
+        scopeBarEl.appendChild(
+          h(
+            "div",
+            { class: "scope-add-form" },
+            idInp,
+            labelInp,
+            h(
+              "button",
+              {
+                type: "button",
+                class: "btn btn-primary btn-sm",
+                disabled: scopeBusy,
+                onclick: () => store.createGroupScope(newGroupInput, newGroupLabel),
+              },
+              scopeBusy ? "创建中…" : "创建并切换",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                class: "btn btn-ghost btn-sm",
+                disabled: scopeBusy,
+                onclick: () => {
+                  addingGroup = false;
+                  renderScopeBar();
+                },
+              },
+              "取消",
+            ),
+          ),
+        );
+      }
+    }
 
     const topHeader = h(
       "header",
@@ -382,10 +761,11 @@ async function boot() {
       "div",
       { class: "app-shell" },
       sidebar,
-      h("div", { class: "shell-content" }, topHeader, mainStage),
+      h("div", { class: "shell-content" }, topHeader, scopeBarEl, mainStage),
     );
 
     store.applyCurrentTheme();
+    renderScopeBar();
     renderSaveStrip();
     clear(mount);
     mount.appendChild(shell);

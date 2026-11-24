@@ -35,7 +35,7 @@ from astrbot.api import logger
 from ..config import get_config
 from ..exceptions import IgnoreException, ParseException, SilentException
 from ..models import ImageContent, VideoContent
-from ..output import build_platform_output
+from ..output import plan_output_segments
 
 #: 报告里要打码的配置项（值是 Cookie / Token，不能出现在可下载的日志里）
 _SECRET_KEYS = ("BILI_CK", "XHS_CK", "CLOUDFLARE_API_TOKEN")
@@ -391,8 +391,17 @@ async def _run_pipeline(
     async def _detect() -> Any:
         if not plugin.parsers:
             raise ParseException("没有任何已启用的解析器（检查「解析器开关」）")
+        pconfig = _safe_config()
+        disabled_set = set(
+            pconfig.DISABLED_PLATFORMS
+            if pconfig is not None
+            else getattr(plugin, "disabled_platforms", ())
+        )
         attempts: list[str] = []
         for name, parser in plugin.parsers.items():
+            if name in disabled_set:
+                attempts.append(f"{name}(已关闭)")
+                continue
             try:
                 parser.search_url(url)
             except (ParseException, SilentException):
@@ -458,7 +467,9 @@ async def _run_pipeline(
         steps.append(DebugStep("媒体下载", "skip", "已按选项跳过", 0))
 
     # ---------- 5. 卡片渲染 ----------
-    renderer = getattr(plugin, "_renderer", None)
+    renderer_fn = getattr(plugin, "_renderer_for", None)
+    renderer = renderer_fn(_safe_config()) if callable(renderer_fn) else getattr(plugin, "_renderer", None)
+    rendered_path: Path | None = None
     if not render_card:
         events.info("[跳过] 卡片渲染：已按选项跳过")
         steps.append(DebugStep("卡片渲染", "skip", "已按选项跳过", 0))
@@ -467,7 +478,7 @@ async def _run_pipeline(
         steps.append(DebugStep("卡片渲染", "skip", "渲染未启用（或 Pillow 缺失）", 0))
     else:
         # cache_key 带上本次会话标识，卡片文件名唯一 —— 不会覆盖真正发出去的那张
-        rendered = await _step(
+        rendered_path = await _step(
             steps,
             events,
             "卡片渲染",
@@ -475,19 +486,31 @@ async def _run_pipeline(
             fatal=False,
             detail_of=lambda p: _file_info(p) if p else "返回 None（失败详情见日志）",
         )
-        summary["卡片文件"] = _file_info(rendered) if rendered else "未生成"
+        summary["卡片文件"] = _file_info(rendered_path) if rendered_path else "未生成"
 
     # ---------- 6. 输出构建 ----------
+    async def _build_out() -> dict[str, Any]:
+        return await plan_output_segments(
+            result,
+            pconfig=_safe_config(),
+            is_onebot=True,
+            render_path=rendered_path,
+        )
+
     built = await _step(
         steps,
         events,
         "输出构建",
-        lambda: build_platform_output(result, platform_name),
+        _build_out,
         fatal=False,
-        detail_of=lambda v: f"header={v[0]!r}，节点 {len(v[1])} 组",
+        detail_of=lambda v: (
+            f"模式={v['mode']} · 分段 {len(v['segments'])} 组 · "
+            f"合并节点 {sum(len(s['items']) for s in v['segments'] if s['kind'] == 'merge')} 条"
+        ),
     )
     if built:
-        summary["消息头"] = built[0]
+        summary["内容模式"] = built["mode"]
+        summary["消息头"] = built["header"]
 
     # ---------- 7. Cloudflare 兜底判断 ----------
     await _cloudflare_step(plugin, url, steps, events, summary)
@@ -652,14 +675,24 @@ def _write_report(plugin: Any, token: str, text: str) -> Path:
 
 def _environment_lines(plugin: Any) -> list[str]:
     pconfig = _safe_config()
+    disabled = (
+        pconfig.DISABLED_PLATFORMS
+        if pconfig is not None
+        else getattr(plugin, "disabled_platforms", []) or []
+    )
+    active_platforms = [
+        name for name in getattr(plugin, "parsers", {})
+        if name not in set(disabled)
+    ]
     lines = [
         f"Python      : {sys.version.split()[0]} ({_platform.system()} {_platform.release()})",
         f"插件数据目录: {Path(plugin.cache_dir).parent}",
         f"缓存目录    : {plugin.cache_dir}",
-        f"已启用平台  : {', '.join(plugin.parsers) or '（无）'}",
-        f"已禁用平台  : {', '.join(getattr(plugin, 'disabled_platforms', []) or []) or '（无）'}",
+        f"已启用平台  : {', '.join(active_platforms) or '（无）'}",
+        f"已禁用平台  : {', '.join(disabled) or '（无）'}",
     ]
-    renderer = getattr(plugin, "_renderer", None)
+    renderer_fn = getattr(plugin, "_renderer_for", None)
+    renderer = renderer_fn() if callable(renderer_fn) else getattr(plugin, "_renderer", None)
     if renderer is not None:
         lines.append(
             f"卡片渲染    : {'开' if renderer.enabled else '关'}"

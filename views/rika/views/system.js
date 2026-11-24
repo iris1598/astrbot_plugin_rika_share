@@ -54,6 +54,7 @@ export function createSystemView(store) {
     clear(root);
     const map = itemsMap();
     const showKey = Boolean(store.showDevKeys);
+    const isGroup = Boolean(store.scope);
     const themes = listThemes();
     const activeThemeId = String(store.draft.WEBUI_THEME || "studio").toLowerCase();
     const colorMode = normalizeColorMode(store.draft.WEBUI_COLOR_MODE);
@@ -72,19 +73,26 @@ export function createSystemView(store) {
             h("h2", { class: "surface-title" }, "网页布局主题与空间架构"),
             h("p", { class: "surface-desc" }, "不只是配色差异：不同主题会重排页面导航形态、容器景深与留白节奏；点击即刻体验"),
           ),
-          h("span", { class: "pill pill-info" }, `已注册 ${themes.length} 套布局`),
+          h(
+            "div",
+            { class: "btn-group" },
+            isGroup ? h("span", { class: "pill" }, "布局主题仅全局生效") : null,
+            h("span", { class: "pill pill-info" }, `已注册 ${themes.length} 套布局`),
+          ),
         ),
         h(
           "div",
-          { class: "layout-theme-grid" },
+          { class: `layout-theme-grid ${isGroup ? "is-global-locked" : ""}` },
           themes.map((t) => {
             const active = t.id === activeThemeId || (!themes.some((x) => x.id === activeThemeId) && t.id === themes[0]?.id);
             return h(
               "button",
               {
                 type: "button",
+                disabled: isGroup,
                 class: `layout-theme-card ${active ? "is-active" : ""}`,
                 onclick: () => {
+                  if (isGroup) return;
                   store.setDraftValue("WEBUI_THEME", t.id);
                   render();
                 },
@@ -107,14 +115,16 @@ export function createSystemView(store) {
         ),
         h(
           "div",
-          { class: "colormode-bar" },
+          { class: `colormode-bar ${isGroup ? "is-global-locked" : ""}` },
           COLOR_MODES.map((m) =>
             h(
               "button",
               {
                 type: "button",
+                disabled: isGroup,
                 class: `colormode-opt ${colorMode === m.id ? "is-active" : ""}`,
                 onclick: () => {
+                  if (isGroup) return;
                   store.setDraftValue("WEBUI_COLOR_MODE", m.id);
                   render();
                 },
@@ -162,6 +172,7 @@ export function createSystemView(store) {
             h("h2", { class: "surface-title" }, "未适配网页截图兜底（Cloudflare）"),
             h("p", { class: "surface-desc" }, "对未知网站发送 Cloudflare Browser Rendering 渲染截图；常用项外的高级参数默认收起"),
           ),
+          isGroup ? h("span", { class: "pill" }, "兜底开关与黑名单可分群，账号凭据仅全局") : null,
         ),
         h(
           "div",

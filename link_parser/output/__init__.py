@@ -9,7 +9,9 @@
 """
 
 from .builder import (
+    build_header_text,
     build_platform_output,
+    plan_output_segments,
     send_nodes_batched,
     send_plain_output,
     try_send_media,
@@ -41,6 +43,7 @@ from .webpage import (
 
 __all__ = [
     "EventUrlWrapper",
+    "build_header_text",
     "build_official_card_assets",
     "build_platform_output",
     "create_webpage",
@@ -54,6 +57,7 @@ __all__ = [
     "has_json_component",
     "is_miniapp_card",
     "parse_miniapp_card",
+    "plan_output_segments",
     "quoted_links",
     "quoted_text",
     "send_nodes_batched",

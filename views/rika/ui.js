@@ -228,9 +228,18 @@ export function createInlineConfirmButton({
 /** 根据 CONFIG_META 条目构建标准化控件，内置 DOM 属性安全赋值与可选底层键名显示 */
 export function buildControlRow(store, item, options = {}) {
   const { showKey = false, full = false, secretState = null, onAfterChange = null } = options;
+  const isGroup = Boolean(store.scope);
+  const overridable = !isGroup || Boolean(store.isOverridable?.(item.key));
+  const locked = isGroup && !overridable;
   const val = store.draft[item.key];
   const savedVal = store.meta?.values?.[item.key];
-  const dirty = !valuesEqual(val, savedVal);
+  const pendingUnset = Boolean(store.pendingUnset?.has(item.key));
+  const hasOverride =
+    isGroup &&
+    overridable &&
+    Boolean(store.overrideKeys?.has(item.key)) &&
+    !pendingUnset;
+  const dirty = !locked && (pendingUnset || !valuesEqual(val, savedVal));
 
   let controlEl;
   if (item.type === "bool") {
@@ -345,9 +354,33 @@ export function buildControlRow(store, item, options = {}) {
       : inp;
   }
 
+  const tags = [];
+  if (showKey) tags.push(h("code", { class: "dev-key" }, item.key));
+  if (locked) tags.push(h("span", { class: "pill scope-pill-global" }, "仅全局"));
+  else if (hasOverride) tags.push(h("span", { class: "pill pill-info scope-pill-group" }, "本群独立"));
+  if (dirty) tags.push(h("span", { class: "dirty-pill" }, pendingUnset ? "将恢复继承" : "已更改"));
+  if (isGroup && overridable && (hasOverride || dirty)) {
+    tags.push(
+      h(
+        "button",
+        {
+          type: "button",
+          class: "btn btn-ghost btn-xs scope-revert-btn",
+          onclick: () => {
+            store.revertKeyToInherit?.(item.key);
+            onAfterChange?.();
+          },
+        },
+        "恢复继承",
+      ),
+    );
+  }
   const row = h(
     "div",
-    { class: `setting-item ${full || item.type === "list" || item.type === "text" || item.secret ? "is-wide" : ""} ${dirty ? "is-dirty" : ""}`, dataset: { key: item.key } },
+    {
+      class: `setting-item ${full || item.type === "list" || item.type === "text" || item.secret ? "is-wide" : ""} ${dirty ? "is-dirty" : ""} ${locked ? "is-global-locked" : ""}`,
+      dataset: { key: item.key },
+    },
     h(
       "div",
       { class: "setting-meta" },
@@ -355,12 +388,16 @@ export function buildControlRow(store, item, options = {}) {
         "div",
         { class: "setting-label-row" },
         h("span", { class: "setting-label" }, item.label || item.key),
-        showKey ? h("code", { class: "dev-key" }, item.key) : null,
-        dirty ? h("span", { class: "dirty-pill" }, "已更改") : null,
+        ...tags,
       ),
       item.hint ? h("p", { class: "setting-hint" }, item.hint) : null,
     ),
     h("div", { class: "setting-ctrl" }, controlEl),
   );
+  if (locked) {
+    for (const el of row.querySelectorAll("input, select, textarea")) {
+      el.disabled = true;
+    }
+  }
   return row;
 }

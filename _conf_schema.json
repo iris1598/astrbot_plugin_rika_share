@@ -181,6 +181,22 @@
       }
     }
   },
+  "输出节点设置": {
+    "type": "object",
+    "description": "按视频 / 图文 / 动态模式自定义各节点开关、顺序与是否放入合并转发",
+    "invisible": true,
+    "items": {
+      "NODE_RULES": {
+        "description": "解析输出节点规则(JSON)",
+        "type": "text",
+        "default": "",
+        "editor_mode": true,
+        "editor_language": "json",
+        "hint": "留空使用内置三模式预设；通常在插件 WebUI 控制中心可视化调整",
+        "invisible": true
+      }
+    }
+  },
   "网页分享设置": {
     "type": "object",
     "description": "非 OneBot 平台将合并转发转为网页链接发送",

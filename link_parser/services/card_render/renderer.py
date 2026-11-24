@@ -59,6 +59,7 @@ class ShareCardRenderer:
         layout: str | None = None,
         cover_full_size: bool = False,
         style: str | None = None,
+        font_book: FontBook | None = None,
     ):
         self.cache_dir = cache_dir
         self.enabled = enabled and Image is not None and bool(iter_styles())
@@ -69,7 +70,11 @@ class ShareCardRenderer:
         self.style_name = requested or DEFAULT_STYLE
         self.font_path = font_path
         self.cover_full_size = cover_full_size
-        self._font_book = FontBook(font_path)
+        self._font_book = (
+            font_book
+            if font_book is not None and getattr(font_book, "font_path", None) == font_path
+            else FontBook(font_path)
+        )
         if get_style(self.style_name) is None:
             logger.warning(
                 f"[link_parser] 卡片样式 {self.style_name!r} 未注册，"
