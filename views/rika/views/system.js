@@ -1,4 +1,4 @@
-import { buildControlRow, clear, h } from "../ui.js";
+import { buildControlRow, h, swapContent } from "../ui.js";
 import { listThemes, normalizeColorMode } from "../themes/index.js";
 
 const COLOR_MODES = [
@@ -51,16 +51,72 @@ export function createSystemView(store) {
   }
 
   function render() {
-    clear(root);
     const map = itemsMap();
     const showKey = Boolean(store.showDevKeys);
     const isGroup = Boolean(store.scope);
     const themes = listThemes();
     const activeThemeId = String(store.draft.WEBUI_THEME || "studio").toLowerCase();
     const colorMode = normalizeColorMode(store.draft.WEBUI_COLOR_MODE);
+    const sections = [];
+
+    const themeGridEl = h("div", { class: `layout-theme-grid ${isGroup ? "is-global-locked" : ""}` });
+    const colorBarEl = h("div", { class: `colormode-bar ${isGroup ? "is-global-locked" : ""}` });
+
+    const themeCards = themes.map((t) => {
+      const active =
+        t.id === activeThemeId || (!themes.some((x) => x.id === activeThemeId) && t.id === themes[0]?.id);
+      const cardBtn = h(
+        "button",
+        {
+          type: "button",
+          disabled: isGroup,
+          class: `layout-theme-card ${active ? "is-active" : ""}`,
+          onclick: () => {
+            if (isGroup) return;
+            store.setDraftValue("WEBUI_THEME", t.id);
+            for (const c of themeCards) c.btn.classList.toggle("is-active", c.id === t.id);
+          },
+        },
+        buildLayoutWireframe(t),
+        h(
+          "div",
+          { class: "layout-theme-body" },
+          h(
+            "div",
+            { class: "layout-theme-top" },
+            h("strong", null, t.name),
+            t.badge ? h("span", { class: "pill pill-neutral" }, t.badge) : null,
+          ),
+          h("div", { class: "layout-theme-sub" }, t.subtitle || t.layout),
+          h("p", { class: "layout-theme-desc" }, t.description),
+        ),
+      );
+      themeGridEl.appendChild(cardBtn);
+      return { id: t.id, btn: cardBtn };
+    });
+
+    const colorBtns = COLOR_MODES.map((m) => {
+      const btn = h(
+        "button",
+        {
+          type: "button",
+          disabled: isGroup,
+          class: `colormode-opt ${colorMode === m.id ? "is-active" : ""}`,
+          onclick: () => {
+            if (isGroup) return;
+            store.setDraftValue("WEBUI_COLOR_MODE", m.id);
+            for (const b of colorBtns) b.el.classList.toggle("is-active", b.id === m.id);
+          },
+        },
+        h("strong", null, m.label),
+        h("span", null, m.hint),
+      );
+      colorBarEl.appendChild(btn);
+      return { id: m.id, el: btn };
+    });
 
     // 1. 网页结构布局与主题系统
-    root.appendChild(
+    sections.push(
       h(
         "section",
         { class: "surface-panel" },
@@ -80,60 +136,8 @@ export function createSystemView(store) {
             h("span", { class: "pill pill-info" }, `已注册 ${themes.length} 套布局`),
           ),
         ),
-        h(
-          "div",
-          { class: `layout-theme-grid ${isGroup ? "is-global-locked" : ""}` },
-          themes.map((t) => {
-            const active = t.id === activeThemeId || (!themes.some((x) => x.id === activeThemeId) && t.id === themes[0]?.id);
-            return h(
-              "button",
-              {
-                type: "button",
-                disabled: isGroup,
-                class: `layout-theme-card ${active ? "is-active" : ""}`,
-                onclick: () => {
-                  if (isGroup) return;
-                  store.setDraftValue("WEBUI_THEME", t.id);
-                  render();
-                },
-              },
-              buildLayoutWireframe(t),
-              h(
-                "div",
-                { class: "layout-theme-body" },
-                h(
-                  "div",
-                  { class: "layout-theme-top" },
-                  h("strong", null, t.name),
-                  t.badge ? h("span", { class: "pill pill-neutral" }, t.badge) : null,
-                ),
-                h("div", { class: "layout-theme-sub" }, t.subtitle || t.layout),
-                h("p", { class: "layout-theme-desc" }, t.description),
-              ),
-            );
-          }),
-        ),
-        h(
-          "div",
-          { class: `colormode-bar ${isGroup ? "is-global-locked" : ""}` },
-          COLOR_MODES.map((m) =>
-            h(
-              "button",
-              {
-                type: "button",
-                disabled: isGroup,
-                class: `colormode-opt ${colorMode === m.id ? "is-active" : ""}`,
-                onclick: () => {
-                  if (isGroup) return;
-                  store.setDraftValue("WEBUI_COLOR_MODE", m.id);
-                  render();
-                },
-              },
-              h("strong", null, m.label),
-              h("span", null, m.hint),
-            ),
-          ),
-        ),
+        themeGridEl,
+        colorBarEl,
         h(
           "details",
           { class: "dev-hint-drawer" },
@@ -159,7 +163,7 @@ export function createSystemView(store) {
     // 2. Cloudflare 网页截图兜底
     const cfBasics = CF_BASIC_KEYS.map((k) => map.get(k)).filter(Boolean);
     const cfAdvanced = (store.meta?.items || []).filter((it) => it.tier === "advanced");
-    root.appendChild(
+    sections.push(
       h(
         "section",
         { class: "surface-panel" },
@@ -177,9 +181,7 @@ export function createSystemView(store) {
         h(
           "div",
           { class: "settings-list two-col" },
-          cfBasics.map((it) =>
-            buildControlRow(store, it, { showKey, secretState: secrets, onAfterChange: render }),
-          ),
+          cfBasics.map((it) => buildControlRow(store, it, { showKey, secretState: secrets })),
         ),
         cfAdvanced.length > 0
           ? h(
@@ -201,7 +203,7 @@ export function createSystemView(store) {
                 "div",
                 { class: "settings-list two-col" },
                 cfAdvanced.map((it) =>
-                  buildControlRow(store, it, { showKey, secretState: secrets, onAfterChange: render }),
+                  buildControlRow(store, it, { showKey, secretState: secrets }),
                 ),
               ),
             )
@@ -211,7 +213,7 @@ export function createSystemView(store) {
 
     // 3. 日志与界面开发者选项
     const logItems = LOG_KEYS.map((k) => map.get(k)).filter(Boolean);
-    root.appendChild(
+    sections.push(
       h(
         "section",
         { class: "surface-panel" },
@@ -228,7 +230,7 @@ export function createSystemView(store) {
         h(
           "div",
           { class: "settings-list two-col" },
-          logItems.map((it) => buildControlRow(store, it, { showKey, onAfterChange: render })),
+          logItems.map((it) => buildControlRow(store, it, { showKey })),
           h(
             "div",
             { class: "setting-item" },
@@ -259,6 +261,7 @@ export function createSystemView(store) {
         ),
       ),
     );
+    swapContent(root, sections);
   }
 
   render();

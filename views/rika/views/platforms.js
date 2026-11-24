@@ -1,4 +1,4 @@
-import { buildControlRow, clear, h } from "../ui.js";
+import { buildControlRow, clear, h, swapContent, valuesEqual } from "../ui.js";
 
 const ACCOUNT_KEYS = [
   "BILI_CK",
@@ -38,12 +38,17 @@ function parseDisabledSet(raw) {
 
 export function createPlatformsView(store) {
   const root = h("div", { class: "page-stack" });
+  const biliBoxHost = h("div", { class: "bili-box-host" });
   let filterText = "";
   const revealed = new Set();
   let busyCheck = false;
   let busyQr = false;
   let qrSession = null;
   let pollTimer = null;
+
+  function syncBiliBox() {
+    swapContent(biliBoxHost, [renderBiliStatusBox()]);
+  }
 
   function stopPolling() {
     if (pollTimer) {
@@ -75,7 +80,7 @@ export function createPlatformsView(store) {
         qrSession = { ...(qrSession || {}), ...res.qr };
         startPolling();
       }
-      render();
+      syncBiliBox();
     } catch (err) {
       store.toast(`获取B站状态失败：${err.message || err}`, "err");
     }
@@ -84,7 +89,7 @@ export function createPlatformsView(store) {
   async function checkBiliCookie() {
     if (busyCheck) return;
     busyCheck = true;
-    render();
+    syncBiliBox();
     try {
       const res = await store.bridge.apiPost("bili/check", {});
       applyBiliResponse(res);
@@ -99,14 +104,14 @@ export function createPlatformsView(store) {
       store.toast(`检测失败：${err.message || err}`, "err");
     } finally {
       busyCheck = false;
-      render();
+      syncBiliBox();
     }
   }
 
   async function startQrLogin() {
     if (busyQr) return;
     busyQr = true;
-    render();
+    syncBiliBox();
     try {
       const res = await store.bridge.apiPost("bili/login", { action: "start" });
       applyBiliResponse(res);
@@ -118,14 +123,14 @@ export function createPlatformsView(store) {
       store.toast(`获取二维码失败：${err.message || err}`, "err");
     } finally {
       busyQr = false;
-      render();
+      syncBiliBox();
     }
   }
 
   async function cancelQrLogin() {
     stopPolling();
     qrSession = null;
-    render();
+    syncBiliBox();
     try {
       const res = await store.bridge.apiPost("bili/login", { action: "cancel" });
       applyBiliResponse(res);
@@ -152,7 +157,7 @@ export function createPlatformsView(store) {
             store.toast("登录二维码已过期，请点击刷新", "warn");
           }
         }
-        render();
+        syncBiliBox();
       }
     } catch {
       // 网络短暂抖动等待下次轮询
@@ -325,56 +330,96 @@ export function createPlatformsView(store) {
   }
 
   function render() {
-    clear(root);
     const map = itemsMap();
     const platforms = store.meta?.platforms || [];
     const showKey = Boolean(store.showDevKeys);
+    const sections = [];
 
     // 1. 平台开关矩阵
     const gridEl = h("div", { class: "platform-cards" });
+    const platTagHost = h("span", { class: "setting-label-tags" });
+    const platRevertHost = h("span", { class: "setting-label-tags" });
+
+    const syncPlatformScopeTags = () => {
+      const isGroup = Boolean(store.scope);
+      const platPendingUnset = Boolean(store.pendingUnset?.has("DISABLED_PLATFORMS"));
+      const platHasOverride =
+        isGroup && Boolean(store.overrideKeys?.has("DISABLED_PLATFORMS")) && !platPendingUnset;
+      const platDirty =
+        platPendingUnset ||
+        !valuesEqual(store.draft.DISABLED_PLATFORMS, store.meta?.values?.DISABLED_PLATFORMS);
+
+      clear(platTagHost);
+      clear(platRevertHost);
+      if (isGroup) {
+        platTagHost.appendChild(
+          platHasOverride
+            ? h("span", { class: "pill pill-info" }, "本群独立")
+            : h("span", { class: "pill" }, "继承全局"),
+        );
+      }
+      if (platDirty) {
+        platTagHost.appendChild(
+          h("span", { class: "pill pill-warn" }, platPendingUnset ? "将恢复继承" : "待保存"),
+        );
+      }
+      if (isGroup && (platHasOverride || platPendingUnset || platDirty)) {
+        platRevertHost.appendChild(
+          h(
+            "button",
+            {
+              type: "button",
+              class: "btn btn-ghost btn-sm",
+              onclick: () => store.revertKeyToInherit("DISABLED_PLATFORMS"),
+            },
+            "恢复继承",
+          ),
+        );
+      }
+    };
 
     const renderGrid = () => {
-      clear(gridEl);
       const disabled = parseDisabledSet(store.draft.DISABLED_PLATFORMS);
       const kw = filterText.trim().toLowerCase();
       const filtered = platforms.filter((p) => {
         if (!kw) return true;
         return `${p.name} ${p.label} ${p.description || ""}`.toLowerCase().includes(kw);
       });
-      for (const p of filtered) {
+      const cards = filtered.map((p) => {
         const enabled = !disabled.has(p.name.toLowerCase());
-        gridEl.appendChild(
-          h(
-            "button",
-            {
-              type: "button",
-              class: `platform-tile ${enabled ? "is-on" : "is-off"}`,
-              onclick: () => {
-                const next = parseDisabledSet(store.draft.DISABLED_PLATFORMS);
-                const key = p.name.toLowerCase();
-                if (next.has(key)) next.delete(key);
-                else next.add(key);
-                store.setDraftValue("DISABLED_PLATFORMS", Array.from(next).sort().join(", "));
-                renderGrid();
-              },
+        return h(
+          "button",
+          {
+            type: "button",
+            class: `platform-tile ${enabled ? "is-on" : "is-off"}`,
+            onclick: () => {
+              const next = parseDisabledSet(store.draft.DISABLED_PLATFORMS);
+              const key = p.name.toLowerCase();
+              if (next.has(key)) next.delete(key);
+              else next.add(key);
+              store.setDraftValue("DISABLED_PLATFORMS", Array.from(next).sort().join(", "));
+              renderGrid();
+              syncPlatformScopeTags();
             },
+          },
+          h(
+            "div",
+            { class: "platform-tile-top" },
+            h("span", { class: "platform-tile-name" }, p.label || p.name),
             h(
-              "div",
-              { class: "platform-tile-top" },
-              h("span", { class: "platform-tile-name" }, p.label || p.name),
-              h(
-                "span",
-                { class: "platform-tile-tags" },
-                p.external ? h("span", { class: "pill pill-info" }, "外部") : null,
-                h("span", { class: `pill ${enabled ? "pill-ok" : "pill-neutral"}` }, enabled ? "开启" : "停用"),
-              ),
+              "span",
+              { class: "platform-tile-tags" },
+              p.external ? h("span", { class: "pill pill-info" }, "外部") : null,
+              h("span", { class: `pill ${enabled ? "pill-ok" : "pill-neutral"}` }, enabled ? "开启" : "停用"),
             ),
-            p.description ? h("p", { class: "platform-tile-desc" }, p.description) : null,
           ),
+          p.description ? h("p", { class: "platform-tile-desc" }, p.description) : null,
         );
-      }
+      });
+      swapContent(gridEl, cards);
     };
 
+    syncPlatformScopeTags();
     renderGrid();
 
     const searchInput = h("input", {
@@ -389,11 +434,8 @@ export function createPlatformsView(store) {
     searchInput.value = filterText;
 
     const isGroup = Boolean(store.scope);
-    const platPendingUnset = Boolean(store.pendingUnset?.has("DISABLED_PLATFORMS"));
-    const platHasOverride =
-      isGroup && Boolean(store.overrideKeys?.has("DISABLED_PLATFORMS")) && !platPendingUnset;
 
-    root.appendChild(
+    sections.push(
       h(
         "section",
         { class: "surface-panel" },
@@ -407,28 +449,14 @@ export function createPlatformsView(store) {
               "div",
               { class: "setting-label-row" },
               h("h2", { class: "surface-title" }, "支持平台开关"),
-              isGroup && platHasOverride
-                ? h("span", { class: "pill pill-info" }, "本群独立")
-                : isGroup
-                  ? h("span", { class: "pill" }, "继承全局")
-                  : null,
+              platTagHost,
             ),
             h("p", { class: "surface-desc" }, "点击平台卡片即切换启停；外部联动插件安装后会自动出现在此列表"),
           ),
           h(
             "div",
             { class: "btn-group" },
-            isGroup && (platHasOverride || platPendingUnset)
-              ? h(
-                  "button",
-                  {
-                    type: "button",
-                    class: "btn btn-ghost btn-sm",
-                    onclick: () => store.revertKeyToInherit("DISABLED_PLATFORMS"),
-                  },
-                  "恢复继承",
-                )
-              : null,
+            platRevertHost,
             h(
               "button",
               {
@@ -437,6 +465,7 @@ export function createPlatformsView(store) {
                 onclick: () => {
                   store.setDraftValue("DISABLED_PLATFORMS", "");
                   renderGrid();
+                  syncPlatformScopeTags();
                 },
               },
               "全部开启",
@@ -452,6 +481,7 @@ export function createPlatformsView(store) {
                     platforms.map((p) => p.name.toLowerCase()).join(", "),
                   );
                   renderGrid();
+                  syncPlatformScopeTags();
                 },
               },
               "全部关闭",
@@ -464,8 +494,9 @@ export function createPlatformsView(store) {
     );
 
     // 2. 统一账号凭据与扫码监控（B站扫码登录 + B站/小红书 Cookie + 失效监控）
+    syncBiliBox();
     const accountItems = ACCOUNT_KEYS.map((k) => map.get(k)).filter(Boolean);
-    root.appendChild(
+    sections.push(
       h(
         "section",
         { class: "surface-panel" },
@@ -480,7 +511,7 @@ export function createPlatformsView(store) {
           ),
           isGroup ? h("span", { class: "pill" }, "账号凭据全局共用") : null,
         ),
-        renderBiliStatusBox(),
+        biliBoxHost,
         accountItems.length > 0
           ? h(
               "div",
@@ -489,7 +520,6 @@ export function createPlatformsView(store) {
                 buildControlRow(store, it, {
                   showKey,
                   secretState: revealed,
-                  onAfterChange: render,
                 }),
               ),
             )
@@ -500,7 +530,7 @@ export function createPlatformsView(store) {
     // 3. 下载清晰度、代理与转发上限
     const transportItems = TRANSPORT_KEYS.map((k) => map.get(k)).filter(Boolean);
     if (transportItems.length > 0) {
-      root.appendChild(
+      sections.push(
         h(
           "section",
           { class: "surface-panel" },
@@ -521,13 +551,13 @@ export function createPlatformsView(store) {
             transportItems.map((it) =>
               buildControlRow(store, it, {
                 showKey,
-                onAfterChange: render,
               }),
             ),
           ),
         ),
       );
     }
+    swapContent(root, sections);
   }
 
   function onActivated() {

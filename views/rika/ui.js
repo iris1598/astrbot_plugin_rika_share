@@ -52,6 +52,62 @@ export function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
 }
 
+/** 在同步 DOM 重建期间锁住当前窗口与文档滚动位置，防止高度塌陷回顶 */
+export function preserveScroll(fn) {
+  const win = typeof window !== "undefined" ? window : null;
+  const doc = typeof document !== "undefined" ? document : null;
+  const se = doc?.scrollingElement || doc?.documentElement || doc?.body || null;
+  const prevY = typeof win?.scrollY === "number" ? win.scrollY : (se?.scrollTop ?? 0);
+  const prevX = typeof win?.scrollX === "number" ? win.scrollX : (se?.scrollLeft ?? 0);
+  const res = fn();
+  if (prevY > 0 || prevX > 0) {
+    if (se && typeof se.scrollTop === "number") se.scrollTop = prevY;
+    if (typeof win?.scrollTo === "function") win.scrollTo(prevX, prevY);
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => {
+        if (se && typeof se.scrollTop === "number") se.scrollTop = prevY;
+        if (typeof win?.scrollTo === "function") win.scrollTo(prevX, prevY);
+      });
+    }
+  }
+  return res;
+}
+
+/** 原子替换容器子节点（不先把高度清零），并维持滚动坐标稳定 */
+export function swapContent(container, children) {
+  const list = [];
+  const pushFlat = (item) => {
+    if (item == null || item === false) return;
+    if (Array.isArray(item)) {
+      for (const x of item) pushFlat(x);
+      return;
+    }
+    if (item instanceof Node) {
+      list.push(item);
+      return;
+    }
+    list.push(document.createTextNode(String(item)));
+  };
+  pushFlat(children);
+
+  const prevHeight = Number(container?.offsetHeight || 0);
+  const prevMin = container?.style?.minHeight || "";
+  return preserveScroll(() => {
+    if (prevHeight > 0 && container?.style) {
+      container.style.minHeight = `${prevHeight}px`;
+    }
+    if (typeof container.replaceChildren === "function") {
+      container.replaceChildren(...list);
+    } else {
+      clear(container);
+      for (const node of list) container.appendChild(node);
+    }
+    if (container?.style) {
+      container.style.minHeight = prevMin;
+    }
+  });
+}
+
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 const ICON_PATHS = {
@@ -225,29 +281,69 @@ export function createInlineConfirmButton({
   return wrap;
 }
 
-/** 根据 CONFIG_META 条目构建标准化控件，内置 DOM 属性安全赋值与可选底层键名显示 */
+/** 根据 CONFIG_META 条目构建标准化控件，支持原地状态更新避免页面滚动复位 */
 export function buildControlRow(store, item, options = {}) {
   const { showKey = false, full = false, secretState = null, onAfterChange = null } = options;
   const isGroup = Boolean(store.scope);
   const overridable = !isGroup || Boolean(store.isOverridable?.(item.key));
   const locked = isGroup && !overridable;
   const val = store.draft[item.key];
-  const savedVal = store.meta?.values?.[item.key];
-  const pendingUnset = Boolean(store.pendingUnset?.has(item.key));
-  const hasOverride =
-    isGroup &&
-    overridable &&
-    Boolean(store.overrideKeys?.has(item.key)) &&
-    !pendingUnset;
-  const dirty = !locked && (pendingUnset || !valuesEqual(val, savedVal));
+  const tagsHost = h("span", { class: "setting-label-tags" });
+  let rowEl = null;
+
+  function syncRowState() {
+    const curVal = store.draft[item.key];
+    const savedVal = store.meta?.values?.[item.key];
+    const pendingUnset = Boolean(store.pendingUnset?.has(item.key));
+    const hasOverride =
+      isGroup &&
+      overridable &&
+      Boolean(store.overrideKeys?.has(item.key)) &&
+      !pendingUnset;
+    const dirtyNow = !locked && (pendingUnset || !valuesEqual(curVal, savedVal));
+
+    if (rowEl) {
+      rowEl.classList.toggle("is-dirty", dirtyNow);
+    }
+    clear(tagsHost);
+    if (showKey) tagsHost.appendChild(h("code", { class: "dev-key" }, item.key));
+    if (locked) {
+      tagsHost.appendChild(h("span", { class: "pill scope-pill-global" }, "仅全局"));
+    } else if (hasOverride) {
+      tagsHost.appendChild(h("span", { class: "pill pill-info scope-pill-group" }, "本群独立"));
+    }
+    if (dirtyNow) {
+      tagsHost.appendChild(h("span", { class: "dirty-pill" }, pendingUnset ? "将恢复继承" : "已更改"));
+    }
+    if (isGroup && overridable && (hasOverride || dirtyNow)) {
+      tagsHost.appendChild(
+        h(
+          "button",
+          {
+            type: "button",
+            class: "btn btn-ghost btn-xs scope-revert-btn",
+            onclick: () => {
+              store.revertKeyToInherit?.(item.key);
+              onAfterChange?.();
+            },
+          },
+          "恢复继承",
+        ),
+      );
+    }
+  }
 
   let controlEl;
   if (item.type === "bool") {
+    const switchText = h("span", { class: "switch-text" }, Boolean(val) ? "已开启" : "已关闭");
     const chk = h("input", {
       type: "checkbox",
       checked: Boolean(val),
       onchange: (e) => {
-        store.setDraftValue(item.key, Boolean(e.target.checked));
+        const nextVal = Boolean(e.target.checked);
+        store.setDraftValue(item.key, nextVal);
+        switchText.textContent = nextVal ? "已开启" : "已关闭";
+        syncRowState();
         onAfterChange?.();
       },
     });
@@ -256,7 +352,7 @@ export function buildControlRow(store, item, options = {}) {
       { class: "switch" },
       chk,
       h("span", { class: "switch-track" }),
-      h("span", { class: "switch-text" }, Boolean(val) ? "已开启" : "已关闭"),
+      switchText,
     );
   } else if (item.type === "select") {
     const opts = item.options || [];
@@ -267,6 +363,7 @@ export function buildControlRow(store, item, options = {}) {
         class: "ctrl-input ctrl-select",
         onchange: (e) => {
           store.setDraftValue(item.key, e.target.value);
+          syncRowState();
           onAfterChange?.();
         },
       },
@@ -287,6 +384,7 @@ export function buildControlRow(store, item, options = {}) {
           .map((s) => s.trim())
           .filter(Boolean);
         store.setDraftValue(item.key, rows, { rerender: false });
+        syncRowState();
       },
     });
     ta.value = Array.isArray(val) ? val.join("\n") : String(val ?? "");
@@ -296,7 +394,10 @@ export function buildControlRow(store, item, options = {}) {
       class: "ctrl-input ctrl-textarea mono",
       rows: 3,
       placeholder: item.placeholder || "",
-      oninput: (e) => store.setDraftValue(item.key, e.target.value, { rerender: false }),
+      oninput: (e) => {
+        store.setDraftValue(item.key, e.target.value, { rerender: false });
+        syncRowState();
+      },
     });
     ta.value = String(val ?? "");
     controlEl = ta;
@@ -313,7 +414,10 @@ export function buildControlRow(store, item, options = {}) {
           item.type === "float"
             ? Number.parseFloat(e.target.value)
             : Number.parseInt(e.target.value, 10);
-        if (!Number.isNaN(parsed)) store.setDraftValue(item.key, parsed, { rerender: false });
+        if (!Number.isNaN(parsed)) {
+          store.setDraftValue(item.key, parsed, { rerender: false });
+          syncRowState();
+        }
       },
     });
     num.value = val ?? item.default ?? "";
@@ -322,63 +426,46 @@ export function buildControlRow(store, item, options = {}) {
       : num;
   } else {
     const isSecret = Boolean(item.secret);
-    const revealed = isSecret && secretState?.has(item.key);
+    let revealed = isSecret && Boolean(secretState?.has(item.key));
     const inp = h("input", {
       type: isSecret && !revealed ? "password" : "text",
       class: `ctrl-input ${isSecret ? "mono" : ""}`,
       placeholder: item.placeholder || "",
       autocomplete: "off",
-      oninput: (e) => store.setDraftValue(item.key, e.target.value, { rerender: false }),
+      oninput: (e) => {
+        store.setDraftValue(item.key, e.target.value, { rerender: false });
+        syncRowState();
+      },
     });
     inp.value = String(val ?? "");
-    controlEl = isSecret
-      ? h(
-          "div",
-          { class: "secret-field" },
-          inp,
-          h(
-            "button",
-            {
-              type: "button",
-              class: "btn btn-ghost btn-sm",
-              onclick: () => {
-                if (!secretState) return;
-                if (revealed) secretState.delete(item.key);
-                else secretState.add(item.key);
-                onAfterChange?.();
-              },
-            },
-            revealed ? "隐藏" : "显示",
-          ),
-        )
-      : inp;
-  }
-
-  const tags = [];
-  if (showKey) tags.push(h("code", { class: "dev-key" }, item.key));
-  if (locked) tags.push(h("span", { class: "pill scope-pill-global" }, "仅全局"));
-  else if (hasOverride) tags.push(h("span", { class: "pill pill-info scope-pill-group" }, "本群独立"));
-  if (dirty) tags.push(h("span", { class: "dirty-pill" }, pendingUnset ? "将恢复继承" : "已更改"));
-  if (isGroup && overridable && (hasOverride || dirty)) {
-    tags.push(
-      h(
+    let toggleBtn = null;
+    if (isSecret) {
+      toggleBtn = h(
         "button",
         {
           type: "button",
-          class: "btn btn-ghost btn-xs scope-revert-btn",
+          class: "btn btn-ghost btn-sm",
           onclick: () => {
-            store.revertKeyToInherit?.(item.key);
-            onAfterChange?.();
+            if (!secretState) return;
+            if (secretState.has(item.key)) secretState.delete(item.key);
+            else secretState.add(item.key);
+            revealed = secretState.has(item.key);
+            inp.type = revealed ? "text" : "password";
+            toggleBtn.textContent = revealed ? "隐藏" : "显示";
           },
         },
-        "恢复继承",
-      ),
-    );
+        revealed ? "隐藏" : "显示",
+      );
+    }
+    controlEl = isSecret
+      ? h("div", { class: "secret-field" }, inp, toggleBtn)
+      : inp;
   }
-  const row = h(
+
+  rowEl = h(
     "div",
     {
-      class: `setting-item ${full || item.type === "list" || item.type === "text" || item.secret ? "is-wide" : ""} ${dirty ? "is-dirty" : ""} ${locked ? "is-global-locked" : ""}`,
+      class: `setting-item ${full || item.type === "list" || item.type === "text" || item.secret ? "is-wide" : ""} ${locked ? "is-global-locked" : ""}`,
       dataset: { key: item.key },
     },
     h(
@@ -388,16 +475,17 @@ export function buildControlRow(store, item, options = {}) {
         "div",
         { class: "setting-label-row" },
         h("span", { class: "setting-label" }, item.label || item.key),
-        ...tags,
+        tagsHost,
       ),
       item.hint ? h("p", { class: "setting-hint" }, item.hint) : null,
     ),
     h("div", { class: "setting-ctrl" }, controlEl),
   );
+  syncRowState();
   if (locked) {
-    for (const el of row.querySelectorAll("input, select, textarea")) {
+    for (const el of rowEl.querySelectorAll("input, select, textarea")) {
       el.disabled = true;
     }
   }
-  return row;
+  return rowEl;
 }

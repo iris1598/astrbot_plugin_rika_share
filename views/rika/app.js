@@ -4,6 +4,8 @@ import {
   createToaster,
   h,
   icon,
+  preserveScroll,
+  swapContent,
   valuesEqual,
 } from "./ui.js";
 import { applyTheme, getTheme } from "./themes/index.js";
@@ -404,27 +406,27 @@ async function boot() {
     }
 
     function syncAllViews() {
-      for (const view of Object.values(store.views)) {
-        view?.sync?.();
-      }
+      preserveScroll(() => {
+        for (const view of Object.values(store.views)) {
+          view?.sync?.();
+        }
+      });
     }
 
     function renderSaveStrip() {
       if (!saveStripEl) return;
-      clear(saveStripEl);
       const changed = store.dirtyKeys();
       saveStripEl.classList.toggle("has-dirty", changed.length > 0);
+      const nodes = [];
 
       if (changed.length > 0) {
-        saveStripEl.appendChild(
+        nodes.push(
           h(
             "div",
             { class: "save-info" },
             h("span", { class: "dirty-dot" }),
             h("strong", null, `${changed.length} 项待保存`),
           ),
-        );
-        saveStripEl.appendChild(
           h(
             "button",
             {
@@ -438,7 +440,7 @@ async function boot() {
         );
       }
 
-      saveStripEl.appendChild(
+      nodes.push(
         createInlineConfirmButton({
           label: store.scope ? "清空覆写" : "恢复默认",
           confirmLabel: store.scope ? "确认清空" : "确认重置",
@@ -446,9 +448,6 @@ async function boot() {
           size: "sm",
           onConfirm: () => store.resetConfig(),
         }),
-      );
-
-      saveStripEl.appendChild(
         h(
           "button",
           {
@@ -460,6 +459,7 @@ async function boot() {
           saving ? "保存中…" : changed.length > 0 ? "保存并生效" : "已同步",
         ),
       );
+      swapContent(saveStripEl, nodes);
     }
 
     const sidebarThemePill = h("button", {
@@ -522,7 +522,6 @@ async function boot() {
 
     function renderScopeBar() {
       if (!scopeBarEl) return;
-      clear(scopeBarEl);
 
       const profiles = Array.isArray(store.groupProfiles) ? store.groupProfiles : [];
       const overridden = profiles.filter((p) => p.has_override);
@@ -584,7 +583,7 @@ async function boot() {
           );
 
       scopeBarEl.classList.toggle("is-group-scope", Boolean(store.scope));
-      scopeBarEl.appendChild(
+      const nodes = [
         h(
           "div",
           { class: "scope-bar-row" },
@@ -641,7 +640,7 @@ async function boot() {
               : null,
           ),
         ),
-      );
+      ];
 
       if (addingGroup) {
         const idInp = h("input", {
@@ -673,7 +672,7 @@ async function boot() {
         });
         labelInp.value = newGroupLabel;
 
-        scopeBarEl.appendChild(
+        nodes.push(
           h(
             "div",
             { class: "scope-add-form" },
@@ -705,6 +704,7 @@ async function boot() {
           ),
         );
       }
+      swapContent(scopeBarEl, nodes);
     }
 
     const topHeader = h(

@@ -1,4 +1,4 @@
-import { buildControlRow, clear, h, icon } from "../ui.js";
+import { buildControlRow, clear, h, icon, swapContent } from "../ui.js";
 import { createNodeRulesPanel } from "./node_editor.js";
 
 const CARD_RENDER_KEYS = [
@@ -49,6 +49,94 @@ export function createCardStudioView(store) {
     }, delayMs);
   }
 
+  const styleGridHost = h("div", { class: "real-style-grid" });
+  const cardTagHost = h("span", { class: "setting-label-tags" });
+  const cardRevertHost = h("span", { class: "setting-label-tags" });
+
+  function syncCardHeaderStatus() {
+    const isGroup = Boolean(store.scope);
+    const cardOverridden =
+      isGroup &&
+      CARD_RENDER_KEYS.some(
+        (k) => store.overrideKeys?.has(k) && !store.pendingUnset?.has(k),
+      );
+    clear(cardTagHost);
+    clear(cardRevertHost);
+    if (isGroup) {
+      cardTagHost.appendChild(
+        cardOverridden
+          ? h("span", { class: "pill pill-info" }, "本群独立卡片样式")
+          : h("span", { class: "pill" }, "继承全局卡片样式"),
+      );
+    }
+    if (isGroup && cardOverridden) {
+      cardRevertHost.appendChild(
+        h(
+          "button",
+          {
+            type: "button",
+            class: "btn btn-ghost btn-sm",
+            onclick: () => {
+              for (const k of CARD_RENDER_KEYS) {
+                if (store.overrideKeys?.has(k)) {
+                  store.revertKeyToInherit(k);
+                }
+              }
+            },
+          },
+          "卡片配置恢复继承",
+        ),
+      );
+    }
+  }
+
+  function syncStyleGrid() {
+    const currentStyle = String(store.draft.RENDER_STYLE || "standard");
+    const stylesMeta = store.meta?.styles || [];
+    const realThumbs = thumbsState.items || [];
+    const thumbByName = new Map(realThumbs.map((t) => [t.name, t.image]));
+
+    const cards = stylesMeta.map((st) => {
+      const active = st.name === currentStyle;
+      const thumbUrl = thumbByName.get(st.name);
+      return h(
+        "button",
+        {
+          type: "button",
+          class: `real-style-card ${active ? "is-active" : ""}`,
+          dataset: { styleName: st.name },
+          onclick: () => {
+            store.setDraftValue("RENDER_STYLE", st.name);
+            for (const el of styleGridHost.querySelectorAll(".real-style-card")) {
+              el.classList.toggle("is-active", el.getAttribute("data-style-name") === st.name);
+            }
+            syncCardHeaderStatus();
+            schedulePreview(0);
+          },
+        },
+        h(
+          "div",
+          { class: "real-style-thumb" },
+          thumbUrl
+            ? h("img", { src: thumbUrl, alt: st.display_name })
+            : h("span", { class: "thumb-placeholder" }, thumbsState.loading ? "渲染样图中…" : st.display_name),
+        ),
+        h(
+          "div",
+          { class: "real-style-info" },
+          h(
+            "div",
+            { class: "real-style-name-row" },
+            h("strong", null, st.display_name),
+            h("code", null, st.name),
+          ),
+          h("p", null, st.description || ""),
+        ),
+      );
+    });
+    swapContent(styleGridHost, cards);
+  }
+
   async function fetchStyleThumbs(force = false) {
     const theme = store.draft.RENDER_THEME === "light" ? "light" : "dark";
     const pOn = Boolean(store.draft.RENDER_PERSONA_WATERMARK);
@@ -73,7 +161,7 @@ export function createCardStudioView(store) {
         loading: false,
         items: res?.styles || [],
       };
-      render();
+      syncStyleGrid();
     } catch {
       thumbsState.loading = false;
     }
@@ -112,7 +200,6 @@ export function createCardStudioView(store) {
   const stageHost = h("aside", { class: "studio-preview-pane" });
 
   function updatePreviewStage() {
-    clear(stageHost);
     const samples = store.meta?.preview_samples || [
       { id: "video", label: "B站视频（横幅封面）" },
       { id: "gallery", label: "小红书 7 图集" },
@@ -187,7 +274,7 @@ export function createCardStudioView(store) {
       );
     }
 
-    stageHost.appendChild(
+    swapContent(stageHost, [
       h(
         "div",
         { class: "surface-panel preview-sticky-box" },
@@ -214,7 +301,7 @@ export function createCardStudioView(store) {
           ? h("p", { class: "preview-tip" }, "点击预览图可放大查看像素与字体渲染细节（支持热插拔自定义样式）")
           : null,
       ),
-    );
+    ]);
   }
 
   const modalHost = h("div", { class: "preview-lightbox is-hidden" });
@@ -238,54 +325,7 @@ export function createCardStudioView(store) {
     );
   }
 
-  function renderStyleGrid() {
-    const currentStyle = String(store.draft.RENDER_STYLE || "standard");
-    const stylesMeta = store.meta?.styles || [];
-    const realThumbs = thumbsState.items || [];
-    const thumbByName = new Map(realThumbs.map((t) => [t.name, t.image]));
-
-    return h(
-      "div",
-      { class: "real-style-grid" },
-      stylesMeta.map((st) => {
-        const active = st.name === currentStyle;
-        const thumbUrl = thumbByName.get(st.name);
-        return h(
-          "button",
-          {
-            type: "button",
-            class: `real-style-card ${active ? "is-active" : ""}`,
-            onclick: () => {
-              store.setDraftValue("RENDER_STYLE", st.name);
-              render();
-              schedulePreview(0);
-            },
-          },
-          h(
-            "div",
-            { class: "real-style-thumb" },
-            thumbUrl
-              ? h("img", { src: thumbUrl, alt: st.display_name })
-              : h("span", { class: "thumb-placeholder" }, thumbsState.loading ? "渲染样图中…" : st.display_name),
-          ),
-          h(
-            "div",
-            { class: "real-style-info" },
-            h(
-              "div",
-              { class: "real-style-name-row" },
-              h("strong", null, st.display_name),
-              h("code", null, st.name),
-            ),
-            h("p", null, st.description || ""),
-          ),
-        );
-      }),
-    );
-  }
-
   function render() {
-    clear(root);
     const map = itemsMap();
     const showKey = Boolean(store.showDevKeys);
 
@@ -327,6 +367,12 @@ export function createCardStudioView(store) {
       placeholder: "莉卡解析",
       oninput: (e) => {
         store.setDraftValue("RENDER_BRAND_NAME", e.target.value, { rerender: false });
+        if (personaHintEl) {
+          const curBrand = String(e.target.value || "莉卡解析").trim() || "莉卡解析";
+          personaHintEl.textContent = store.draft.RENDER_PERSONA_WATERMARK
+            ? `已开启人格跟随：卡片水印与文本头跟随当前会话人格，未命中人格时回退「${curBrand}」。`
+            : "开启后跟随当前会话人格名称（跨人格共享底卡缓存）；关闭后可在下方直接自定义解析署名。";
+        }
         schedulePreview(240);
       },
     });
@@ -344,12 +390,75 @@ export function createCardStudioView(store) {
     });
     fontInput.value = String(store.draft.RENDER_FONT_PATH || "");
 
-    const isGroup = Boolean(store.scope);
-    const cardOverridden =
-      isGroup &&
-      CARD_RENDER_KEYS.some(
-        (k) => store.overrideKeys?.has(k) && !store.pendingUnset?.has(k),
+    syncCardHeaderStatus();
+    syncStyleGrid();
+
+    const cardEnableText = h(
+      "span",
+      { class: "switch-text" },
+      store.draft.RENDER_ENABLED ? "卡片开启" : "纯文本",
+    );
+
+    const themeSegEl = h("div", { class: "seg-group" });
+    const themeBtns = [
+      { id: "dark", label: "深色 Dark" },
+      { id: "light", label: "浅色 Light" },
+    ].map((m) => {
+      const btn = h(
+        "button",
+        {
+          type: "button",
+          class: `seg-btn ${store.draft.RENDER_THEME === m.id ? "is-active" : ""}`,
+          onclick: () => {
+            store.setDraftValue("RENDER_THEME", m.id);
+            for (const b of themeBtns) b.el.classList.toggle("is-active", b.id === m.id);
+            syncCardHeaderStatus();
+            fetchStyleThumbs();
+            schedulePreview(0);
+          },
+        },
+        m.label,
       );
+      themeSegEl.appendChild(btn);
+      return { id: m.id, el: btn };
+    });
+
+    const coverSwitchText = h(
+      "span",
+      { class: "switch-text" },
+      store.draft.RENDER_COVER_FULL_SIZE ? "原比完整" : "固定横幅",
+    );
+
+    const personaSwitchText = h(
+      "span",
+      { class: "switch-text" },
+      store.draft.RENDER_PERSONA_WATERMARK ? "跟随人格" : "自定义固定署名",
+    );
+    const personaHintEl = h(
+      "p",
+      { class: "setting-hint" },
+      store.draft.RENDER_PERSONA_WATERMARK
+        ? `已开启人格跟随：卡片水印与文本头跟随当前会话人格，未命中人格时回退「${String(store.draft.RENDER_BRAND_NAME || "莉卡解析").trim() || "莉卡解析"}」。`
+        : "开启后跟随当前会话人格名称（跨人格共享底卡缓存）；关闭后可在下方直接自定义解析署名。",
+    );
+    const personaSimHost = h("div", { class: "persona-sim-host" });
+    const renderPersonaSimHost = () => {
+      const box = store.draft.RENDER_PERSONA_WATERMARK
+        ? h(
+            "div",
+            { class: "persona-sim-box" },
+            h("span", { class: "persona-sim-label" }, "预览试看人格："),
+            personaInput,
+          )
+        : h(
+            "div",
+            { class: "persona-sim-box" },
+            h("span", { class: "persona-sim-label" }, "自定义署名："),
+            brandInput,
+          );
+      swapContent(personaSimHost, [box]);
+    };
+    renderPersonaSimHost();
 
     const leftPane = h(
       "div",
@@ -368,34 +477,14 @@ export function createCardStudioView(store) {
               "div",
               { class: "setting-label-row" },
               h("h2", { class: "surface-title" }, "卡片渲染与真实版式"),
-              isGroup && cardOverridden
-                ? h("span", { class: "pill pill-info" }, "本群独立卡片样式")
-                : isGroup
-                  ? h("span", { class: "pill" }, "继承全局卡片样式")
-                  : null,
+              cardTagHost,
             ),
             h("p", { class: "surface-desc" }, "缩略图由后台真实渲染引擎实时生成；后续新增自定义样式会自动在此呈现"),
           ),
           h(
             "div",
             { class: "btn-group" },
-            isGroup && cardOverridden
-              ? h(
-                  "button",
-                  {
-                    type: "button",
-                    class: "btn btn-ghost btn-sm",
-                    onclick: () => {
-                      for (const k of CARD_RENDER_KEYS) {
-                        if (store.overrideKeys?.has(k)) {
-                          store.revertKeyToInherit(k);
-                        }
-                      }
-                    },
-                  },
-                  "卡片配置恢复继承",
-                )
-              : null,
+            cardRevertHost,
             h(
               "label",
               { class: "switch" },
@@ -403,17 +492,19 @@ export function createCardStudioView(store) {
                 type: "checkbox",
                 checked: Boolean(store.draft.RENDER_ENABLED),
                 onchange: (e) => {
-                  store.setDraftValue("RENDER_ENABLED", Boolean(e.target.checked));
-                  render();
+                  const checked = Boolean(e.target.checked);
+                  store.setDraftValue("RENDER_ENABLED", checked);
+                  cardEnableText.textContent = checked ? "卡片开启" : "纯文本";
+                  syncCardHeaderStatus();
                   updatePreviewStage();
                 },
               }),
               h("span", { class: "switch-track" }),
-              h("span", { class: "switch-text" }, store.draft.RENDER_ENABLED ? "卡片开启" : "纯文本"),
+              cardEnableText,
             ),
           ),
         ),
-        renderStyleGrid(),
+        styleGridHost,
       ),
       // 尺寸 / 深浅 / 人格动态署名 / 字体
       h(
@@ -446,29 +537,7 @@ export function createCardStudioView(store) {
               ),
               h("p", { class: "setting-hint" }, "部分固定配色自定义样式会忽略此项"),
             ),
-            h(
-              "div",
-              { class: "seg-group" },
-              [
-                { id: "dark", label: "深色 Dark" },
-                { id: "light", label: "浅色 Light" },
-              ].map((m) =>
-                h(
-                  "button",
-                  {
-                    type: "button",
-                    class: `seg-btn ${store.draft.RENDER_THEME === m.id ? "is-active" : ""}`,
-                    onclick: () => {
-                      store.setDraftValue("RENDER_THEME", m.id);
-                      render();
-                      fetchStyleThumbs();
-                      schedulePreview(0);
-                    },
-                  },
-                  m.label,
-                ),
-              ),
-            ),
+            themeSegEl,
           ),
           h(
             "div",
@@ -507,12 +576,15 @@ export function createCardStudioView(store) {
                 type: "checkbox",
                 checked: Boolean(store.draft.RENDER_COVER_FULL_SIZE),
                 onchange: (e) => {
-                  store.setDraftValue("RENDER_COVER_FULL_SIZE", Boolean(e.target.checked));
+                  const checked = Boolean(e.target.checked);
+                  store.setDraftValue("RENDER_COVER_FULL_SIZE", checked);
+                  coverSwitchText.textContent = checked ? "原比完整" : "固定横幅";
+                  syncCardHeaderStatus();
                   schedulePreview(0);
                 },
               }),
               h("span", { class: "switch-track" }),
-              h("span", { class: "switch-text" }, store.draft.RENDER_COVER_FULL_SIZE ? "原比完整" : "固定横幅"),
+              coverSwitchText,
             ),
           ),
           h(
@@ -530,13 +602,7 @@ export function createCardStudioView(store) {
                   : null,
                 h("span", { class: "dirty-pill" }, "已更改"),
               ),
-              h(
-                "p",
-                { class: "setting-hint" },
-                store.draft.RENDER_PERSONA_WATERMARK
-                  ? `已开启人格跟随：卡片水印与文本头跟随当前会话人格，未命中人格时回退「${String(store.draft.RENDER_BRAND_NAME || "莉卡解析").trim() || "莉卡解析"}」。`
-                  : "开启后跟随当前会话人格名称（跨人格共享底卡缓存）；关闭后可在下方直接自定义解析署名。",
-              ),
+              personaHintEl,
             ),
             h(
               "div",
@@ -548,28 +614,23 @@ export function createCardStudioView(store) {
                   type: "checkbox",
                   checked: Boolean(store.draft.RENDER_PERSONA_WATERMARK),
                   onchange: (e) => {
-                    store.setDraftValue("RENDER_PERSONA_WATERMARK", Boolean(e.target.checked));
-                    render();
+                    const checked = Boolean(e.target.checked);
+                    store.setDraftValue("RENDER_PERSONA_WATERMARK", checked);
+                    personaSwitchText.textContent = checked ? "跟随人格" : "自定义固定署名";
+                    const curBrand = String(store.draft.RENDER_BRAND_NAME || "莉卡解析").trim() || "莉卡解析";
+                    personaHintEl.textContent = checked
+                      ? `已开启人格跟随：卡片水印与文本头跟随当前会话人格，未命中人格时回退「${curBrand}」。`
+                      : "开启后跟随当前会话人格名称（跨人格共享底卡缓存）；关闭后可在下方直接自定义解析署名。";
+                    renderPersonaSimHost();
+                    syncCardHeaderStatus();
                     fetchStyleThumbs();
                     schedulePreview(0);
                   },
                 }),
                 h("span", { class: "switch-track" }),
-                h("span", { class: "switch-text" }, store.draft.RENDER_PERSONA_WATERMARK ? "跟随人格" : "自定义固定署名"),
+                personaSwitchText,
               ),
-              store.draft.RENDER_PERSONA_WATERMARK
-                ? h(
-                    "div",
-                    { class: "persona-sim-box" },
-                    h("span", { class: "persona-sim-label" }, "预览试看人格："),
-                    personaInput,
-                  )
-                : h(
-                    "div",
-                    { class: "persona-sim-box" },
-                    h("span", { class: "persona-sim-label" }, "自定义署名："),
-                    brandInput,
-                  ),
+              personaSimHost,
             ),
           ),
           h(
@@ -589,34 +650,36 @@ export function createCardStudioView(store) {
           ),
         ),
       ),
-      // 输出节点编排（分模式开关 · 顺序 · 合并）
-      nodeEditor.element,
-      // 分发与缓存（同属内容产出流，集中收纳于此）
+    );
+
+    const deliveryPanel = h(
+      "section",
+      { class: "surface-panel" },
       h(
-        "section",
-        { class: "surface-panel" },
+        "div",
+        { class: "surface-head" },
         h(
           "div",
-          { class: "surface-head" },
-          h(
-            "div",
-            null,
-            h("h2", { class: "surface-title" }, "非 OneBot 分发与缓存清理"),
-            h("p", { class: "surface-desc" }, "控制合并转发转临时网页行为及磁盘缓存有效期"),
-          ),
+          null,
+          h("h2", { class: "surface-title" }, "非 OneBot 分发与缓存清理"),
+          h("p", { class: "surface-desc" }, "控制合并转发转临时网页行为及磁盘缓存有效期"),
         ),
-        h(
-          "div",
-          { class: "settings-list two-col" },
-          DELIVERY_CACHE_KEYS.map((k) => map.get(k))
-            .filter(Boolean)
-            .map((it) => buildControlRow(store, it, { showKey, onAfterChange: render })),
-        ),
+      ),
+      h(
+        "div",
+        { class: "settings-list two-col" },
+        DELIVERY_CACHE_KEYS.map((k) => map.get(k))
+          .filter(Boolean)
+          .map((it) => buildControlRow(store, it, { showKey, onAfterChange: () => nodeEditor.sync() })),
       ),
     );
 
-    root.appendChild(h("div", { class: "studio-split" }, leftPane, stageHost));
-    root.appendChild(modalHost);
+    swapContent(root, [
+      h("div", { class: "studio-split" }, leftPane, stageHost),
+      nodeEditor.element,
+      deliveryPanel,
+      modalHost,
+    ]);
     updatePreviewStage();
     renderModal();
     fetchStyleThumbs();

@@ -1,4 +1,4 @@
-import { clear, createInlineConfirmButton, formatBytes, h, icon } from "../ui.js";
+import { createInlineConfirmButton, formatBytes, h, icon, swapContent } from "../ui.js";
 import { getTheme } from "../themes/index.js";
 
 const STEP_TONES = {
@@ -198,7 +198,7 @@ export function createWorkbenchView(store) {
   }
 
   function render() {
-    clear(root);
+    const sections = [];
     const ov = store.overview || {};
     const platforms = ov.platforms || store.meta?.platforms || [];
     const enabledCount = platforms.filter((p) => p.enabled).length;
@@ -210,7 +210,7 @@ export function createWorkbenchView(store) {
     const personaOn = Boolean(store.draft.RENDER_PERSONA_WATERMARK);
 
     if (problems.length > 0) {
-      root.appendChild(
+      sections.push(
         h(
           "div",
           { class: "notice notice-warn" },
@@ -236,7 +236,7 @@ export function createWorkbenchView(store) {
           ? "err"
           : "warn";
 
-    root.appendChild(
+    sections.push(
       h(
         "div",
         { class: "kpi-grid" },
@@ -378,7 +378,7 @@ export function createWorkbenchView(store) {
     );
 
     // 2. 平台状态快览带
-    root.appendChild(
+    sections.push(
       h(
         "section",
         { class: "surface-panel" },
@@ -437,7 +437,7 @@ export function createWorkbenchView(store) {
     });
     urlInput.value = debugUrl;
 
-    root.appendChild(
+    sections.push(
       h(
         "section",
         { class: "surface-panel" },
@@ -525,6 +525,7 @@ export function createWorkbenchView(store) {
         renderProbeOutput(),
       ),
     );
+    swapContent(root, sections);
   }
 
   render();
