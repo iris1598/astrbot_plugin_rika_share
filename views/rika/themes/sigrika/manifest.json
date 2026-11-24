@@ -1,0 +1,11 @@
+{
+  "id": "sigrika",
+  "name": "西格莉卡 · 符文手账",
+  "subtitle": "Sigrika Rune Journal · 浮光林旅途路线导航",
+  "description": "《鸣潮》西格莉卡角色专属整页设计：羊皮纸手账卡面 + 星芒风车发饰徽记 + 「• • • ◇ ── ✦」星轨荆棘框；四个页签化作「启程 / 同行 / 符文 / 归家」旅途站点，日灵伙伴常驻右下角提醒保存。浅色「浮光林昼」，深色「星憩暮云」。",
+  "badge": "角色",
+  "preview": "sigrika",
+  "order": 40,
+  "entry": "index.js",
+  "styles": ["theme.css"]
+}

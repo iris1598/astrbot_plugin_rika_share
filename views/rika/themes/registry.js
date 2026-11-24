@@ -157,7 +157,10 @@ async function ensureThemeLoaded(theme) {
   }
 
   if (theme.entry) {
-    const specifier = theme.entry.startsWith("./") || theme.entry.startsWith("/") ? theme.entry : `./${theme.entry}`;
+    const relEntry = theme.entry.startsWith("./") || theme.entry.startsWith("/") ? theme.entry : `./${theme.entry}`;
+    // manifest 下发的 entry 相对于 views/rika/（页面根），而 import() 默认相对于本模块（themes/），
+    // 因此需按文档基址解析为绝对 URL，避免变成 themes/themes/<id>/index.js。
+    const specifier = new URL(relEntry, document.baseURI).href;
     const mod = await import(specifier);
     const candidate = mod?.default && typeof mod.default === "object" ? mod.default : mod;
     if (typeof candidate?.mount === "function") {
