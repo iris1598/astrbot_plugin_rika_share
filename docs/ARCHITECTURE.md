@@ -32,8 +32,9 @@ astrbot_plugin_rika_share/
 ├── metadata.yaml                # AstrBot 插件元数据（唯一元数据来源）
 ├── _conf_schema.json            # AstrBot 存储契约（分组全 invisible，敏感项标 secret: true）
 ├── .astrbot-plugin/i18n/        # AstrBot 插件及 View 多语言文案
-├── views/rika/                  # AstrBot 4.x WebUI 插件视图（设置 / 调试 / 外观）
-│   └── themes/                  # 可插拔网页主题注册表与主题包
+├── views/rika/                  # AstrBot 4.x WebUI 插件视图（boot + app.js 宿主）
+│   ├── core/                    # 纯无头业务运行时（store / controllers / node_model / dom）
+│   └── themes/                  # 整页主题宿主机与独立主题包（<id>/manifest.json + index.js + CSS）
 ├── docs/                        # 架构备忘（本文）、模块开发指南与预览图
 ├── scripts/                     # 独立辅助/回归脚本（输出统一落在 scripts/.out/）
 └── link_parser/
@@ -58,7 +59,7 @@ astrbot_plugin_rika_share/
 3. **新增卡片样式**（详见 [卡片主题开发指南](CARD_STYLE_GUIDE.md)）：在 `link_parser/services/card_render/styles/` 新建 `<name>.py`，继承 `CardStyle` 并调用 `register_style(StyleSpec(...))`。
    - 改动样式视觉后须将类属性 `version` +1，否则命中缓存旧图；无封面/超长文/无头像均须安全降级。
    - **动态人格水印兼容性**：标准样式通过 `self.footer_block(...)` 绘制页脚，系统会在底卡渲染阶段自动留出右侧安全宽并写入 `.anchor.json` 坐标，跨人格（`RENDER_PERSONA_WATERMARK`）复用同一份无水印 Base Card 仅叠印署名。若自定义样式不走 `footer_block`，请设类属性 `supports_dynamic_footer = False` 让渲染器自动回退到按署名分键整卡渲染。
-4. **新增网页布局主题**（详见 [网页主题开发指南](WEB_THEME_GUIDE.md)）：在 `views/rika/themes/` 新建主题模块调用 `registerTheme(...)`（可同时声明 `layout`、`navMode`、`light`/`dark` 变量及布局级 `css`）并在 `themes/index.js` 引入，即可自动出现在「主题与兜底」中并同步响应 AstrBot `light/dark`。
+4. **新增整页网页主题**（详见 [网页主题开发指南](WEB_THEME_GUIDE.md)）：在 `views/rika/themes/<id>/` 放置 `manifest.json`、独立 `index.js`（导出 `mount(mountEl, ctx)`）与隔离 CSS（也可通过 `window.RikaWebTheme.registerTheme` 运行时注册）。由 `webui.py::_discover_webui_themes()` 自动发现并下发清单；切换主题时卸载旧 DOM 与样式表并挂载全新整页应用，与无头 `core/` 解耦。
 
 ---
 

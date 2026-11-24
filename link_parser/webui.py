@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from datetime import datetime
+import json
 import re
 from pathlib import Path
 import time
@@ -48,6 +49,9 @@ MAX_URL_LENGTH = 2048
 
 #: 调试日志标识的合法形态（纯十六进制，防目录穿越）
 _DEBUG_TOKEN_RE = re.compile(r"[0-9a-f]{12}")
+
+#: WebUI 整页主题 ID 校验（与 config/schema.py 中 WEBUI_THEME 规则一致）
+_THEME_ID_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 
 def _json_response(data: Any, status_code: int = 200):
@@ -95,6 +99,90 @@ def _registered_style_cards() -> list[dict[str, str]]:
             {"name": "immersive", "display_name": "沉浸全屏", "description": "封面铺满整卡，无图回退 standard"},
             {"name": "feed", "display_name": "社交动态", "description": "作者行置顶，媒体内嵌为圆角块"},
         ]
+
+
+def _safe_theme_asset(theme_dir: Path, raw_rel: str) -> str | None:
+    """校验主题包内资源路径不越界且存在，返回 ``views/rika`` 相对 POSIX 路径。"""
+    rel = str(raw_rel or "").strip()
+    if not rel or rel.startswith(("/", "\\")):
+        return None
+    try:
+        resolved_root = theme_dir.resolve()
+        candidate = (resolved_root / rel).resolve()
+        sub_rel = candidate.relative_to(resolved_root)
+    except (OSError, ValueError):
+        return None
+    if not candidate.is_file():
+        return None
+    return f"themes/{theme_dir.name}/{sub_rel.as_posix()}"
+
+
+def _discover_webui_themes() -> list[dict[str, Any]]:
+    """自动扫描 ``views/rika/themes/<id>/manifest.json`` 发现独立整页主题。"""
+    themes_dir = Path(__file__).resolve().parent.parent / "views" / "rika" / "themes"
+    if not themes_dir.is_dir():
+        return []
+
+    found: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for item in sorted(themes_dir.iterdir(), key=lambda p: p.name.lower()):
+        if not item.is_dir() or item.name.startswith((".", "_")):
+            continue
+        manifest_path = item / "manifest.json"
+        if not manifest_path.is_file():
+            continue
+        try:
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - 单个错误主题包不影响其余主题加载
+            logger.warning(f"[link_parser] 读取网页主题清单失败: {manifest_path}", exc_info=True)
+            continue
+        if not isinstance(raw, dict):
+            continue
+
+        theme_id = str(raw.get("id") or item.name).strip().lower()
+        if not _THEME_ID_RE.fullmatch(theme_id) or theme_id in seen_ids:
+            logger.warning(f"[link_parser] 跳过非法或重复的网页主题 ID: {theme_id!r}")
+            continue
+
+        entry_url = _safe_theme_asset(item, str(raw.get("entry") or "index.js"))
+        if not entry_url:
+            logger.warning(f"[link_parser] 网页主题 {theme_id} 缺少有效入口模块: {raw.get('entry')!r}")
+            continue
+
+        raw_styles = raw.get("styles")
+        styles: list[str] = []
+        if raw_styles is None:
+            default_css = _safe_theme_asset(item, "theme.css")
+            if default_css:
+                styles.append(default_css)
+        elif isinstance(raw_styles, list):
+            for css_rel in raw_styles:
+                resolved_css = _safe_theme_asset(item, str(css_rel))
+                if resolved_css:
+                    styles.append(resolved_css)
+
+        try:
+            order = int(raw.get("order", 100))
+        except (TypeError, ValueError):
+            order = 100
+
+        seen_ids.add(theme_id)
+        found.append(
+            {
+                "id": theme_id,
+                "name": str(raw.get("name") or theme_id).strip(),
+                "subtitle": str(raw.get("subtitle") or "").strip(),
+                "description": str(raw.get("description") or "").strip(),
+                "badge": str(raw.get("badge") or "").strip(),
+                "preview": str(raw.get("preview") or "").strip(),
+                "order": order,
+                "entry": entry_url,
+                "styles": styles,
+            }
+        )
+
+    found.sort(key=lambda t: (int(t.get("order", 100)), t["id"]))
+    return found
 
 
 def _ensure_current_style(payload: dict[str, Any], current: Any) -> None:
@@ -222,8 +310,6 @@ async def _collect_cache_stats(plugin: Any) -> dict[str, Any]:
 def read_schema_problems() -> list[str]:
     """读取 ``_conf_schema.json`` 并校验它与 :data:`CONFIG_META` 的一致性。"""
     try:
-        import json
-
         path = Path(__file__).resolve().parent.parent / "_conf_schema.json"
         schema = json.loads(path.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 - 自检失败不应影响页面可用
@@ -747,6 +833,7 @@ class WebUIApi:
         payload["platforms"] = platform_options(effective_cfg)
         payload["styles"] = _registered_style_cards()
         payload["preview_samples"] = list(PREVIEW_SAMPLE_SPECS)
+        payload["webui_themes"] = _discover_webui_themes()
         return payload
 
     async def get_config(self):

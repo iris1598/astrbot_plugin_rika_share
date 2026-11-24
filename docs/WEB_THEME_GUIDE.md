@@ -1,184 +1,390 @@
 # 网页主题（WebUI Theme）开发指南
 
-本文档面向前端扩展与界面定制开发者，说明如何为 `astrbot_plugin_rika_share` 的内嵌控制台（WebUI）编写新的结构化布局与配色主题。
+本文档面向前端扩展与界面定制开发者，说明如何为 `astrbot_plugin_rika_share` 控制台（`views/rika/`）编写一套**完整独立的前端页面设计**。
 
-本插件的网页主题并非单纯更换色板，而是支持**配色令牌 + 导航形态（Sidebar / Dock）+ CSS 布局覆盖**的完整主题包体系。
+在本插件中，网页主题**不是配色变量表或局部 CSS 皮肤**，而是一个**独立的整页前端应用包**：
 
----
-
-## 一、文件位置与注册机制
-
-### 1.1 目录结构
-
-WebUI 主题系统位于 [views/rika/themes/](../views/rika/themes)：
-
-- [registry.js](../views/rika/themes/registry.js)：主题注册表、DOM 属性同步与全局 API。
-- [index.js](../views/rika/themes/index.js)：导入并导出所有内置主题模块，负责首屏集中注册。
-- 内置参考主题：
-  - [studio.js](../views/rika/themes/studio.js)（`DEFAULT_THEME_ID = "studio"`，经典侧栏工作台）
-  - [glass-center.js](../views/rika/themes/glass-center.js)（居中性/毛玻璃风格 + 底部悬浮 Dock 导航）
-- 基础样式表：[style.css](../views/rika/style.css)。
-
-### 1.2 配置校验契约
-
-后端配置项 `WEBUI_THEME`（定义于 [schema.py](../link_parser/config/schema.py)）采用开放正则约束，**无需修改后端白名单即可保存任意新主题 ID**：
-
-- `type: "string"`
-- `default: "studio"`
-- `pattern: r"^[a-z][a-z0-9_-]*$"`（小写字母开头，可包含小写字母、数字、下划线或连字符）
-
-颜色模式 `WEBUI_COLOR_MODE` 支持 `"auto"`、`"light"`、`"dark"`，对应 `VALID_COLOR_MODES`。
-
-### 1.3 两种注册方式
-
-1. **静态内置主题**：在 `views/rika/themes/<name>.js` 定义并调用 `registerTheme(...)`，随后在 [index.js](../views/rika/themes/index.js) 中引入该模块。
-2. **运行时扩展注册**：`installGlobalThemeApi()` 会在全局挂载 `window.RikaWebTheme`，支持在运行时通过 `window.RikaWebTheme.registerTheme(spec)` 动态注册新主题。
-
-注册表提供 `registerTheme`、`getTheme`、`listThemes` 与 `applyTheme` 四个核心函数。
+- 每个主题独立拥有自己的 `manifest.json`、页面入口 `mount(mountEl, ctx)`、整页 DOM 架构、信息布局、交互流与隔离的 CSS 样式文件；
+- 宿主仅提供极轻量的启动样式（[boot.css](../views/rika/boot.css)）与纯粹的无头业务运行时（[core/](../views/rika/core)）；
+- 切换主题时，主题引擎会彻底卸载旧主题的 DOM、`onDispose` 订阅器、定时器与 `<head>` 中的样式标签，再全新挂载目标主题的页面与样式，主题之间**零 DOM / CSS 耦合与污染**。
 
 ---
 
-## 二、`ThemeSpec` 规范与最小示例
+## 一、架构总览与目录布局
 
-### 2.1 `ThemeSpec` 字段说明
-
-| 字段 | 类型 | 说明 |
-| :--- | :--- | :--- |
-| `id` | `string` | 主题唯一 ID（自动转为小写；若需持久化保存需符合 `^[a-z][a-z0-9_-]*$`） |
-| `name` | `string` | 主题显示名称（展示于主题切换器卡片） |
-| `subtitle` | `string` | 简短副标题 |
-| `description` | `string` | 主题特性描述文案 |
-| `layout` | `string` | 布局标识（内置 `"studio"`、`"glass-center"`，或自定义标识，挂载到 `data-layout`） |
-| `navMode` | `"sidebar" \| "dock"` | 导航结构模式（挂载到 `data-nav`，并决定设置页线框预览图样式） |
-| `badge` | `string` | 角标文案 |
-| `light` | `Record<string, string>` | 浅色模式下的 CSS 自定义属性映射 |
-| `dark` | `Record<string, string>` | 深色模式下的 CSS 自定义属性映射 |
-| `css` | `string` | 主题专属布局样式字符串，切换主题时动态注入 `<style id="rika-theme-layout-css">` |
-
-> [!NOTE]
-> WebUI「系统与外观」设置页中的主题预览卡片会根据 `navMode` 自动生成线框示意图：当 `navMode === "dock"` 时绘制底部悬浮导航栏线框，其余值默认绘制左侧边栏线框。
-
-### 2.2 最小主题模块示例
-
-在 `views/rika/themes/minimal-paper.js` 新建主题：
-
-```javascript
-import { registerTheme } from "./registry.js";
-
-const COMMON_LAYOUT_CSS = `
-[data-layout="minimal-paper"] .surface-panel {
-  border-width: 1.5px;
-}
-[data-layout="minimal-paper"][data-nav="sidebar"] .shell-nav {
-  backdrop-filter: var(--blur);
-}
-`;
-
-export const minimalPaperTheme = {
-  id: "minimal-paper",
-  name: "素纸工作台",
-  subtitle: "高对比留白 · 侧栏布局",
-  description: "以纸面高对比排版与清爽边框为核心的轻量管理视图。",
-  layout: "minimal-paper",
-  navMode: "sidebar",
-  badge: "自定义",
-  light: {
-    "--bg": "#f7f6f2",
-    "--ambient": "radial-gradient(circle at 20% 0%, rgba(79, 70, 229, 0.08), transparent 48%)",
-    "--surface": "#ffffff",
-    "--surface-alt": "#f1efe9",
-    "--surface-hover": "#eae7df",
-    "--ink": "#18181b",
-    "--ink-2": "#3f3f46",
-    "--ink-muted": "#71717a",
-    "--border": "rgba(24, 24, 27, 0.10)",
-    "--border-strong": "rgba(24, 24, 27, 0.20)",
-    "--accent": "#4f46e5",
-    "--accent-hover": "#4338ca",
-    "--accent-soft": "rgba(79, 70, 229, 0.12)",
-    "--accent-ink": "#ffffff",
-    "--ok": "#16a34a",
-    "--warn": "#d97706",
-    "--err": "#dc2626",
-    "--radius": "10px",
-    "--radius-lg": "16px",
-    "--shadow": "0 8px 24px rgba(15, 23, 42, 0.06)",
-    "--blur": "blur(12px)",
-  },
-  dark: {
-    "--bg": "#121316",
-    "--ambient": "radial-gradient(circle at 20% 0%, rgba(129, 140, 248, 0.14), transparent 50%)",
-    "--surface": "#1a1c21",
-    "--surface-alt": "#22252c",
-    "--surface-hover": "#2a2e37",
-    "--ink": "#f4f4f5",
-    "--ink-2": "#d4d4d8",
-    "--ink-muted": "#a1a1aa",
-    "--border": "rgba(255, 255, 255, 0.09)",
-    "--border-strong": "rgba(255, 255, 255, 0.18)",
-    "--accent": "#818cf8",
-    "--accent-hover": "#a5b4fc",
-    "--accent-soft": "rgba(129, 140, 248, 0.16)",
-    "--accent-ink": "#0f172a",
-    "--ok": "#4ade80",
-    "--warn": "#fbbf24",
-    "--err": "#f87171",
-    "--radius": "10px",
-    "--radius-lg": "16px",
-    "--shadow": "0 12px 30px rgba(0, 0, 0, 0.38)",
-    "--blur": "blur(14px)",
-  },
-  css: COMMON_LAYOUT_CSS,
-};
-
-registerTheme(minimalPaperTheme);
+```text
+views/rika/
+├── index.html                  # 极简挂载入口（仅加载 boot.css 与 app.js）
+├── boot.css                    # 启动 Loading / 致命错误面板 / 默认 Toast 通知栈
+├── app.js                      # 宿主协调器：拉取后端 /config，调度主题挂载与热切换
+├── core/                       # 纯无头运行时 SDK（无任何页面 DOM 与风格假设）
+│   ├── store.js                # 配置草稿、分群稀疏覆写作用域、平台开关与保存/重置状态
+│   ├── controllers.js          # 异步控制器：B站扫码轮询 / 实时预览防抖 / 调试探针 / 清理缓存
+│   ├── node_model.js           # 三模式输出节点编排纯数据模型与序列化工具
+│   └── dom.js                  # iframe 沙箱安全 DOM 原语（h / swapContent / preserveScroll 等）
+└── themes/
+    ├── registry.js             # 整页主题生命周期引擎与 window.RikaWebTheme
+    ├── studio/                 # 内置设计 1：工作台分栏（左侧栏 + 4 标签工程台）
+    │   ├── manifest.json
+    │   ├── index.js
+    │   ├── theme.css
+    │   ├── widgets.js
+    │   └── views/
+    └── glass-center/           # 内置设计 2：空间指挥舱（顶部指挥条 + Bento + 聊天真预览）
+        ├── manifest.json
+        ├── index.js
+        └── theme.css
 ```
 
-随后在 [views/rika/themes/index.js](../views/rika/themes/index.js) 中导入 `./minimal-paper.js` 即可出现在主题列表中。
+> [!TIP]
+> 内置的两套主题正是同一无头核心下的两种彻底不同的页面设计：
+> - [studio/](../views/rika/themes/studio)：左侧栏 + 独立全局/分群横栏 + 4 页签高密度表单工作台；
+> - [glass-center/](../views/rika/themes/glass-center)：悬浮顶栏 + 底部空间 Dock + 驾驶舱 Bento 网格 + 模拟 IM 聊天气泡预览台 + 三泳道节点流水线。
 
 ---
 
-## 三、CSS 设计令牌（Tokens）参考表
+## 二、发现与注册机制
 
-基础样式表 [style.css](../views/rika/style.css) 与内置主题使用同一套 CSS 变量体系，建议在 `light` 与 `dark` 中保持完整定义：
+### 2.1 目录包自动发现（推荐）
 
-| 分类 | CSS 变量名 | 用途 |
-| :--- | :--- | :--- |
-| **背景与表面** | `--bg`、`--ambient`、`--surface`、`--surface-alt`、`--surface-hover` | 页面底色、环境光晕、卡片表面及交互悬停态 |
-| **文字与边框** | `--ink`、`--ink-2`、`--ink-muted`、`--border`、`--border-strong` | 主标题、二级正文、说明文字及常规/强调描边 |
-| **品牌主色** | `--accent`、`--accent-hover`、`--accent-soft`、`--accent-ink` | 主按钮、激活态、浅底标签与主按钮反白字色 |
-| **语义状态** | `--ok`、`--warn`、`--err` | 成功、警告、错误提示与状态徽章 |
-| **圆角阴影字体** | `--radius`、`--radius-lg`、`--shadow`、`--blur`、`--font-sans`、`--font-mono` | 圆角半径、投影、毛玻璃模糊度与无衬线/等宽字体栈 |
+只需要在 `views/rika/themes/<theme_id>/` 下放入 `manifest.json`、入口 JS 及样式文件，**无需修改后端或前端任何注册清单文件**：
 
----
+1. [webui.py](../link_parser/webui.py) 中的 `_discover_webui_themes()` 会自动扫描 `views/rika/themes/*/manifest.json`（跳过 `.` 或 `_` 开头目录），并校验 `entry` 与 `styles` 路径严格位于该主题目录内。
+2. 主题 ID 必须匹配 `WEBUI_THEME` 校验正则 `^[a-z][a-z0-9_-]*$`（定义于 [schema.py](../link_parser/config/schema.py)）。
+3. `GET /config` 通过 `webui_themes` 字段下发清单，前端打开设置页时自动列出主题并在选中时按需 `import()` 加载其 `entry` 与 CSS。
 
-## 四、DOM 契约与关键结构类名
+### 2.2 运行时动态注册（`window.RikaWebTheme`）
 
-### 4.1 根节点动态属性
+外部脚本也可通过全局 API 直接注册完整整页主题（支持内联 `css` 字符串或 `styles` URL 列表）：
 
-调用 `applyTheme` 时，系统会在 `document.documentElement` 写入以下属性，主题的 `css` 字符串推荐以 `[data-layout="..."]` 与 `[data-nav="..."]` 作为作用域前缀：
-
-- `data-theme="light" | "dark"`（当前生效明暗态）
-- `data-color-mode="auto" | "light" | "dark"`（用户选择的模式）
-- `data-rika-theme="<id>"`（当前主题 ID）
-- `data-layout="<layout>"`（结构布局标识）
-- `data-nav="<navMode>"`（导航栏形态）
-
-### 4.2 编写自定义 `css` 时需兼顾的业务组件
-
-在调整布局、边距或重构 Dock/Sidebar 时，请确保以下现有页面结构保持清晰可读与正常交互：
-
-- **应用框架与导航**：`.app-shell`、`.shell-nav`、`.nav-brand`、`.nav-menu`、`.nav-btn`、`.nav-ico`、`.nav-label`、`.nav-foot`、`.theme-badge-btn`
-- **主舞台与顶栏**：`.shell-content`、`.stage-header`、`.stage-heading`、`.dock-brand-mini`、`.topbar-theme-btn`、`.save-strip`、`.stage-body`、`.tab-panel`、`.page-stack`
-- **作用域切换条（全局 / 分群管理）**：`.scope-bar`、`.scope-bar.is-group-scope`、`.scope-add-form`
-- **面板与卡片工作室**：`.surface-panel`、`.kpi-grid`、`.studio-split`
-- **三区域拖拽节点编排板**：`.node-zones-board`、`.node-zone`、`.node-drag-card`、`.node-quick-bar`
-- **提示弹窗栈**：`.toast-stack`（若采用底部 Dock 布局，请注意配合 `[data-nav="dock"] .toast-stack` 避免底部提示条与悬浮 Dock 重叠）
+```javascript
+window.RikaWebTheme.registerTheme({
+  id: "custom_page",
+  name: "极简单页",
+  subtitle: "Single-Column Editorial",
+  description: "单栏长卷流式控制台",
+  badge: "外部",
+  css: `...`,
+  mount(mountEl, ctx) { ... },
+});
+```
 
 ---
 
-## 五、沙箱与运行环境约束
+## 三、`manifest.json` 与 `mount(mountEl, ctx)` 契约
 
-1. **Iframe 沙箱限制**：WebUI 运行在 `sandbox="allow-scripts allow-forms allow-downloads"` 的 iframe 内，**不要依赖 `localStorage` 等同源持久存储 API**；主题选择与颜色模式通过宿主配置下发和保存。
-2. **离线与内网可用性**：请避免在主题 `css` 中通过 `@import` 或外链加载公网字体或远程样式表，优先使用 CSS 变量、Flex/Grid 与本地系统字体栈，保证离线或纯局域网环境下正常加载。
-3. **无构建依赖**：前端源码直接以原生 ES Modules 提供服务，改动主题文件后刷新控制台即可生效。
+### 3.1 `manifest.json` 字段规范
+
+```json
+{
+  "id": "editorial",
+  "name": "刊物式单页后台",
+  "subtitle": "Editorial Flow · 长卷流式布局",
+  "description": "取消多标签切换，以双栏目录索引 + 长页面分组卡片一次性呈现全部调节能力。",
+  "badge": "自定义",
+  "preview": "editorial",
+  "order": 30,
+  "entry": "index.js",
+  "styles": ["theme.css"]
+}
+```
+
+| 字段 | 必填 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `id` | 建议 | 目录名 | 小写字母开头，匹配 `^[a-z][a-z0-9_-]*$` |
+| `name` | 是 | `id` | 主题展示名 |
+| `subtitle` | 否 | `""` | 架构一句话定位 |
+| `description` | 否 | `""` | 页面设计差异与适用场景说明 |
+| `badge` | 否 | `""` | 角标徽章 |
+| `preview` | 否 | `""` | 可选线框提示标识 |
+| `order` | 否 | `100` | 展示排序权重（内置 `studio` 为 `10`，`glass-center` 为 `20`） |
+| `entry` | 否 | `"index.js"` | 相对于当前主题目录的 ES Module 入口文件 |
+| `styles` | 否 | `["theme.css"]` | 相对于当前主题目录的样式文件数组（仅在当前主题激活时挂载到 `<head>`） |
+
+### 3.2 入口模块签名与生命周期
+
+主题入口 `index.js` 通过 `export default` 导出对象（或导出 `mount(mountEl, ctx)`）：
+
+```javascript
+export default {
+  mount(mountEl, ctx) {
+    // 1. 使用 ctx.dom / 原生 DOM 完全接管 mountEl 构建整套页面
+    // 2. 使用 ctx.onDispose(...) 注册订阅器清理逻辑
+    // 3. 返回生命周期钩子（可选）
+    return {
+      unmount() {
+        // 清理自定义 DOM、事件与资源
+      },
+      onColorModeChange({ colorMode, resolvedDark, resolvedMode }) {
+        // 响应用户或宿主切换 light / dark
+      },
+      onContextChange(nextContext) {
+        // 响应 AstrBot 上下文（如 locale / isDark）更新
+      },
+    };
+  },
+};
+```
+
+> [!IMPORTANT]
+> **完全样式与 DOM 隔离**：
+> - `mount(mountEl, ctx)` 挂载时，主题引擎会在 `<html>` 上同步维护 `data-theme="light" | "dark"`、`data-color-mode="auto" | "light" | "dark"` 与 `data-rika-theme="<id>"`。
+> - 主题的所有样式请写在自己的 `theme.css`（利用 `[data-theme="dark"]` 适配深色模式），切走主题时引擎会自动卸载之前所有的 `<link data-rika-theme-asset>` 与 `<style>` 标签并调用 `onDispose` / `unmount()`。
+
+---
+
+## 四、`ctx` 无头运行时 API 参考
+
+`mount(mountEl, ctx)` 收到的第二个参数 `ctx` 提供完整、与 UI 无关的业务数据与操作接口：
+
+### 4.1 状态仓库 `ctx.store`
+
+| 成员 / 方法 | 说明 |
+| :--- | :--- |
+| `meta` / `draft` / `overview` | 后端元信息（`items` / `platforms` / `styles` / `node_schema` / `webui_themes`）、当前草稿及运行概览 |
+| `scope` / `scopeLabel` / `groupProfiles` | 当前配置作用域（空串 = 全局默认；非空 = 分群作用域）与已知分群档案列表 |
+| `overridableSet` / `overrideKeys` / `pendingUnset` | 允许分群覆写的 18 个键集合、当前群独立覆盖键及待恢复继承键 |
+| `itemMap()` / `itemsByGroup()` | 按键或按配置组高效索引配置项元数据 |
+| `isOverridable(key)` / `isKeyOverridden(key)` / `isKeyDirty(key)` / `dirtyKeys()` | 作用域权限、覆盖态与未保存脏状态判定 |
+| `isPlatformEnabled(name)` / `togglePlatform(name)` / `setAllPlatformsEnabled(bool)` | 读取与修改 `DISABLED_PLATFORMS` 开关集合 |
+| `setDraftValue(key, val, { rerender })` / `revertKeyToInherit(key)` / `discardDraft()` | 修改草稿、单键恢复继承全局、放弃未保存改动 |
+| `saveDirty()` / `resetConfig()` / `refreshOverview(notify)` | 提交保存并热更新、重置当前作用域、刷新概览状态 |
+| `switchScope(scope)` / `createGroupScope(raw, label)` / `deleteGroupScope(scope)` | 切换作用域、新建或删除分群独立配置档案 |
+| `showDevKeys` / `setShowDevKeys(bool)` | 控制是否展示配置项底层常量键名 |
+| `toast(msg, kind, durationMs)` | 触发非阻塞悬浮通知（`"info"` / `"ok"` / `"warn"` / `"err"`） |
+| `subscribe(fn)` | 订阅状态事件（`draft`、`snapshot`、`scope`、`saving`、`overview`、`discard`、`context`、`devkeys`），返回取消订阅函数 |
+
+### 4.2 领域异步控制器
+
+- **`ctx.bili`**（B站账号与扫码控制器）：
+  - `.getState()` 返回 `{ busyCheck, busyQr, qrSession, bili }`
+  - `.refreshStatus()` / `.checkCookie()` / `.startQrLogin()` / `.cancelQrLogin()` / `.subscribe(fn)`（扫码期间自动 2.5s 轮询状态，取消或成功自动停表）
+- **`ctx.preview`**（卡片与样式实时渲染控制器）：
+  - `.getState()` 返回 `{ sampleId, personaName, loading, error, data, thumbsLoading, thumbs }`
+  - `.fetchStyleThumbs(force)` / `.scheduleCard(delayMs)` / `.setSampleId(id)` / `.setPersonaName(name)` / `.subscribe(fn)`
+- **`ctx.debug`**（链接诊断探针控制器）：
+  - `.getState()` 返回 `{ url, downloadMedia, renderCard, running, error, report }`
+  - `.setUrl(url)` / `.setDownloadMedia(bool)` / `.setRenderCard(bool)` / `.runProbe()` / `.downloadLog(token, logName)` / `.subscribe(fn)`
+- **`ctx.cache`**（缓存清理控制器）：
+  - `.getState()` 返回 `{ clearing }`；`.clearAll()` 一键清理磁盘与内存缓存。
+
+### 4.3 节点编排数据引擎 `ctx.nodeModel`
+
+提供与 DOM 无关的三模式节点计算能力（详见 [node_model.js](../views/rika/core/node_model.js)）：
+
+- `NODE_ZONES`（`standalone` / `merge` / `disabled` 三去向元信息）
+- `normalizeNodeRulesClient(raw, nodeSchema)` / `rulesEqual(a, b, nodeSchema)` / `serializeNodeRules(obj, nodeSchema)`
+- `splitNodeBuckets(list, catalog)` / `moveNodeBetweenZones({ rawRules, nodeSchema, mode, nodeId, targetZone, targetIndex })`
+- `buildOrderSummary(list, catalog)`（实时计算当前模式合并段与独立消息序列）
+
+### 4.4 主题控制、DOM 工具与生命周期
+
+- `ctx.themes`：`listThemes()` / `getTheme(id)` / `getActiveThemeId()` / `registerTheme(spec)`
+- `ctx.setThemePreference(themeId)` / `ctx.setColorModePreference(mode)`：更新 `WEBUI_THEME`（立即触发整页热切换）或 `WEBUI_COLOR_MODE`（`"auto" | "light" | "dark"`）
+- `ctx.colorMode` / `ctx.resolvedDark` / `ctx.resolvedMode` / `ctx.systemIsDark`
+- `ctx.dom`：`h`、`append`、`clear`、`swapContent`、`preserveScroll`、`icon`、`formatBytes`、`valuesEqual`、`createInlineConfirmButton`
+- `ctx.onDispose(cleanupFn)`：注册任意订阅器/清理回调，会在切换主题卸载当前页面时自动调用。
+
+---
+
+## 五、完整自定义主题示例：`views/rika/themes/editorial/`
+
+下面演示如何从零编写一套**与工作台、指挥舱完全不同页面结构的“单栏长卷索引主题”**（只展示核心模式：左侧目录锚点 + 右侧流式分区 + 即时诊断 + 保存条）：
+
+### 5.1 `views/rika/themes/editorial/manifest.json`
+
+```json
+{
+  "id": "editorial",
+  "name": "刊物单页",
+  "subtitle": "Editorial Stream · 无页签长卷式控制台",
+  "description": "摒弃标签页切换，以极简双栏阅读排版将状态、平台与快捷参数整合在一条长卷流中。",
+  "badge": "示例",
+  "order": 30,
+  "entry": "index.js",
+  "styles": ["theme.css"]
+}
+```
+
+### 5.2 `views/rika/themes/editorial/theme.css`
+
+```css
+:root {
+  --ed-bg: #faf8f4;
+  --ed-paper: #ffffff;
+  --ed-ink: #1c1917;
+  --ed-muted: #78716c;
+  --ed-accent: #0f766e;
+  --ed-line: #e7e5e4;
+}
+
+[data-theme="dark"] {
+  --ed-bg: #141311;
+  --ed-paper: #1c1a17;
+  --ed-ink: #f5f5f4;
+  --ed-muted: #a8a29e;
+  --ed-accent: #2dd4bf;
+  --ed-line: #292524;
+}
+
+body {
+  background: var(--ed-bg);
+  color: var(--ed-ink);
+}
+
+.ed-shell {
+  max-width: 1020px;
+  margin: 0 auto;
+  padding: 28px 20px 64px;
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 28px;
+}
+
+.ed-toc {
+  position: sticky;
+  top: 24px;
+  align-self: start;
+  border-right: 1px solid var(--ed-line);
+  padding-right: 18px;
+}
+
+.ed-article {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.ed-block {
+  background: var(--ed-paper);
+  border: 1px solid var(--ed-line);
+  padding: 22px;
+}
+```
+
+### 5.3 `views/rika/themes/editorial/index.js`
+
+```javascript
+export default {
+  mount(mountEl, ctx) {
+    const { store, debug, themes, setThemePreference, dom, onDispose } = ctx;
+    const { h, swapContent } = dom;
+
+    const mainCol = h("div", { class: "ed-article" });
+    const tocStatus = h("div");
+    const root = h(
+      "div",
+      { class: "ed-shell" },
+      h(
+        "aside",
+        { class: "ed-toc" },
+        h("h2", null, "莉卡解析 · 刊物视图"),
+        tocStatus,
+      ),
+      mainCol,
+    );
+
+    function render() {
+      const dirty = store.dirtyKeys().length;
+      const dbg = debug.getState();
+
+      swapContent(tocStatus, [
+        h("p", null, store.scope ? `分群：${store.scopeLabel}` : "全局配置"),
+        dirty > 0
+          ? h(
+              "button",
+              { type: "button", disabled: store.saving, onclick: () => store.saveDirty() },
+              store.saving ? "保存中…" : `保存 ${dirty} 项`,
+            )
+          : h("span", null, "所有更改已同步"),
+      ]);
+
+      const probeInp = h("input", {
+        type: "url",
+        placeholder: "输入链接测试…",
+        oninput: (e) => debug.setUrl(e.target.value),
+      });
+      probeInp.value = dbg.url;
+
+      swapContent(mainCol, [
+        h(
+          "section",
+          { class: "ed-block" },
+          h("h3", null, "一、平台启停"),
+          h(
+            "div",
+            { style: { display: "flex", flexWrap: "wrap", gap: "8px" } },
+            (store.meta?.platforms || []).map((p) => {
+              const on = store.isPlatformEnabled(p.name);
+              return h(
+                "button",
+                {
+                  type: "button",
+                  onclick: () => {
+                    store.togglePlatform(p.name);
+                    render();
+                  },
+                },
+                `${p.label || p.name}: ${on ? "开" : "关"}`,
+              );
+            }),
+          ),
+        ),
+        h(
+          "section",
+          { class: "ed-block" },
+          h("h3", null, "二、链接链路诊断"),
+          probeInp,
+          h(
+            "button",
+            { type: "button", disabled: dbg.running, onclick: () => debug.runProbe() },
+            dbg.running ? "诊断中…" : "开始诊断",
+          ),
+          dbg.report ? h("pre", null, dbg.report.text || JSON.stringify(dbg.report.summary)) : null,
+        ),
+        h(
+          "section",
+          { class: "ed-block" },
+          h("h3", null, "三、切换网页设计主题"),
+          h(
+            "div",
+            { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
+            themes.listThemes().map((t) =>
+              h(
+                "button",
+                { type: "button", onclick: () => setThemePreference(t.id) },
+                `切换到「${t.name}」`,
+              ),
+            ),
+          ),
+        ),
+      ]);
+    }
+
+    onDispose(store.subscribe(() => render()));
+    onDispose(debug.subscribe(() => render()));
+    render();
+    mountEl.appendChild(root);
+
+    return {
+      unmount() {
+        root.remove();
+      },
+    };
+  },
+};
+```
+
+放好这 3 个文件后重启或重载插件页面，在原有主题的主题切换区即可看到新主题并整页热切换，**无需改任何已有文件**。
+
+---
+
+## 六、受限 iframe 沙箱安全红线
+
+WebUI 运行在 AstrBot `sandbox="allow-scripts allow-forms allow-downloads"` 的受限 iframe 中，开发自定义整页主题时务必遵守：
+
+1. **禁止拼接 HTML**：请使用 `document.createElement` / `ctx.dom.h(...)` 与 `textContent` 构建 DOM，防止 XSS 或 CSP 异常。
+2. **表单赋值走属性**：给 `<input>`、`<textarea>`、`<select>` 赋初始值时必须设置 `node.value = ...`（不能用 `setAttribute("value", ...)`）。
+3. **禁止浏览器阻塞弹窗**：禁止使用 `alert()` / `confirm()` / `prompt()`，破坏性操作（如清空缓存、删除分群、重置配置）请采用行内二次确认（可使用 `ctx.dom.createInlineConfirmButton`）。
+4. **禁止依赖 `localStorage`**：受限沙箱没有 `allow-same-origin`，所有状态持久化请交给 `ctx.store` 或主题内部会话内存。
+5. **纯离线 / 无构建运行**：直接输出浏览器原生 ES Modules 与标准 CSS，勿引用需要联网的 CDN 样式或公网字体，以便局域网环境正常渲染。

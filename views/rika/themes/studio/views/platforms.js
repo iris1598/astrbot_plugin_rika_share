@@ -1,4 +1,5 @@
-import { buildControlRow, clear, h, swapContent, valuesEqual } from "../ui.js";
+import { clear, h, swapContent, valuesEqual } from "../../../core/dom.js";
+import { buildControlRow } from "../widgets.js";
 
 const ACCOUNT_KEYS = [
   "BILI_CK",
@@ -27,170 +28,42 @@ const TRANSPORT_KEYS = [
   "FORWARD_MAX_BATCH_MB",
 ];
 
-function parseDisabledSet(raw) {
-  return new Set(
-    String(raw || "")
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean),
-  );
-}
-
-export function createPlatformsView(store) {
+export function createStudioPlatformsView(appCtx) {
+  const { store, bili } = appCtx;
   const root = h("div", { class: "page-stack" });
   const biliBoxHost = h("div", { class: "bili-box-host" });
   let filterText = "";
   const revealed = new Set();
-  let busyCheck = false;
-  let busyQr = false;
-  let qrSession = null;
-  let pollTimer = null;
-
-  function syncBiliBox() {
-    swapContent(biliBoxHost, [renderBiliStatusBox()]);
-  }
-
-  function stopPolling() {
-    if (pollTimer) {
-      window.clearInterval(pollTimer);
-      pollTimer = null;
-    }
-  }
-
-  function startPolling() {
-    stopPolling();
-    if (!qrSession?.active || !qrSession?.qrcode_key) return;
-    pollTimer = window.setInterval(() => {
-      pollBiliStatus();
-    }, 2500);
-  }
-
-  function applyBiliResponse(res) {
-    if (res?.bili) {
-      store.overview = { ...(store.overview || {}), bili: res.bili };
-      store.views.workbench?.sync?.();
-    }
-  }
-
-  async function refreshBiliStatus() {
-    try {
-      const res = await store.bridge.apiGet("bili/status", {});
-      applyBiliResponse(res);
-      if (res?.qr && res.qr.active) {
-        qrSession = { ...(qrSession || {}), ...res.qr };
-        startPolling();
-      }
-      syncBiliBox();
-    } catch (err) {
-      store.toast(`获取B站状态失败：${err.message || err}`, "err");
-    }
-  }
-
-  async function checkBiliCookie() {
-    if (busyCheck) return;
-    busyCheck = true;
-    syncBiliBox();
-    try {
-      const res = await store.bridge.apiPost("bili/check", {});
-      applyBiliResponse(res);
-      if (res?.checked === false) {
-        store.toast(res.message || "尚未配置B站 Cookie", "warn");
-      } else if (res?.result?.valid) {
-        store.toast(`B站 Cookie 有效（${res.result.username || "已登录"}）`, "ok");
-      } else {
-        store.toast(`B站 Cookie 已失效：${res?.result?.error || "请重新扫码"}`, "err");
-      }
-    } catch (err) {
-      store.toast(`检测失败：${err.message || err}`, "err");
-    } finally {
-      busyCheck = false;
-      syncBiliBox();
-    }
-  }
-
-  async function startQrLogin() {
-    if (busyQr) return;
-    busyQr = true;
-    syncBiliBox();
-    try {
-      const res = await store.bridge.apiPost("bili/login", { action: "start" });
-      applyBiliResponse(res);
-      qrSession = res?.qr || null;
-      if (qrSession?.active) {
-        startPolling();
-      }
-    } catch (err) {
-      store.toast(`获取二维码失败：${err.message || err}`, "err");
-    } finally {
-      busyQr = false;
-      syncBiliBox();
-    }
-  }
-
-  async function cancelQrLogin() {
-    stopPolling();
-    qrSession = null;
-    syncBiliBox();
-    try {
-      const res = await store.bridge.apiPost("bili/login", { action: "cancel" });
-      applyBiliResponse(res);
-    } catch {
-      // 关闭面板不阻塞前端交互
-    }
-  }
-
-  async function pollBiliStatus() {
-    if (!qrSession?.qrcode_key || store.activeTab !== "platforms") return;
-    try {
-      const res = await store.bridge.apiGet("bili/status", {
-        qrcode_key: qrSession.qrcode_key,
-      });
-      applyBiliResponse(res);
-      if (res?.qr) {
-        qrSession = { ...qrSession, ...res.qr };
-        if (!res.qr.active) {
-          stopPolling();
-          if (res.qr.state === "success") {
-            store.toast(res.qr.message || "B站扫码登录成功！", "ok", 4200);
-            store.refreshOverview(false);
-          } else if (res.qr.state === "expired") {
-            store.toast("登录二维码已过期，请点击刷新", "warn");
-          }
-        }
-        syncBiliBox();
-      }
-    } catch {
-      // 网络短暂抖动等待下次轮询
-    }
-  }
 
   function renderBiliStatusBox() {
-    const bili = store.overview?.bili || {};
-    const statusTone = !bili.has_cookie
+    const state = bili.getState();
+    const info = state.bili || {};
+    const qrSession = state.qrSession;
+    const statusTone = !info.has_cookie
       ? "neutral"
-      : bili.valid === true
+      : info.valid === true
         ? "ok"
-        : bili.valid === false
+        : info.valid === false
           ? "err"
           : "warn";
-    const statusLabel = !bili.has_cookie
+    const statusLabel = !info.has_cookie
       ? "未登录"
-      : bili.valid === true
+      : info.valid === true
         ? "Cookie 有效"
-        : bili.valid === false
+        : info.valid === false
           ? "已失效"
           : "待检测";
 
     const infoBits = [];
-    if (bili.username) {
-      infoBits.push(`${bili.username} (UID ${bili.uid || 0})`);
-    } else if (bili.has_cookie) {
+    if (info.username) {
+      infoBits.push(`${info.username} (UID ${info.uid || 0})`);
+    } else if (info.has_cookie) {
       infoBits.push("已读取 Cookie，点击右侧按钮可验证用户信息");
     } else {
       infoBits.push("未配置 B站 Cookie，高画质视频与部分图文建议扫码登录");
     }
-    if (bili.error && bili.valid === false) {
-      infoBits.push(`异常：${bili.error}`);
+    if (info.error && info.valid === false) {
+      infoBits.push(`异常：${info.error}`);
     }
 
     const box = h(
@@ -207,23 +80,23 @@ export function createPlatformsView(store) {
             { class: "bili-badges-row" },
             h("strong", null, "B站账号登录态"),
             h("span", { class: `pill pill-${statusTone}` }, statusLabel),
-            bili.vip ? h("span", { class: "pill pill-info" }, "大会员") : null,
-            bili.has_cookie
+            info.vip ? h("span", { class: "pill pill-info" }, "大会员") : null,
+            info.has_cookie
               ? h(
                   "span",
-                  { class: `pill ${bili.refreshable ? "pill-ok" : "pill-neutral"}` },
-                  bili.refreshable ? "自动续期就绪" : "普通 Cookie",
+                  { class: `pill ${info.refreshable ? "pill-ok" : "pill-neutral"}` },
+                  info.refreshable ? "自动续期就绪" : "普通 Cookie",
                 )
               : null,
             h(
               "span",
               { class: "pill pill-neutral" },
-              bili.monitor_running ? "监控运行中" : "监控未运行",
+              info.monitor_running ? "监控运行中" : "监控未运行",
             ),
           ),
           h("p", { class: "setting-hint" }, infoBits.join(" · ")),
-          bili.last_check_time
-            ? h("p", { class: "bili-check-time" }, `上次检测：${bili.last_check_time}`)
+          info.last_check_time
+            ? h("p", { class: "bili-check-time" }, `上次检测：${info.last_check_time}`)
             : null,
         ),
         h(
@@ -234,27 +107,27 @@ export function createPlatformsView(store) {
             {
               type: "button",
               class: "btn btn-primary btn-sm",
-              disabled: busyQr,
-              onclick: startQrLogin,
+              disabled: state.busyQr,
+              onclick: () => bili.startQrLogin(),
             },
-            busyQr ? "获取二维码…" : qrSession ? "刷新二维码" : "扫码登录 B站",
+            state.busyQr ? "获取二维码…" : qrSession ? "刷新二维码" : "扫码登录 B站",
           ),
           h(
             "button",
             {
               type: "button",
               class: "btn btn-soft btn-sm",
-              disabled: busyCheck,
-              onclick: checkBiliCookie,
+              disabled: state.busyCheck,
+              onclick: () => bili.checkCookie(),
             },
-            busyCheck ? "检测中…" : "立即检测",
+            state.busyCheck ? "检测中…" : "立即检测",
           ),
           h(
             "button",
             {
               type: "button",
               class: "btn btn-ghost btn-sm",
-              onclick: refreshBiliStatus,
+              onclick: () => bili.refreshStatus(),
             },
             "刷新状态",
           ),
@@ -300,8 +173,8 @@ export function createPlatformsView(store) {
                     {
                       type: "button",
                       class: "btn btn-soft btn-sm",
-                      disabled: busyQr,
-                      onclick: startQrLogin,
+                      disabled: state.busyQr,
+                      onclick: () => bili.startQrLogin(),
                     },
                     "重新获取二维码",
                   )
@@ -311,7 +184,7 @@ export function createPlatformsView(store) {
                 {
                   type: "button",
                   class: "btn btn-ghost btn-sm",
-                  onclick: cancelQrLogin,
+                  onclick: () => bili.cancelQrLogin(),
                 },
                 qrSession.state === "success" ? "完成并收起" : "取消扫码",
               ),
@@ -323,19 +196,16 @@ export function createPlatformsView(store) {
     return box;
   }
 
-  function itemsMap() {
-    const map = new Map();
-    for (const item of store.meta?.items || []) map.set(item.key, item);
-    return map;
+  function syncBiliBox() {
+    swapContent(biliBoxHost, [renderBiliStatusBox()]);
   }
 
   function render() {
-    const map = itemsMap();
+    const map = store.itemMap();
     const platforms = store.meta?.platforms || [];
     const showKey = Boolean(store.showDevKeys);
     const sections = [];
 
-    // 1. 平台开关矩阵
     const gridEl = h("div", { class: "platform-cards" });
     const platTagHost = h("span", { class: "setting-label-tags" });
     const platRevertHost = h("span", { class: "setting-label-tags" });
@@ -379,7 +249,7 @@ export function createPlatformsView(store) {
     };
 
     const renderGrid = () => {
-      const disabled = parseDisabledSet(store.draft.DISABLED_PLATFORMS);
+      const disabled = store.disabledPlatformSet();
       const kw = filterText.trim().toLowerCase();
       const filtered = platforms.filter((p) => {
         if (!kw) return true;
@@ -393,11 +263,7 @@ export function createPlatformsView(store) {
             type: "button",
             class: `platform-tile ${enabled ? "is-on" : "is-off"}`,
             onclick: () => {
-              const next = parseDisabledSet(store.draft.DISABLED_PLATFORMS);
-              const key = p.name.toLowerCase();
-              if (next.has(key)) next.delete(key);
-              else next.add(key);
-              store.setDraftValue("DISABLED_PLATFORMS", Array.from(next).sort().join(", "));
+              store.togglePlatform(p.name);
               renderGrid();
               syncPlatformScopeTags();
             },
@@ -463,7 +329,7 @@ export function createPlatformsView(store) {
                 type: "button",
                 class: "btn btn-ghost btn-sm",
                 onclick: () => {
-                  store.setDraftValue("DISABLED_PLATFORMS", "");
+                  store.setAllPlatformsEnabled(true);
                   renderGrid();
                   syncPlatformScopeTags();
                 },
@@ -476,10 +342,7 @@ export function createPlatformsView(store) {
                 type: "button",
                 class: "btn btn-ghost btn-sm",
                 onclick: () => {
-                  store.setDraftValue(
-                    "DISABLED_PLATFORMS",
-                    platforms.map((p) => p.name.toLowerCase()).join(", "),
-                  );
+                  store.setAllPlatformsEnabled(false);
                   renderGrid();
                   syncPlatformScopeTags();
                 },
@@ -493,7 +356,6 @@ export function createPlatformsView(store) {
       ),
     );
 
-    // 2. 统一账号凭据与扫码监控（B站扫码登录 + B站/小红书 Cookie + 失效监控）
     syncBiliBox();
     const accountItems = ACCOUNT_KEYS.map((k) => map.get(k)).filter(Boolean);
     sections.push(
@@ -516,18 +378,12 @@ export function createPlatformsView(store) {
           ? h(
               "div",
               { class: "settings-list" },
-              accountItems.map((it) =>
-                buildControlRow(store, it, {
-                  showKey,
-                  secretState: revealed,
-                }),
-              ),
+              accountItems.map((it) => buildControlRow(store, it, { showKey, secretState: revealed })),
             )
           : null,
       ),
     );
 
-    // 3. 下载清晰度、代理与转发上限
     const transportItems = TRANSPORT_KEYS.map((k) => map.get(k)).filter(Boolean);
     if (transportItems.length > 0) {
       sections.push(
@@ -548,11 +404,7 @@ export function createPlatformsView(store) {
           h(
             "div",
             { class: "settings-list two-col" },
-            transportItems.map((it) =>
-              buildControlRow(store, it, {
-                showKey,
-              }),
-            ),
+            transportItems.map((it) => buildControlRow(store, it, { showKey })),
           ),
         ),
       );
@@ -561,10 +413,9 @@ export function createPlatformsView(store) {
   }
 
   function onActivated() {
-    refreshBiliStatus();
-    if (qrSession?.active) startPolling();
+    bili.refreshStatus();
   }
 
   render();
-  return { element: root, sync: render, onActivated };
+  return { element: root, sync: render, syncBiliBox, onActivated };
 }

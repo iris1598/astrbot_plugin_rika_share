@@ -1,5 +1,6 @@
-import { buildControlRow, clear, h, icon, swapContent } from "../ui.js";
-import { createNodeRulesPanel } from "./node_editor.js";
+import { clear, h, icon, swapContent } from "../../../core/dom.js";
+import { buildControlRow } from "../widgets.js";
+import { createStudioNodeRulesPanel } from "./node_editor.js";
 
 const CARD_RENDER_KEYS = [
   "RENDER_ENABLED",
@@ -19,47 +20,22 @@ const DELIVERY_CACHE_KEYS = [
   "CACHE_CLEANUP_INTERVAL_MINUTES",
 ];
 
-export function createCardStudioView(store) {
+export function createStudioCardView(appCtx) {
+  const { store, preview } = appCtx;
   const root = h("div", { class: "page-stack" });
-  const nodeEditor = createNodeRulesPanel(store);
-
-  let sampleId = "video";
-  let previewPersonaName = "达妮娅";
-  let previewState = { loading: false, error: "", data: null };
-  let thumbsState = { theme: "", personaKey: "", items: null, loading: false };
+  const nodeEditor = createStudioNodeRulesPanel(store);
   let modalImageUrl = null;
-  let debounceTimer = null;
-  let previewReqSeq = 0;
-
-  function itemsMap() {
-    const map = new Map();
-    for (const item of store.meta?.items || []) map.set(item.key, item);
-    return map;
-  }
-
-  function schedulePreview(delayMs = 0) {
-    if (debounceTimer) window.clearTimeout(debounceTimer);
-    if (delayMs <= 0) {
-      fetchLivePreview();
-      return;
-    }
-    debounceTimer = window.setTimeout(() => {
-      debounceTimer = null;
-      fetchLivePreview();
-    }, delayMs);
-  }
 
   const styleGridHost = h("div", { class: "real-style-grid" });
   const cardTagHost = h("span", { class: "setting-label-tags" });
   const cardRevertHost = h("span", { class: "setting-label-tags" });
+  const stageHost = h("aside", { class: "studio-preview-pane" });
+  const modalHost = h("div", { class: "preview-lightbox is-hidden" });
 
   function syncCardHeaderStatus() {
     const isGroup = Boolean(store.scope);
     const cardOverridden =
-      isGroup &&
-      CARD_RENDER_KEYS.some(
-        (k) => store.overrideKeys?.has(k) && !store.pendingUnset?.has(k),
-      );
+      isGroup && CARD_RENDER_KEYS.some((k) => store.isKeyOverridden(k));
     clear(cardTagHost);
     clear(cardRevertHost);
     if (isGroup) {
@@ -91,10 +67,10 @@ export function createCardStudioView(store) {
   }
 
   function syncStyleGrid() {
+    const pState = preview.getState();
     const currentStyle = String(store.draft.RENDER_STYLE || "standard");
     const stylesMeta = store.meta?.styles || [];
-    const realThumbs = thumbsState.items || [];
-    const thumbByName = new Map(realThumbs.map((t) => [t.name, t.image]));
+    const thumbByName = new Map((pState.thumbs || []).map((t) => [t.name, t.image]));
 
     const cards = stylesMeta.map((st) => {
       const active = st.name === currentStyle;
@@ -111,7 +87,7 @@ export function createCardStudioView(store) {
               el.classList.toggle("is-active", el.getAttribute("data-style-name") === st.name);
             }
             syncCardHeaderStatus();
-            schedulePreview(0);
+            preview.scheduleCard(0);
           },
         },
         h(
@@ -119,7 +95,7 @@ export function createCardStudioView(store) {
           { class: "real-style-thumb" },
           thumbUrl
             ? h("img", { src: thumbUrl, alt: st.display_name })
-            : h("span", { class: "thumb-placeholder" }, thumbsState.loading ? "渲染样图中…" : st.display_name),
+            : h("span", { class: "thumb-placeholder" }, pState.thumbsLoading ? "渲染样图中…" : st.display_name),
         ),
         h(
           "div",
@@ -137,75 +113,14 @@ export function createCardStudioView(store) {
     swapContent(styleGridHost, cards);
   }
 
-  async function fetchStyleThumbs(force = false) {
-    const theme = store.draft.RENDER_THEME === "light" ? "light" : "dark";
-    const pOn = Boolean(store.draft.RENDER_PERSONA_WATERMARK);
-    const pName = previewPersonaName.trim() || "达妮娅";
-    const bName = String(store.draft.RENDER_BRAND_NAME || "").trim() || "莉卡解析";
-    const personaKey = pOn ? `p:${pName}:${bName}` : `b:${bName}`;
-    if (!force && thumbsState.theme === theme && thumbsState.personaKey === personaKey && thumbsState.items) {
-      return;
-    }
-    if (thumbsState.loading) return;
-    thumbsState.loading = true;
-    try {
-      const res = await store.bridge.apiGet("preview/styles", {
-        theme,
-        persona_watermark: pOn ? "1" : "0",
-        persona_name: pName,
-        brand_name: bName,
-      });
-      thumbsState = {
-        theme,
-        personaKey,
-        loading: false,
-        items: res?.styles || [],
-      };
-      syncStyleGrid();
-    } catch {
-      thumbsState.loading = false;
-    }
-  }
-
-  async function fetchLivePreview() {
-    const seq = ++previewReqSeq;
-    previewState = { ...previewState, loading: true, error: "" };
-    updatePreviewStage();
-
-    try {
-      const data = await store.bridge.apiPost("preview/card", {
-        sample: sampleId,
-        style: store.draft.RENDER_STYLE || "standard",
-        theme: store.draft.RENDER_THEME === "light" ? "light" : "dark",
-        width: Number(store.draft.RENDER_WIDTH || 800),
-        cover_full_size: Boolean(store.draft.RENDER_COVER_FULL_SIZE),
-        font_path: String(store.draft.RENDER_FONT_PATH || ""),
-        persona_watermark: Boolean(store.draft.RENDER_PERSONA_WATERMARK),
-        persona_name: previewPersonaName.trim() || "达妮娅",
-        brand_name: String(store.draft.RENDER_BRAND_NAME || "").trim() || "莉卡解析",
-      });
-      if (seq !== previewReqSeq) return;
-      previewState = { loading: false, error: "", data };
-    } catch (err) {
-      if (seq !== previewReqSeq) return;
-      previewState = {
-        loading: false,
-        error: err?.message || String(err),
-        data: previewState.data,
-      };
-    }
-    updatePreviewStage();
-  }
-
-  const stageHost = h("aside", { class: "studio-preview-pane" });
-
   function updatePreviewStage() {
+    const pState = preview.getState();
     const samples = store.meta?.preview_samples || [
       { id: "video", label: "B站视频（横幅封面）" },
       { id: "gallery", label: "小红书 7 图集" },
       { id: "repost", label: "微博转发（无图动态）" },
     ];
-    const d = previewState.data;
+    const d = pState.data;
     const renderEnabled = Boolean(store.draft.RENDER_ENABLED);
 
     const sampleBar = h(
@@ -216,12 +131,9 @@ export function createCardStudioView(store) {
           "button",
           {
             type: "button",
-            class: `seg-btn ${sampleId === sp.id ? "is-active" : ""}`,
+            class: `seg-btn ${pState.sampleId === sp.id ? "is-active" : ""}`,
             title: sp.description || sp.label,
-            onclick: () => {
-              sampleId = sp.id;
-              schedulePreview(0);
-            },
+            onclick: () => preview.setSampleId(sp.id),
           },
           sp.label.replace(/（.*）/, ""),
         ),
@@ -249,26 +161,27 @@ export function createCardStudioView(store) {
         h("div", { class: "preview-disabled-banner" }, "图片渲染开关已关闭 · 以下仅预览排版参数效果"),
       );
     }
-    if (previewState.error) {
+    if (pState.error) {
       frame.appendChild(
-        h("div", { class: "notice notice-err" }, `实时渲染出错：${previewState.error}`),
+        h("div", { class: "notice notice-err" }, `实时渲染出错：${pState.error}`),
       );
     }
     if (d?.image) {
-      const img = h("img", {
-        class: "live-card-img",
-        src: d.image,
-        alt: "分享卡片实时渲染样貌",
-        onclick: () => {
-          modalImageUrl = d.image;
-          renderModal();
-        },
-      });
-      frame.appendChild(img);
-    } else if (!previewState.error) {
+      frame.appendChild(
+        h("img", {
+          class: "live-card-img",
+          src: d.image,
+          alt: "分享卡片实时渲染样貌",
+          onclick: () => {
+            modalImageUrl = d.image;
+            renderModal();
+          },
+        }),
+      );
+    } else if (!pState.error) {
       frame.appendChild(h("div", { class: "preview-skeleton" }, "正在向后端渲染真实卡片…"));
     }
-    if (previewState.loading) {
+    if (pState.loading) {
       frame.appendChild(
         h("div", { class: "preview-loading-chip" }, h("span", { class: "boot-ring sm" }), "渲染中"),
       );
@@ -287,8 +200,8 @@ export function createCardStudioView(store) {
             {
               type: "button",
               class: "btn btn-ghost btn-sm",
-              disabled: previewState.loading,
-              onclick: () => schedulePreview(0),
+              disabled: pState.loading,
+              onclick: () => preview.scheduleCard(0),
             },
             icon("refresh", 14),
             "重绘",
@@ -304,7 +217,6 @@ export function createCardStudioView(store) {
     ]);
   }
 
-  const modalHost = h("div", { class: "preview-lightbox is-hidden" });
   function renderModal() {
     clear(modalHost);
     modalHost.classList.toggle("is-hidden", !modalImageUrl);
@@ -326,8 +238,9 @@ export function createCardStudioView(store) {
   }
 
   function render() {
-    const map = itemsMap();
+    const map = store.itemMap();
     const showKey = Boolean(store.showDevKeys);
+    const pState = preview.getState();
 
     const widthVal = Number(store.draft.RENDER_WIDTH || 800);
     const widthSlider = h("input", {
@@ -341,7 +254,7 @@ export function createCardStudioView(store) {
         if (!Number.isNaN(n)) {
           widthValSpan.textContent = `${n} px`;
           store.setDraftValue("RENDER_WIDTH", n, { rerender: false });
-          schedulePreview(220);
+          preview.scheduleCard(220);
         }
       },
     });
@@ -352,14 +265,11 @@ export function createCardStudioView(store) {
       type: "text",
       class: "ctrl-input ctrl-sm",
       placeholder: "输入人格名预览（如 达妮娅）",
-      oninput: (e) => {
-        previewPersonaName = e.target.value;
-        schedulePreview(240);
-        fetchStyleThumbs(true);
-      },
+      oninput: (e) => preview.setPersonaName(e.target.value),
     });
-    personaInput.value = previewPersonaName;
+    personaInput.value = pState.personaName;
 
+    let personaHintEl = null;
     const brandInput = h("input", {
       type: "text",
       class: "ctrl-input ctrl-sm",
@@ -373,7 +283,7 @@ export function createCardStudioView(store) {
             ? `已开启人格跟随：卡片水印与文本头跟随当前会话人格，未命中人格时回退「${curBrand}」。`
             : "开启后跟随当前会话人格名称（跨人格共享底卡缓存）；关闭后可在下方直接自定义解析署名。";
         }
-        schedulePreview(240);
+        preview.scheduleCard(240);
       },
     });
     brandInput.value = String(store.draft.RENDER_BRAND_NAME ?? "莉卡解析");
@@ -385,7 +295,7 @@ export function createCardStudioView(store) {
       placeholder: fontItem?.placeholder || "留空自动探测系统中文字体",
       oninput: (e) => {
         store.setDraftValue("RENDER_FONT_PATH", e.target.value, { rerender: false });
-        schedulePreview(350);
+        preview.scheduleCard(350);
       },
     });
     fontInput.value = String(store.draft.RENDER_FONT_PATH || "");
@@ -413,8 +323,8 @@ export function createCardStudioView(store) {
             store.setDraftValue("RENDER_THEME", m.id);
             for (const b of themeBtns) b.el.classList.toggle("is-active", b.id === m.id);
             syncCardHeaderStatus();
-            fetchStyleThumbs();
-            schedulePreview(0);
+            preview.fetchStyleThumbs();
+            preview.scheduleCard(0);
           },
         },
         m.label,
@@ -434,7 +344,7 @@ export function createCardStudioView(store) {
       { class: "switch-text" },
       store.draft.RENDER_PERSONA_WATERMARK ? "跟随人格" : "自定义固定署名",
     );
-    const personaHintEl = h(
+    personaHintEl = h(
       "p",
       { class: "setting-hint" },
       store.draft.RENDER_PERSONA_WATERMARK
@@ -463,7 +373,6 @@ export function createCardStudioView(store) {
     const leftPane = h(
       "div",
       { class: "studio-controls-pane" },
-      // 卡片开关 + 样式选择器
       h(
         "section",
         { class: "surface-panel" },
@@ -506,7 +415,6 @@ export function createCardStudioView(store) {
         ),
         styleGridHost,
       ),
-      // 尺寸 / 深浅 / 人格动态署名 / 字体
       h(
         "section",
         { class: "surface-panel" },
@@ -580,7 +488,7 @@ export function createCardStudioView(store) {
                   store.setDraftValue("RENDER_COVER_FULL_SIZE", checked);
                   coverSwitchText.textContent = checked ? "原比完整" : "固定横幅";
                   syncCardHeaderStatus();
-                  schedulePreview(0);
+                  preview.scheduleCard(0);
                 },
               }),
               h("span", { class: "switch-track" }),
@@ -623,8 +531,8 @@ export function createCardStudioView(store) {
                       : "开启后跟随当前会话人格名称（跨人格共享底卡缓存）；关闭后可在下方直接自定义解析署名。";
                     renderPersonaSimHost();
                     syncCardHeaderStatus();
-                    fetchStyleThumbs();
-                    schedulePreview(0);
+                    preview.fetchStyleThumbs();
+                    preview.scheduleCard(0);
                   },
                 }),
                 h("span", { class: "switch-track" }),
@@ -682,13 +590,14 @@ export function createCardStudioView(store) {
     ]);
     updatePreviewStage();
     renderModal();
-    fetchStyleThumbs();
+    preview.fetchStyleThumbs();
   }
 
   function onActivated() {
-    fetchStyleThumbs();
-    if (!previewState.data && !previewState.loading) {
-      schedulePreview(0);
+    preview.fetchStyleThumbs();
+    const pState = preview.getState();
+    if (!pState.data && !pState.loading) {
+      preview.scheduleCard(0);
     }
   }
 
@@ -699,5 +608,12 @@ export function createCardStudioView(store) {
 
   render();
   nodeEditor.sync();
-  return { element: root, sync, onActivated, refreshPreview: () => schedulePreview(0), syncNodeEditor: () => nodeEditor.sync() };
+  return {
+    element: root,
+    sync,
+    syncStyleGrid,
+    updatePreviewStage,
+    onActivated,
+    syncNodeEditor: () => nodeEditor.sync(),
+  };
 }

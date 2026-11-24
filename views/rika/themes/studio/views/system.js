@@ -1,5 +1,6 @@
-import { buildControlRow, h, swapContent } from "../ui.js";
-import { listThemes, normalizeColorMode } from "../themes/index.js";
+import { h, swapContent } from "../../../core/dom.js";
+import { normalizeColorMode } from "../../registry.js";
+import { buildControlRow } from "../widgets.js";
 
 const COLOR_MODES = [
   { id: "auto", label: "跟随 AstrBot", hint: "主控切换暗/亮模式时自动同步" },
@@ -19,7 +20,7 @@ const CF_BASIC_KEYS = [
 const LOG_KEYS = ["DEBUG_LOG_ENABLED", "SEND_ERROR_MESSAGES"];
 
 function buildLayoutWireframe(theme) {
-  if (theme.navMode === "dock") {
+  if (theme.preview === "cockpit" || theme.id === "glass-center") {
     return h(
       "div",
       { class: "arch-wireframe arch-dock" },
@@ -39,22 +40,17 @@ function buildLayoutWireframe(theme) {
   );
 }
 
-export function createSystemView(store) {
+export function createStudioSystemView(appCtx) {
+  const { store, themes, setThemePreference, setColorModePreference } = appCtx;
   const root = h("div", { class: "page-stack" });
   const secrets = new Set();
   let advancedOpen = false;
 
-  function itemsMap() {
-    const map = new Map();
-    for (const item of store.meta?.items || []) map.set(item.key, item);
-    return map;
-  }
-
   function render() {
-    const map = itemsMap();
+    const map = store.itemMap();
     const showKey = Boolean(store.showDevKeys);
     const isGroup = Boolean(store.scope);
-    const themes = listThemes();
+    const themeList = themes.listThemes();
     const activeThemeId = String(store.draft.WEBUI_THEME || "studio").toLowerCase();
     const colorMode = normalizeColorMode(store.draft.WEBUI_COLOR_MODE);
     const sections = [];
@@ -62,38 +58,36 @@ export function createSystemView(store) {
     const themeGridEl = h("div", { class: `layout-theme-grid ${isGroup ? "is-global-locked" : ""}` });
     const colorBarEl = h("div", { class: `colormode-bar ${isGroup ? "is-global-locked" : ""}` });
 
-    const themeCards = themes.map((t) => {
+    for (const t of themeList) {
       const active =
-        t.id === activeThemeId || (!themes.some((x) => x.id === activeThemeId) && t.id === themes[0]?.id);
-      const cardBtn = h(
-        "button",
-        {
-          type: "button",
-          disabled: isGroup,
-          class: `layout-theme-card ${active ? "is-active" : ""}`,
-          onclick: () => {
-            if (isGroup) return;
-            store.setDraftValue("WEBUI_THEME", t.id);
-            for (const c of themeCards) c.btn.classList.toggle("is-active", c.id === t.id);
-          },
-        },
-        buildLayoutWireframe(t),
+        t.id === activeThemeId || (!themeList.some((x) => x.id === activeThemeId) && t.id === themeList[0]?.id);
+      themeGridEl.appendChild(
         h(
-          "div",
-          { class: "layout-theme-body" },
+          "button",
+          {
+            type: "button",
+            disabled: isGroup,
+            class: `layout-theme-card ${active ? "is-active" : ""}`,
+            onclick: () => {
+              if (!isGroup) setThemePreference(t.id);
+            },
+          },
+          buildLayoutWireframe(t),
           h(
             "div",
-            { class: "layout-theme-top" },
-            h("strong", null, t.name),
-            t.badge ? h("span", { class: "pill pill-neutral" }, t.badge) : null,
+            { class: "layout-theme-body" },
+            h(
+              "div",
+              { class: "layout-theme-top" },
+              h("strong", null, t.name),
+              t.badge ? h("span", { class: "pill pill-neutral" }, t.badge) : null,
+            ),
+            h("div", { class: "layout-theme-sub" }, t.subtitle || t.id),
+            h("p", { class: "layout-theme-desc" }, t.description),
           ),
-          h("div", { class: "layout-theme-sub" }, t.subtitle || t.layout),
-          h("p", { class: "layout-theme-desc" }, t.description),
         ),
       );
-      themeGridEl.appendChild(cardBtn);
-      return { id: t.id, btn: cardBtn };
-    });
+    }
 
     const colorBtns = COLOR_MODES.map((m) => {
       const btn = h(
@@ -104,7 +98,7 @@ export function createSystemView(store) {
           class: `colormode-opt ${colorMode === m.id ? "is-active" : ""}`,
           onclick: () => {
             if (isGroup) return;
-            store.setDraftValue("WEBUI_COLOR_MODE", m.id);
+            setColorModePreference(m.id);
             for (const b of colorBtns) b.el.classList.toggle("is-active", b.id === m.id);
           },
         },
@@ -115,7 +109,6 @@ export function createSystemView(store) {
       return { id: m.id, el: btn };
     });
 
-    // 1. 网页结构布局与主题系统
     sections.push(
       h(
         "section",
@@ -126,14 +119,14 @@ export function createSystemView(store) {
           h(
             "div",
             null,
-            h("h2", { class: "surface-title" }, "网页布局主题与空间架构"),
-            h("p", { class: "surface-desc" }, "不只是配色差异：不同主题会重排页面导航形态、容器景深与留白节奏；点击即刻体验"),
+            h("h2", { class: "surface-title" }, "网页设计主题与空间架构"),
+            h("p", { class: "surface-desc" }, "每套主题都是一套完整的页面 DOM 设计与独立样式；切换后会卸载旧页面并挂载新设计"),
           ),
           h(
             "div",
             { class: "btn-group" },
-            isGroup ? h("span", { class: "pill" }, "布局主题仅全局生效") : null,
-            h("span", { class: "pill pill-info" }, `已注册 ${themes.length} 套布局`),
+            isGroup ? h("span", { class: "pill" }, "网页主题仅全局生效") : null,
+            h("span", { class: "pill pill-info" }, `已发现 ${themeList.length} 套页面设计`),
           ),
         ),
         themeGridEl,
@@ -141,26 +134,28 @@ export function createSystemView(store) {
         h(
           "details",
           { class: "dev-hint-drawer" },
-          h("summary", null, "自定义网页布局主题扩展接口（window.RikaWebTheme）"),
+          h("summary", null, "编写完整自定义网页主题（views/rika/themes/<id>/）"),
           h(
             "pre",
             { class: "code-box" },
-            `// 在 views/rika/themes/ 注册全新布局骨架（支持 layout / navMode / light / dark / css）：\n` +
+            `// 方式 1：新建 views/rika/themes/<id>/manifest.json + index.js，后端自动发现。\n` +
+              `// 方式 2：运行时调用 window.RikaWebTheme.registerTheme 注册完整整页应用：\n` +
               `window.RikaWebTheme.registerTheme({\n` +
               `  id: "editorial",\n` +
-              `  name: "刊物排版",\n` +
-              `  layout: "editorial",\n` +
-              `  navMode: "sidebar",\n` +
-              `  light: { "--accent": "#0f766e", "--bg": "#f7f5f0" },\n` +
-              `  dark: { "--accent": "#2dd4bf", "--bg": "#141311" },\n` +
-              `  css: "[data-layout='editorial'] .surface-panel { border-radius: 4px; }",\n` +
+              `  name: "刊物单页",\n` +
+              `  css: ".ed-root { max-width: 960px; margin: 0 auto; padding: 32px; }",\n` +
+              `  mount(mountEl, ctx) {\n` +
+              `    // ctx 提供 store / bili / preview / debug / cache / nodeModel / onDispose\n` +
+              `    const wrap = ctx.dom.h("div", { class: "ed-root" }, ctx.dom.h("h1", null, "自定义页面设计"));\n` +
+              `    mountEl.appendChild(wrap);\n` +
+              `    return { unmount() { wrap.remove(); } };\n` +
+              `  },\n` +
               `});`,
           ),
         ),
       ),
     );
 
-    // 2. Cloudflare 网页截图兜底
     const cfBasics = CF_BASIC_KEYS.map((k) => map.get(k)).filter(Boolean);
     const cfAdvanced = (store.meta?.items || []).filter((it) => it.tier === "advanced");
     sections.push(
@@ -202,16 +197,13 @@ export function createSystemView(store) {
               h(
                 "div",
                 { class: "settings-list two-col" },
-                cfAdvanced.map((it) =>
-                  buildControlRow(store, it, { showKey, secretState: secrets }),
-                ),
+                cfAdvanced.map((it) => buildControlRow(store, it, { showKey, secretState: secrets })),
               ),
             )
           : null,
       ),
     );
 
-    // 3. 日志与界面开发者选项
     const logItems = LOG_KEYS.map((k) => map.get(k)).filter(Boolean);
     sections.push(
       h(
@@ -249,9 +241,7 @@ export function createSystemView(store) {
                 h("input", {
                   type: "checkbox",
                   checked: showKey,
-                  onchange: (e) => {
-                    store.setShowDevKeys(Boolean(e.target.checked));
-                  },
+                  onchange: (e) => store.setShowDevKeys(Boolean(e.target.checked)),
                 }),
                 h("span", { class: "switch-track" }),
                 h("span", { class: "switch-text" }, showKey ? "显示键名" : "简洁模式"),

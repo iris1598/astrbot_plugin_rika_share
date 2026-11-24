@@ -1,32 +1,17 @@
-import { h, swapContent, valuesEqual } from "../ui.js";
+import { h, swapContent, valuesEqual } from "../../../core/dom.js";
+import {
+  NODE_ZONES,
+  buildOrderSummary,
+  cloneNodeRules,
+  moveNodeBetweenZones,
+  normalizeNodeRulesClient,
+  rulesEqual,
+  serializeNodeRules,
+  splitNodeBuckets,
+  zoneOfEntry,
+} from "../../../core/node_model.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
-const MEDIA_TAIL_IDS = new Set(["video", "audio", "music_card"]);
-
-const ZONES = [
-  {
-    id: "standalone",
-    title: "单独发",
-    subtitle: "按顺序各自独立发送",
-    emptyHint: "拖入小卡片后将逐条独立发出",
-  },
-  {
-    id: "merge",
-    title: "合并转发",
-    subtitle: "连续合并项打包为转发消息",
-    emptyHint: "拖入小卡片以放入同一条合并转发",
-  },
-  {
-    id: "disabled",
-    title: "不发",
-    subtitle: "解析后跳过该节点内容",
-    emptyHint: "当前模式节点已全部启用",
-  },
-];
-
-function cloneRules(obj) {
-  return JSON.parse(JSON.stringify(obj || {}));
-}
 
 function createGripSvg() {
   const svg = document.createElementNS(SVG_NS, "svg");
@@ -47,199 +32,7 @@ function createGripSvg() {
   return svg;
 }
 
-export function normalizeNodeRulesClient(raw, nodeSchema) {
-  const defaults = nodeSchema?.defaults || {};
-  const catalog = nodeSchema?.catalog || {};
-  const modes = (nodeSchema?.modes || []).map((m) => m.id);
-  const modeList = modes.length ? modes : Object.keys(defaults);
-
-  let parsed = null;
-  if (typeof raw === "string") {
-    const text = raw.trim();
-    if (text) {
-      try {
-        const obj = JSON.parse(text);
-        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-          parsed = obj;
-        }
-      } catch {
-        parsed = null;
-      }
-    }
-  } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    parsed = raw;
-  }
-
-  const out = {};
-  for (const mode of modeList) {
-    const defList = Array.isArray(defaults[mode]) ? defaults[mode] : [];
-    const allowedIds = new Set(defList.map((entry) => entry.id));
-    const rawList = Array.isArray(parsed?.[mode]) ? parsed[mode] : defList;
-
-    const seen = new Set();
-    const list = [];
-    for (const item of rawList) {
-      if (!item || typeof item !== "object") continue;
-      const id = String(item.id || "").trim();
-      if (!allowedIds.has(id) || seen.has(id)) continue;
-      seen.add(id);
-      const supportsMerge = catalog[id]?.supports_merge !== false;
-      list.push({
-        id,
-        enabled: Boolean(item.enabled),
-        merge: supportsMerge ? Boolean(item.merge) : false,
-      });
-    }
-    for (const defEntry of defList) {
-      if (seen.has(defEntry.id)) continue;
-      const supportsMerge = catalog[defEntry.id]?.supports_merge !== false;
-      list.push({
-        id: defEntry.id,
-        enabled: Boolean(defEntry.enabled),
-        merge: supportsMerge ? Boolean(defEntry.merge) : false,
-      });
-    }
-    out[mode] = list;
-  }
-  return out;
-}
-
-export function rulesEqual(a, b, nodeSchema) {
-  const na = normalizeNodeRulesClient(a, nodeSchema);
-  const nb = normalizeNodeRulesClient(b, nodeSchema);
-  const keys = Object.keys(na);
-  if (keys.length !== Object.keys(nb).length) return false;
-  return keys.every((mode) => {
-    const la = na[mode] || [];
-    const lb = nb[mode] || [];
-    return (
-      la.length === lb.length &&
-      la.every(
-        (item, idx) =>
-          item.id === lb[idx].id &&
-          item.enabled === lb[idx].enabled &&
-          item.merge === lb[idx].merge,
-      )
-    );
-  });
-}
-
-export function serializeNodeRules(rulesObj, nodeSchema) {
-  const normalized = normalizeNodeRulesClient(rulesObj, nodeSchema);
-  const defaults = nodeSchema?.defaults || {};
-  if (rulesEqual(normalized, defaults, nodeSchema)) {
-    return "";
-  }
-  return JSON.stringify(normalized);
-}
-
-function zoneOfEntry(entry, catalog) {
-  if (!entry?.enabled) return "disabled";
-  const supportsMerge = catalog[entry.id]?.supports_merge !== false;
-  return supportsMerge && entry.merge ? "merge" : "standalone";
-}
-
-function splitBuckets(list, catalog) {
-  const buckets = { standalone: [], merge: [], disabled: [] };
-  for (const entry of list || []) {
-    buckets[zoneOfEntry(entry, catalog)].push(entry.id);
-  }
-  return buckets;
-}
-
-function rebuildRulesFromBuckets(buckets, prevList, defList, catalog) {
-  const defById = new Map((defList || []).map((r) => [r.id, r]));
-  const prevById = new Map((prevList || []).map((r) => [r.id, r]));
-
-  const standaloneRules = buckets.standalone.map((id) => ({
-    id,
-    enabled: true,
-    merge: false,
-  }));
-  const mergeRules = buckets.merge
-    .filter((id) => catalog[id]?.supports_merge !== false)
-    .map((id) => ({
-      id,
-      enabled: true,
-      merge: true,
-    }));
-  const disabledRules = buckets.disabled.map((id) => ({
-    id,
-    enabled: false,
-    merge: Boolean(defById.get(id)?.merge ?? prevById.get(id)?.merge ?? false) &&
-      catalog[id]?.supports_merge !== false,
-  }));
-
-  let activeRules;
-  if (mergeRules.length === 0) {
-    activeRules = standaloneRules;
-  } else {
-    const firstMerge = (prevList || []).findIndex(
-      (r) => r.enabled && r.merge && catalog[r.id]?.supports_merge !== false,
-    );
-    let splitIdx = -1;
-    if (firstMerge === -1) {
-      let i = standaloneRules.length;
-      while (i > 0 && MEDIA_TAIL_IDS.has(standaloneRules[i - 1].id)) {
-        i -= 1;
-      }
-      splitIdx = i < standaloneRules.length ? i : -1;
-    } else {
-      const prevBeforeIds = new Set(
-        prevList
-          .slice(0, firstMerge)
-          .filter((r) => r.enabled && !r.merge)
-          .map((r) => r.id),
-      );
-      const prevAfterIds = new Set(
-        prevList
-          .slice(firstMerge + 1)
-          .filter((r) => r.enabled && !r.merge)
-          .map((r) => r.id),
-      );
-      let lastBeforeIdx = -1;
-      standaloneRules.forEach((r, idx) => {
-        if (prevBeforeIds.has(r.id)) lastBeforeIdx = idx;
-      });
-      for (let i = lastBeforeIdx + 1; i < standaloneRules.length; i += 1) {
-        const nid = standaloneRules[i].id;
-        if (prevAfterIds.has(nid) || MEDIA_TAIL_IDS.has(nid)) {
-          splitIdx = i;
-          break;
-        }
-      }
-    }
-
-    if (splitIdx === -1) {
-      activeRules = [...standaloneRules, ...mergeRules];
-    } else {
-      activeRules = [
-        ...standaloneRules.slice(0, splitIdx),
-        ...mergeRules,
-        ...standaloneRules.slice(splitIdx),
-      ];
-    }
-  }
-
-  // 若启用节点序列与默认预设完全一致，直接还原标准默认数组以收口至 ""
-  const defaultActive = (defList || []).filter((r) => r.enabled);
-  const sameActive =
-    activeRules.length === defaultActive.length &&
-    activeRules.every(
-      (r, idx) =>
-        r.id === defaultActive[idx].id &&
-        r.enabled === defaultActive[idx].enabled &&
-        r.merge === (catalog[r.id]?.supports_merge !== false && Boolean(defaultActive[idx].merge)),
-    );
-  if (sameActive) {
-    return cloneRules(defList);
-  }
-
-  return [...activeRules, ...disabledRules];
-}
-
-/** 分模式输出节点拖拽看板：三区域（单独发 / 合并转发 / 不发）+ 小卡片拖拽与快捷调整 */
-export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
+export function createStudioNodeRulesPanel(store, { onAfterChange = null } = {}) {
   const root = h("section", { class: "surface-panel node-editor-panel" });
   let activeMode = "video";
   let selectedId = null;
@@ -273,48 +66,22 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
 
   function moveCardToZone(nodeId, targetZone, targetIndex = null, { focusAfter = false } = {}) {
     const schema = getSchema();
-    const catalog = schema.catalog || {};
-    const defaults = schema.defaults || {};
-    const meta = catalog[nodeId] || {};
-
-    if (targetZone === "merge" && meta.supports_merge === false) {
-      store.toast(meta.merge_note || "该节点不支持放入合并转发", "warn", 3600);
+    const res = moveNodeBetweenZones({
+      rawRules: store.draft.NODE_RULES,
+      nodeSchema: schema,
+      mode: activeMode,
+      nodeId,
+      targetZone,
+      targetIndex,
+    });
+    if (!res.ok) {
+      if (res.reason) store.toast(res.reason, "warn", 3600);
       return false;
     }
-
-    const current = normalizeNodeRulesClient(store.draft.NODE_RULES, schema);
-    const prevList = current[activeMode] || [];
-    const buckets = splitBuckets(prevList, catalog);
-
-    let fromZone = null;
-    let fromIndex = -1;
-    for (const z of ZONES) {
-      const idx = buckets[z.id].indexOf(nodeId);
-      if (idx >= 0) {
-        fromZone = z.id;
-        fromIndex = idx;
-        break;
-      }
-    }
-    if (!fromZone) return false;
-
-    buckets[fromZone].splice(fromIndex, 1);
-
-    let insertAt = targetIndex == null ? buckets[targetZone].length : Number(targetIndex);
-    if (fromZone === targetZone && insertAt > fromIndex) {
-      insertAt -= 1;
-    }
-    insertAt = Math.max(0, Math.min(buckets[targetZone].length, insertAt));
-    buckets[targetZone].splice(insertAt, 0, nodeId);
-
     selectedId = nodeId;
-    current[activeMode] = rebuildRulesFromBuckets(
-      buckets,
-      prevList,
-      defaults[activeMode] || [],
-      catalog,
-    );
-    applyUpdatedRules(current);
+    store.setDraftValue("NODE_RULES", res.serialized);
+    render();
+    onAfterChange?.();
 
     if (focusAfter && typeof requestAnimationFrame === "function") {
       requestAnimationFrame(() => {
@@ -328,8 +95,8 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
     const schema = getSchema();
     const catalog = schema.catalog || {};
     const current = normalizeNodeRulesClient(store.draft.NODE_RULES, schema);
-    const buckets = splitBuckets(current[activeMode] || [], catalog);
-    for (const z of ZONES) {
+    const buckets = splitNodeBuckets(current[activeMode] || [], catalog);
+    for (const z of NODE_ZONES) {
       const idx = buckets[z.id].indexOf(nodeId);
       if (idx >= 0) {
         const nextIdx = idx + delta;
@@ -346,39 +113,8 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
     const current = normalizeNodeRulesClient(store.draft.NODE_RULES, schema);
     const defaults = schema.defaults || {};
     if (!Array.isArray(defaults[mode])) return;
-    current[mode] = cloneRules(defaults[mode]);
+    current[mode] = cloneNodeRules(defaults[mode]);
     applyUpdatedRules(current);
-  }
-
-  function buildOrderSummary(list, catalog) {
-    const enabled = list.filter((entry) => entry.enabled);
-    if (enabled.length === 0) {
-      return [{ kind: "warn", label: "当前模式已关闭全部可选节点（仅保留兜底保护）" }];
-    }
-
-    const chunks = [];
-    let mergeBuf = [];
-    const flushMerge = () => {
-      if (!mergeBuf.length) return;
-      chunks.push({
-        kind: "merge",
-        label: `合并转发(${mergeBuf.join(" → ")})`,
-      });
-      mergeBuf = [];
-    };
-
-    for (const entry of enabled) {
-      const name = catalog[entry.id]?.label || entry.id;
-      const supportsMerge = catalog[entry.id]?.supports_merge !== false;
-      if (supportsMerge && entry.merge) {
-        mergeBuf.push(name);
-      } else {
-        flushMerge();
-        chunks.push({ kind: "single", label: `独立:${name}` });
-      }
-    }
-    flushMerge();
-    return chunks;
   }
 
   function renderQuickBar(buckets, list, catalog, locked) {
@@ -391,7 +127,7 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
           { class: "node-quick-hint" },
           locked
             ? "当前配置作用域锁定「节点编排」仅全局编辑，请切回全局修改"
-            : "拖拽任意小卡片到「单独发 / 合并转发 / 不发」区域，或区內拖动排序；点击小卡片可查看完整说明与快捷移动",
+            : "拖拽任意小卡片到「单独发 / 合并转发 / 不发」区域，或区内拖动排序；点击小卡片可查看完整说明与快捷移动",
         ),
       );
     }
@@ -427,7 +163,7 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
         h(
           "div",
           { class: "seg-group node-zone-switch" },
-          ZONES.map((z) => {
+          NODE_ZONES.map((z) => {
             const isCur = currentZone === z.id;
             const disabledBtn = locked || (z.id === "merge" && !supportsMerge);
             return h(
@@ -511,7 +247,7 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
     const current = normalizeNodeRulesClient(store.draft.NODE_RULES, schema);
     const list = current[activeMode] || [];
     const modeMeta = modes.find((m) => m.id === activeMode) || modes[0];
-    const buckets = splitBuckets(list, catalog);
+    const buckets = splitNodeBuckets(list, catalog);
 
     if (selectedId && !list.some((r) => r.id === selectedId)) {
       selectedId = null;
@@ -532,20 +268,12 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
     );
 
     const statusTags = [];
-    if (store.showDevKeys) {
-      statusTags.push(h("code", { class: "dev-key" }, "NODE_RULES"));
-    }
-    if (isGroup && hasOverride) {
-      statusTags.push(h("span", { class: "pill pill-info" }, "本群独立"));
-    } else if (isGroup) {
-      statusTags.push(h("span", { class: "pill" }, "继承全局"));
-    }
-    if (isDirty) {
-      statusTags.push(h("span", { class: "pill pill-warn" }, "待保存"));
-    }
+    if (store.showDevKeys) statusTags.push(h("code", { class: "dev-key" }, "NODE_RULES"));
+    if (isGroup && hasOverride) statusTags.push(h("span", { class: "pill pill-info" }, "本群独立"));
+    else if (isGroup) statusTags.push(h("span", { class: "pill" }, "继承全局"));
+    if (isDirty) statusTags.push(h("span", { class: "pill pill-warn" }, "待保存"));
 
     const panelNodes = [];
-
     panelNodes.push(
       h(
         "div",
@@ -574,7 +302,6 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
       ),
     );
 
-    // 模式切换栏
     panelNodes.push(
       h(
         "div",
@@ -626,7 +353,6 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
       ),
     );
 
-    // 实时发送序预览条
     const chunks = buildOrderSummary(list, catalog);
     const webpageFallback = Boolean(store.draft.WEBPAGE_FALLBACK_ENABLED);
     panelNodes.push(
@@ -662,18 +388,15 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
       ),
     );
 
-    // 三区域拖拽看板：单独发 | 合并转发 | 不发
     const boardEl = h(
       "div",
       { class: `node-zones-board ${locked ? "is-global-locked" : ""}` },
-      ZONES.map((zone) => {
+      NODE_ZONES.map((zone) => {
         const cardIds = buckets[zone.id] || [];
-
         const zoneEl = h("section", {
           class: `node-zone node-zone-${zone.id}`,
           dataset: { zone: zone.id },
         });
-
         const cardsHost = h("div", {
           class: "node-zone-cards",
           role: "list",
@@ -685,23 +408,18 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
             const draggingId = dragState?.id;
             const supportsMerge = draggingId ? catalog[draggingId]?.supports_merge !== false : true;
             const forbidden = zone.id === "merge" && !supportsMerge;
-
             e.preventDefault();
             if (e.dataTransfer) {
               e.dataTransfer.dropEffect = forbidden ? "none" : "move";
             }
-
             if (forbidden) {
               zoneEl.classList.add("is-drop-forbidden");
               zoneEl.classList.remove("is-drop-target");
               dropTarget = { zone: zone.id, index: cardIds.length, forbidden: true };
               return;
             }
-
             for (const other of boardEl.querySelectorAll(".node-zone")) {
-              if (other !== zoneEl) {
-                other.classList.remove("is-drop-target", "is-drop-forbidden");
-              }
+              if (other !== zoneEl) other.classList.remove("is-drop-target", "is-drop-forbidden");
             }
             for (const c of boardEl.querySelectorAll(".is-drop-before, .is-drop-after")) {
               c.classList.remove("is-drop-before", "is-drop-after");
@@ -709,7 +427,6 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
             zoneEl.classList.remove("is-drop-forbidden");
             zoneEl.classList.add("is-drop-target");
 
-            // 若未悬停在具体卡片上，默认放到区域末尾
             const cardEl = e.target?.closest?.(".node-drag-card");
             if (!cardEl || !zoneEl.contains(cardEl)) {
               dropTarget = { zone: zone.id, index: cardIds.length, forbidden: false };
@@ -732,8 +449,7 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
             clearDragIndicators();
             if (!droppedId) return;
             if (targetInfo?.forbidden || (zone.id === "merge" && catalog[droppedId]?.supports_merge === false)) {
-              const note = catalog[droppedId]?.merge_note || "该节点不支持放入合并转发";
-              store.toast(note, "warn", 3600);
+              store.toast(catalog[droppedId]?.merge_note || "该节点不支持放入合并转发", "warn", 3600);
               return;
             }
             const targetIdx = targetInfo && targetInfo.zone === zone.id ? targetInfo.index : cardIds.length;
@@ -778,9 +494,7 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
                 },
               },
               h("span", { class: "node-drag-grip", "aria-hidden": "true" }, createGripSvg()),
-              zone.id !== "disabled"
-                ? h("span", { class: "node-card-idx" }, String(cardIdx + 1))
-                : null,
+              zone.id !== "disabled" ? h("span", { class: "node-card-idx" }, String(cardIdx + 1)) : null,
               h("span", { class: "node-card-name" }, meta.label || nid),
               !supportsMerge
                 ? h("span", { class: "node-card-badge is-warn" }, "禁合并")
@@ -804,8 +518,7 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
                   cardEl.classList.add("is-dragging");
                 }
                 if (!supportsMerge) {
-                  const mergeZoneEl = boardEl.querySelector('.node-zone[data-zone="merge"]');
-                  mergeZoneEl?.classList.add("is-merge-blocked");
+                  boardEl.querySelector('.node-zone[data-zone="merge"]')?.classList.add("is-merge-blocked");
                 }
               });
 
@@ -813,8 +526,7 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
                 dragState = null;
                 dropTarget = null;
                 clearDragIndicators();
-                const mergeZoneEl = boardEl.querySelector('.node-zone[data-zone="merge"]');
-                mergeZoneEl?.classList.remove("is-merge-blocked");
+                boardEl.querySelector('.node-zone[data-zone="merge"]')?.classList.remove("is-merge-blocked");
               });
 
               cardEl.addEventListener("dragover", (e) => {
@@ -831,7 +543,6 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
                   if (other !== zoneEl) other.classList.remove("is-drop-target", "is-drop-forbidden");
                 }
                 zoneEl.classList.add("is-drop-target");
-
                 for (const c of boardEl.querySelectorAll(".is-drop-before, .is-drop-after")) {
                   c.classList.remove("is-drop-before", "is-drop-after");
                 }
@@ -846,9 +557,9 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
                 let isAfter = false;
                 if (rect && rect.width > 0) {
                   if (hostRect && rect.width > hostRect.width * 0.72) {
-                    isAfter = (e.clientY - rect.top) > rect.height * 0.5;
+                    isAfter = e.clientY - rect.top > rect.height * 0.5;
                   } else {
-                    isAfter = (e.clientX - rect.left) > rect.width * 0.5;
+                    isAfter = e.clientX - rect.left > rect.width * 0.5;
                   }
                 }
                 cardEl.classList.add(isAfter ? "is-drop-after" : "is-drop-before");
@@ -868,7 +579,7 @@ export function createNodeRulesPanel(store, { onAfterChange = null } = {}) {
                   shiftWithinZone(nid, 1, { focusAfter: true });
                 } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
                   e.preventDefault();
-                  const order = ZONES.map((z) => z.id);
+                  const order = NODE_ZONES.map((z) => z.id);
                   const curIdx = order.indexOf(zone.id);
                   const step = e.key === "ArrowRight" ? 1 : -1;
                   const nextIdx = curIdx + step;

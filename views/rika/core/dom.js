@@ -1,10 +1,10 @@
 /**
- * 轻量 DOM 工具、SVG 图标库与受限 iframe 安全交互组件。
+ * 主题无关的轻量 DOM 工具、SVG 图标集与受限 iframe 安全交互原语。
  *
  * 严格约束：
- * - 全部文案使用 textContent，禁止拼装 html 字符串；
- * - 表单控件赋值全部走 DOM property（node.value / node.checked）；
- * - 危险动作全部采用行内二次确认，绝不调用 alert/confirm。
+ * - 全部文案使用 textContent，禁止拼装 HTML 字符串；
+ * - 表单控件赋值走 DOM property（node.value / node.checked）；
+ * - 危险动作采用行内二次确认，绝不调用 alert/confirm。
  */
 
 export function append(parent, child) {
@@ -129,6 +129,9 @@ const ICON_PATHS = {
   refresh: [
     "M20 11a8 8 0 0 0-14.9-3M4 4v4h4M4 13a8 8 0 0 0 14.9 3M20 20v-4h-4",
   ],
+  sparkles: [
+    "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3zm6 12l1 2.5L21.5 18.5 19 19.5 18 22l-1-2.5L14.5 18.5 17 17.5 18 15z",
+  ],
   logo: [
     "M8 6.5h7.2c3.1 0 5.3 1.8 5.3 4.6 0 2-1.1 3.5-2.9 4.2l3.4 6.2h-3.6l-3-5.6h-3.1v5.6H8V6.5zm3.3 2.7v4.1h3.7c1.4 0 2.2-.8 2.2-2s-.8-2.1-2.2-2.1h-3.7z",
   ],
@@ -140,8 +143,9 @@ export function icon(name, size = 18) {
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("width", String(size));
   svg.setAttribute("height", String(size));
-  svg.setAttribute("fill", name === "sliders" || name === "refresh" ? "none" : "currentColor");
-  if (name === "sliders" || name === "refresh") {
+  const strokeIcon = name === "sliders" || name === "refresh";
+  svg.setAttribute("fill", strokeIcon ? "none" : "currentColor");
+  if (strokeIcon) {
     svg.setAttribute("stroke", "currentColor");
     svg.setAttribute("stroke-width", "1.9");
     svg.setAttribute("stroke-linecap", "round");
@@ -179,8 +183,11 @@ export function valuesEqual(a, b) {
 }
 
 export function createToaster() {
-  const host = h("div", { class: "toast-stack", role: "status", "aria-live": "polite" });
-  document.body.appendChild(host);
+  let host = document.querySelector(".toast-stack");
+  if (!host) {
+    host = h("div", { class: "toast-stack", role: "status", "aria-live": "polite" });
+    document.body.appendChild(host);
+  }
 
   return function toast(message, kind = "info", durationMs = 3200) {
     const item = h(
@@ -208,12 +215,17 @@ export function createInlineConfirmButton({
   cancelLabel = "取消",
   variant = "ghost",
   size = "",
+  buttonClass = "",
+  dangerClass = "",
   onConfirm,
 }) {
   const wrap = h("span", { class: "inline-confirm" });
   let armed = false;
   let busy = false;
   const sizeCls = size ? ` btn-${size}` : "";
+  const baseCls = buttonClass || `btn btn-${variant}${sizeCls}`;
+  const confirmCls = dangerClass || `btn btn-danger${sizeCls}`;
+  const cancelCls = buttonClass || `btn btn-ghost${sizeCls}`;
 
   const render = () => {
     clear(wrap);
@@ -223,7 +235,7 @@ export function createInlineConfirmButton({
           "button",
           {
             type: "button",
-            class: `btn btn-${variant}${sizeCls}`,
+            class: baseCls,
             disabled: busy,
             onclick: () => {
               armed = true;
@@ -244,7 +256,7 @@ export function createInlineConfirmButton({
           "button",
           {
             type: "button",
-            class: `btn btn-danger${sizeCls}`,
+            class: confirmCls,
             disabled: busy,
             onclick: async () => {
               busy = true;
@@ -264,7 +276,7 @@ export function createInlineConfirmButton({
           "button",
           {
             type: "button",
-            class: `btn btn-ghost${sizeCls}`,
+            class: cancelCls,
             disabled: busy,
             onclick: () => {
               armed = false;
@@ -279,213 +291,4 @@ export function createInlineConfirmButton({
 
   render();
   return wrap;
-}
-
-/** 根据 CONFIG_META 条目构建标准化控件，支持原地状态更新避免页面滚动复位 */
-export function buildControlRow(store, item, options = {}) {
-  const { showKey = false, full = false, secretState = null, onAfterChange = null } = options;
-  const isGroup = Boolean(store.scope);
-  const overridable = !isGroup || Boolean(store.isOverridable?.(item.key));
-  const locked = isGroup && !overridable;
-  const val = store.draft[item.key];
-  const tagsHost = h("span", { class: "setting-label-tags" });
-  let rowEl = null;
-
-  function syncRowState() {
-    const curVal = store.draft[item.key];
-    const savedVal = store.meta?.values?.[item.key];
-    const pendingUnset = Boolean(store.pendingUnset?.has(item.key));
-    const hasOverride =
-      isGroup &&
-      overridable &&
-      Boolean(store.overrideKeys?.has(item.key)) &&
-      !pendingUnset;
-    const dirtyNow = !locked && (pendingUnset || !valuesEqual(curVal, savedVal));
-
-    if (rowEl) {
-      rowEl.classList.toggle("is-dirty", dirtyNow);
-    }
-    clear(tagsHost);
-    if (showKey) tagsHost.appendChild(h("code", { class: "dev-key" }, item.key));
-    if (locked) {
-      tagsHost.appendChild(h("span", { class: "pill scope-pill-global" }, "仅全局"));
-    } else if (hasOverride) {
-      tagsHost.appendChild(h("span", { class: "pill pill-info scope-pill-group" }, "本群独立"));
-    }
-    if (dirtyNow) {
-      tagsHost.appendChild(h("span", { class: "dirty-pill" }, pendingUnset ? "将恢复继承" : "已更改"));
-    }
-    if (isGroup && overridable && (hasOverride || dirtyNow)) {
-      tagsHost.appendChild(
-        h(
-          "button",
-          {
-            type: "button",
-            class: "btn btn-ghost btn-xs scope-revert-btn",
-            onclick: () => {
-              store.revertKeyToInherit?.(item.key);
-              onAfterChange?.();
-            },
-          },
-          "恢复继承",
-        ),
-      );
-    }
-  }
-
-  let controlEl;
-  if (item.type === "bool") {
-    const switchText = h("span", { class: "switch-text" }, Boolean(val) ? "已开启" : "已关闭");
-    const chk = h("input", {
-      type: "checkbox",
-      checked: Boolean(val),
-      onchange: (e) => {
-        const nextVal = Boolean(e.target.checked);
-        store.setDraftValue(item.key, nextVal);
-        switchText.textContent = nextVal ? "已开启" : "已关闭";
-        syncRowState();
-        onAfterChange?.();
-      },
-    });
-    controlEl = h(
-      "label",
-      { class: "switch" },
-      chk,
-      h("span", { class: "switch-track" }),
-      switchText,
-    );
-  } else if (item.type === "select") {
-    const opts = item.options || [];
-    const labels = item.labels || opts;
-    const sel = h(
-      "select",
-      {
-        class: "ctrl-input ctrl-select",
-        onchange: (e) => {
-          store.setDraftValue(item.key, e.target.value);
-          syncRowState();
-          onAfterChange?.();
-        },
-      },
-      opts.map((opt, idx) =>
-        h("option", { value: opt, selected: String(val ?? "") === String(opt) }, labels[idx] || opt),
-      ),
-    );
-    sel.value = String(val ?? item.default ?? "");
-    controlEl = sel;
-  } else if (item.type === "list") {
-    const ta = h("textarea", {
-      class: "ctrl-input ctrl-textarea",
-      rows: 3,
-      placeholder: item.placeholder || "每行或逗号分隔一条规则",
-      oninput: (e) => {
-        const rows = e.target.value
-          .split(/\r?\n|,/)
-          .map((s) => s.trim())
-          .filter(Boolean);
-        store.setDraftValue(item.key, rows, { rerender: false });
-        syncRowState();
-      },
-    });
-    ta.value = Array.isArray(val) ? val.join("\n") : String(val ?? "");
-    controlEl = ta;
-  } else if (item.type === "text") {
-    const ta = h("textarea", {
-      class: "ctrl-input ctrl-textarea mono",
-      rows: 3,
-      placeholder: item.placeholder || "",
-      oninput: (e) => {
-        store.setDraftValue(item.key, e.target.value, { rerender: false });
-        syncRowState();
-      },
-    });
-    ta.value = String(val ?? "");
-    controlEl = ta;
-  } else if (item.type === "int" || item.type === "float") {
-    const num = h("input", {
-      type: "number",
-      class: "ctrl-input",
-      min: item.min ?? undefined,
-      max: item.max ?? undefined,
-      step: item.type === "float" ? String(item.step ?? 0.5) : "1",
-      oninput: (e) => {
-        if (e.target.value === "") return;
-        const parsed =
-          item.type === "float"
-            ? Number.parseFloat(e.target.value)
-            : Number.parseInt(e.target.value, 10);
-        if (!Number.isNaN(parsed)) {
-          store.setDraftValue(item.key, parsed, { rerender: false });
-          syncRowState();
-        }
-      },
-    });
-    num.value = val ?? item.default ?? "";
-    controlEl = item.unit
-      ? h("div", { class: "unit-field" }, num, h("span", { class: "unit-tag" }, item.unit))
-      : num;
-  } else {
-    const isSecret = Boolean(item.secret);
-    let revealed = isSecret && Boolean(secretState?.has(item.key));
-    const inp = h("input", {
-      type: isSecret && !revealed ? "password" : "text",
-      class: `ctrl-input ${isSecret ? "mono" : ""}`,
-      placeholder: item.placeholder || "",
-      autocomplete: "off",
-      oninput: (e) => {
-        store.setDraftValue(item.key, e.target.value, { rerender: false });
-        syncRowState();
-      },
-    });
-    inp.value = String(val ?? "");
-    let toggleBtn = null;
-    if (isSecret) {
-      toggleBtn = h(
-        "button",
-        {
-          type: "button",
-          class: "btn btn-ghost btn-sm",
-          onclick: () => {
-            if (!secretState) return;
-            if (secretState.has(item.key)) secretState.delete(item.key);
-            else secretState.add(item.key);
-            revealed = secretState.has(item.key);
-            inp.type = revealed ? "text" : "password";
-            toggleBtn.textContent = revealed ? "隐藏" : "显示";
-          },
-        },
-        revealed ? "隐藏" : "显示",
-      );
-    }
-    controlEl = isSecret
-      ? h("div", { class: "secret-field" }, inp, toggleBtn)
-      : inp;
-  }
-
-  rowEl = h(
-    "div",
-    {
-      class: `setting-item ${full || item.type === "list" || item.type === "text" || item.secret ? "is-wide" : ""} ${locked ? "is-global-locked" : ""}`,
-      dataset: { key: item.key },
-    },
-    h(
-      "div",
-      { class: "setting-meta" },
-      h(
-        "div",
-        { class: "setting-label-row" },
-        h("span", { class: "setting-label" }, item.label || item.key),
-        tagsHost,
-      ),
-      item.hint ? h("p", { class: "setting-hint" }, item.hint) : null,
-    ),
-    h("div", { class: "setting-ctrl" }, controlEl),
-  );
-  syncRowState();
-  if (locked) {
-    for (const el of rowEl.querySelectorAll("input, select, textarea")) {
-      el.disabled = true;
-    }
-  }
-  return rowEl;
 }

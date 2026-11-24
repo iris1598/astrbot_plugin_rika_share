@@ -82,32 +82,25 @@
 
 ---
 
-## 控制面板与布局级主题（WebUI）
+## 控制面板与整页主题架构（WebUI）
 
-插件面板位于 [`views/rika/`](views/rika/index.html)，顶部提供 **作用域切换条**（可随时在「全局默认」与任意群号 / UMO 之间切换、新建分群、恢复单项继承或清空该群覆写），下方按使用心智划分为 **4 大工作区**：
+插件面板位于 [`views/rika/`](views/rika/index.html)，采用**无头业务核心（`views/rika/core/`）+ 独立整页设计主题（`views/rika/themes/<id>/`）**架构。每套主题拥有独立的 HTML 结构、页面划分、交互流与隔离的 CSS 样式文件；切换主题时会卸载旧页面并挂载新页面：
 
-1. **总览与诊断**：查看当前作用域下的平台启停、B站登录态检测、缓存磁盘占用（安全行内清理），并可指定当前分群配置执行只读全链路诊断与脱敏 `.log` 下载。
-2. **平台与账号**：支持按分群定制平台开关矩阵（全局共享 B站扫码登录态、Cookie 与清晰度/代理策略），同时展示画质、编码与 OneBot 合并转发分批上限。
-3. **卡片工作室（所见即所得）**：左侧调整版式样式（自动向后端拉取含自定义样式在内的**真实样图**）、深浅配色、宽度滑块、封面全尺寸、字体、**随会话人格署名**开关及关闭后的**自定义署名**；右侧**实时渲染真卡片大图**（支持视频 / 7 图集 / 无图转发样例切换与点击放大）；下方提供全宽**输出节点拖拽看板**（按视频 / 图文 / 动态·文章模式，将小卡片拖入「单独发 / 合并转发 / 不发」三个区域并区内置序）与网页分发、缓存清理设置。
-4. **主题与兜底**：切换不同空间架构的网页布局主题、管理 Cloudflare 未适配网页截图兜底（支持按分群覆盖兜底开关与域名黑名单，账号凭据与浏览器高级参数仅全局）与错误日志策略。
+- **`studio`（工作台分栏 · 默认）**：左侧固定导航栏 + 独立全局/分群作用域横栏 + 四大工作区（总览与诊断 / 平台与账号 / 所见即所得卡片工作室 + 拖拽节点看板 / 主题与兜底），适合桌面端高密度精密调参。
+- **`glass-center`（空间指挥舱）**：完全独立的页面架构——顶部半透明悬浮指挥条整合作用域与快捷保存 + 底部悬浮 Dock 切换三大空间（**驾驶舱 Bento** 直连实时链路探针与平台快捷芯片、**气泡创作台** 内嵌模拟聊天对话框预览卡片并自带三泳道节点流水线、**全域控制台** 聚合筛选搜索与主题画廊）。
 
-### 内置两套结构级网页主题 & 扩展接口
-
-这里的主题不止换色，而是同步改变页面骨架、导航形态与容器景深：
-- **`studio`（工作台分栏 · 默认）**：左侧固定秩序导航栏 + 右侧精密分栏工作区，清晰克制，适合高频精细调参。
-- **`glass-center`（悬浮磨砂控制中心）**：隐藏侧边栏与传统后台顶栏，改用极光背景下的通透毛玻璃浮层与**底部居中悬浮胶囊 Dock** 导航。
-
-可通过 [`views/rika/themes/`](views/rika/themes/) 新增主题模块并在 [`views/rika/themes/index.js`](views/rika/themes/index.js) 注册，或直接调用全局扩展接口 `window.RikaWebTheme.registerTheme(...)`：
+可通过在 [`views/rika/themes/`](views/rika/themes/) 新建主题目录（含 `manifest.json`、`index.js` 与独立样式，后端会自动发现，无需改已有源码），或调用 `window.RikaWebTheme.registerTheme(...)` 挂载完整整页应用（详见 [`docs/WEB_THEME_GUIDE.md`](docs/WEB_THEME_GUIDE.md)）：
 
 ```js
 window.RikaWebTheme.registerTheme({
-  id: "my-layout",
-  name: "我的布局主题",
-  layout: "my-layout",
-  navMode: "dock", // "sidebar" 或 "dock"
-  light: { "--accent": "#2563eb", "--bg": "#f5f8ff" },
-  dark: { "--accent": "#60a5fa", "--bg": "#0f172a" },
-  css: `[data-layout="my-layout"] .surface-panel { border-radius: 18px; }`,
+  id: "editorial",
+  name: "刊物单页",
+  css: `.ed-root { max-width: 980px; margin: 0 auto; padding: 28px; }`,
+  mount(mountEl, ctx) {
+    const wrap = ctx.dom.h("div", { class: "ed-root" }, ctx.dom.h("h1", null, "自定义整页控制台"));
+    mountEl.appendChild(wrap);
+    return { unmount() { wrap.remove(); } };
+  },
 });
 ```
 
@@ -161,7 +154,7 @@ astrbot_plugin_rika_share/
 ├── logo.png                 # 插件图标
 ├── _conf_schema.json        # 存储 Schema 契约
 ├── .astrbot-plugin/i18n/    # 多语言文案
-├── views/rika/              # 插件控制面板前端与 themes/ 主题包
+├── views/rika/              # 插件控制面板（core/ 无头引擎 + themes/ 独立整页主题包）
 ├── link_parser/             # 核心包（adapters / config / models / output / services / utils / webui）
 ├── docs/                    # 架构备忘 docs/ARCHITECTURE.md、模块开发指南与预览图
 └── scripts/                 # 渲染回归与独立冒烟测试脚本

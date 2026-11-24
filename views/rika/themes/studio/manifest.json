@@ -1,0 +1,11 @@
+{
+  "id": "studio",
+  "name": "工作台分栏",
+  "subtitle": "Studio Workbench · 多标签工程控制台",
+  "description": "经典桌面工具流设计：左侧固定导航栏 + 独立全局/分群作用域横栏 + 四页签结构化配置表，信息密度高、条理分明，适合精密调参。",
+  "badge": "默认",
+  "preview": "studio",
+  "order": 10,
+  "entry": "index.js",
+  "styles": ["theme.css"]
+}

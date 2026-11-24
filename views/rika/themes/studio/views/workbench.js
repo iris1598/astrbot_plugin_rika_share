@@ -1,5 +1,4 @@
-import { createInlineConfirmButton, formatBytes, h, icon, swapContent } from "../ui.js";
-import { getTheme } from "../themes/index.js";
+import { createInlineConfirmButton, formatBytes, h, icon, swapContent } from "../../../core/dom.js";
 
 const STEP_TONES = {
   ok: { label: "通过", tone: "ok" },
@@ -16,90 +15,16 @@ const QUICK_URLS = [
   { label: "GitHub 仓库", url: "https://github.com/AstrBotDevs/AstrBot" },
 ];
 
-export function createWorkbenchView(store) {
+export function createStudioWorkbenchView(appCtx, { navigate }) {
+  const { store, bili, debug, cache, themes } = appCtx;
   const root = h("div", { class: "page-stack" });
-  let busyBili = false;
-  let debugUrl = "";
-  let downloadMedia = true;
-  let renderCard = true;
-  let runningProbe = false;
-  let probeError = "";
-  let probeReport = null;
-
-  async function checkBili() {
-    if (busyBili) return;
-    busyBili = true;
-    render();
-    try {
-      const res = await store.bridge.apiPost("bili/check", {});
-      if (store.overview && res?.bili) {
-        store.overview = { ...store.overview, bili: res.bili };
-      }
-      if (res?.checked === false) {
-        store.toast(res.message || "尚未配置B站 Cookie", "warn");
-      } else if (res?.result?.valid) {
-        store.toast(`B站 Cookie 有效（${res.result.username || "已登录"}）`, "ok");
-      } else {
-        store.toast(`Cookie 已失效：${res?.result?.error || "请重新扫码"}`, "err");
-      }
-    } catch (err) {
-      store.toast(`检测失败：${err.message || err}`, "err");
-    } finally {
-      busyBili = false;
-      render();
-    }
-  }
-
-  async function clearCache() {
-    try {
-      const res = await store.bridge.apiPost("cache/clear", {});
-      if (store.overview && res?.cache) {
-        store.overview = {
-          ...store.overview,
-          cache: res.cache,
-          webpage_share: {
-            ...(store.overview.webpage_share || {}),
-            active_links: res.cache.active_webpage_links ?? 0,
-          },
-        };
-      }
-      store.toast(`已清理 ${res?.cleaned ?? 0} 个缓存文件`, "ok");
-      render();
-    } catch (err) {
-      store.toast(`清理缓存失败：${err.message || err}`, "err");
-    }
-  }
-
-  async function runProbe() {
-    const trimmed = debugUrl.trim();
-    if (!trimmed) {
-      store.toast("请先输入需要诊断的链接", "warn");
-      return;
-    }
-    runningProbe = true;
-    probeError = "";
-    render();
-    try {
-      probeReport = await store.bridge.apiPost("debug/run", {
-        scope: store.scope,
-        url: trimmed,
-        download_media: downloadMedia,
-        render_card: renderCard,
-      });
-    } catch (err) {
-      probeError = err?.message || String(err);
-      store.toast(`诊断执行失败：${probeError}`, "err");
-    } finally {
-      runningProbe = false;
-      render();
-    }
-  }
 
   function renderProbeOutput() {
-    if (probeError) {
-      return h("div", { class: "notice notice-err" }, h("strong", null, "诊断请求失败："), probeError);
+    const dbg = debug.getState();
+    if (dbg.error) {
+      return h("div", { class: "notice notice-err" }, h("strong", null, "诊断请求失败："), dbg.error);
     }
-    if (!probeReport) {
+    if (!dbg.report) {
       return h(
         "p",
         { class: "empty-note" },
@@ -107,6 +32,7 @@ export function createWorkbenchView(store) {
       );
     }
 
+    const probeReport = dbg.report;
     const steps = probeReport.steps || [];
     const summary = Object.entries(probeReport.summary || {});
     const token = probeReport.token || "";
@@ -137,17 +63,7 @@ export function createWorkbenchView(store) {
               {
                 type: "button",
                 class: "btn btn-soft btn-sm",
-                onclick: async () => {
-                  try {
-                    await store.bridge.download(
-                      "debug/log",
-                      { token },
-                      probeReport.log_name || `rika_debug_${token}.log`,
-                    );
-                  } catch (err) {
-                    store.toast(`下载日志失败：${err.message || err}`, "err");
-                  }
-                },
+                onclick: () => debug.downloadLog(token, probeReport.log_name),
               },
               "下载脱敏日志",
             )
@@ -203,9 +119,12 @@ export function createWorkbenchView(store) {
     const platforms = ov.platforms || store.meta?.platforms || [];
     const enabledCount = platforms.filter((p) => p.enabled).length;
     const extCount = platforms.filter((p) => p.external).length;
-    const bili = ov.bili || {};
-    const cache = ov.cache || {};
-    const activeTheme = getTheme(store.draft.WEBUI_THEME);
+    const biliState = bili.getState();
+    const biliInfo = biliState.bili || {};
+    const cacheInfo = ov.cache || {};
+    const cacheCtrl = cache.getState();
+    const dbg = debug.getState();
+    const activeTheme = themes.getTheme(store.draft.WEBUI_THEME);
     const problems = ov.problems || store.meta?.problems || [];
     const personaOn = Boolean(store.draft.RENDER_PERSONA_WATERMARK);
 
@@ -220,19 +139,18 @@ export function createWorkbenchView(store) {
       );
     }
 
-    // 1. 顶部 KPI 概览条
-    const biliLabel = !bili.has_cookie
+    const biliLabel = !biliInfo.has_cookie
       ? "未配置"
-      : bili.valid === true
-        ? bili.username || "有效"
-        : bili.valid === false
+      : biliInfo.valid === true
+        ? biliInfo.username || "有效"
+        : biliInfo.valid === false
           ? "已失效"
           : "待验证";
-    const biliTone = !bili.has_cookie
+    const biliTone = !biliInfo.has_cookie
       ? "neutral"
-      : bili.valid === true
+      : biliInfo.valid === true
         ? "ok"
-        : bili.valid === false
+        : biliInfo.valid === false
           ? "err"
           : "warn";
 
@@ -264,7 +182,7 @@ export function createWorkbenchView(store) {
             {
               type: "button",
               class: "btn btn-ghost btn-sm",
-              onclick: () => store.navigate("platforms"),
+              onclick: () => navigate("platforms"),
             },
             "管理平台与账号 →",
           ),
@@ -281,12 +199,12 @@ export function createWorkbenchView(store) {
           h(
             "div",
             { class: "kpi-value" },
-            bili.username ? bili.username : bili.has_cookie ? "已存 Cookie" : "未登录",
+            biliInfo.username ? biliInfo.username : biliInfo.has_cookie ? "已存 Cookie" : "未登录",
           ),
           h(
             "p",
             { class: "kpi-sub" },
-            `${bili.refreshable ? "自动续期就绪 · " : ""}监控 ${bili.monitor_running ? "运行中" : "已停"}${bili.last_check_time ? ` · ${bili.last_check_time}` : ""}`,
+            `${biliInfo.refreshable ? "自动续期就绪 · " : ""}监控 ${biliInfo.monitor_running ? "运行中" : "已停"}${biliInfo.last_check_time ? ` · ${biliInfo.last_check_time}` : ""}`,
           ),
           h(
             "div",
@@ -296,19 +214,19 @@ export function createWorkbenchView(store) {
               {
                 type: "button",
                 class: "btn btn-soft btn-sm",
-                disabled: busyBili,
-                onclick: checkBili,
+                disabled: biliState.busyCheck,
+                onclick: () => bili.checkCookie(),
               },
-              busyBili ? "检测中…" : "检测有效性",
+              biliState.busyCheck ? "检测中…" : "检测有效性",
             ),
             h(
               "button",
               {
                 type: "button",
                 class: "btn btn-ghost btn-sm",
-                onclick: () => store.navigate("platforms"),
+                onclick: () => navigate("platforms"),
               },
-              bili.has_cookie ? "扫码更新" : "扫码登录 →",
+              biliInfo.has_cookie ? "扫码更新" : "扫码登录 →",
             ),
           ),
         ),
@@ -342,7 +260,7 @@ export function createWorkbenchView(store) {
             {
               type: "button",
               class: "btn btn-soft btn-sm",
-              onclick: () => store.navigate("studio"),
+              onclick: () => navigate("studio"),
             },
             "进入卡片工作室 →",
           ),
@@ -357,27 +275,26 @@ export function createWorkbenchView(store) {
             h(
               "span",
               { class: "pill pill-neutral" },
-              cache.ttl_hours ? `TTL ${cache.ttl_hours}h` : "不自动清理",
+              cacheInfo.ttl_hours ? `TTL ${cacheInfo.ttl_hours}h` : "不自动清理",
             ),
           ),
-          h("div", { class: "kpi-value" }, formatBytes(cache.bytes)),
+          h("div", { class: "kpi-value" }, formatBytes(cacheInfo.bytes)),
           h(
             "p",
             { class: "kpi-sub" },
-            `${cache.files ?? 0} 个文件 · ${cache.memory_entries ?? 0} 条内存索引`,
+            `${cacheInfo.files ?? 0} 个文件 · ${cacheInfo.memory_entries ?? 0} 条内存索引`,
           ),
           createInlineConfirmButton({
-            label: "清理全部缓存",
+            label: cacheCtrl.clearing ? "清理中…" : "清理全部缓存",
             confirmLabel: "确认删除",
             variant: "ghost",
             size: "sm",
-            onConfirm: clearCache,
+            onConfirm: () => cache.clearAll(),
           }),
         ),
       ),
     );
 
-    // 2. 平台状态快览带
     sections.push(
       h(
         "section",
@@ -412,7 +329,7 @@ export function createWorkbenchView(store) {
                 type: "button",
                 class: `status-chip ${p.enabled ? "is-on" : "is-off"}`,
                 title: p.description || p.label,
-                onclick: () => store.navigate("platforms"),
+                onclick: () => navigate("platforms"),
               },
               h("span", { class: "chip-dot" }),
               h("span", null, p.label || p.name),
@@ -423,19 +340,16 @@ export function createWorkbenchView(store) {
       ),
     );
 
-    // 3. 一体化链接诊断台
     const urlInput = h("input", {
       type: "url",
       class: "ctrl-input",
       placeholder: "输入 http:// 或 https:// 分享链接测试解析链路",
-      oninput: (e) => {
-        debugUrl = e.target.value;
-      },
+      oninput: (e) => debug.setUrl(e.target.value),
       onkeydown: (e) => {
-        if (e.key === "Enter" && !runningProbe) runProbe();
+        if (e.key === "Enter" && !dbg.running) debug.runProbe();
       },
     });
-    urlInput.value = debugUrl;
+    urlInput.value = dbg.url;
 
     sections.push(
       h(
@@ -466,10 +380,10 @@ export function createWorkbenchView(store) {
             {
               type: "button",
               class: "btn btn-primary",
-              disabled: runningProbe,
-              onclick: runProbe,
+              disabled: dbg.running,
+              onclick: () => debug.runProbe(),
             },
-            runningProbe ? "诊断中…" : "开始诊断",
+            dbg.running ? "诊断中…" : "开始诊断",
           ),
         ),
         h(
@@ -483,10 +397,8 @@ export function createWorkbenchView(store) {
               { class: "check-inline" },
               h("input", {
                 type: "checkbox",
-                checked: downloadMedia,
-                onchange: (e) => {
-                  downloadMedia = Boolean(e.target.checked);
-                },
+                checked: dbg.downloadMedia,
+                onchange: (e) => debug.setDownloadMedia(Boolean(e.target.checked)),
               }),
               h("span", null, "测试下载媒体"),
             ),
@@ -495,10 +407,8 @@ export function createWorkbenchView(store) {
               { class: "check-inline" },
               h("input", {
                 type: "checkbox",
-                checked: renderCard,
-                onchange: (e) => {
-                  renderCard = Boolean(e.target.checked);
-                },
+                checked: dbg.renderCard,
+                onchange: (e) => debug.setRenderCard(Boolean(e.target.checked)),
               }),
               h("span", null, "测试卡片生成"),
             ),
@@ -513,7 +423,7 @@ export function createWorkbenchView(store) {
                   type: "button",
                   class: "btn btn-ghost btn-sm",
                   onclick: () => {
-                    debugUrl = s.url;
+                    debug.setUrl(s.url);
                     render();
                   },
                 },

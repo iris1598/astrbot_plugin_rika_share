@@ -1,23 +1,17 @@
-import {
+export {
   DEFAULT_THEME_ID,
-  applyTheme,
+  VALID_COLOR_MODES,
+  activateTheme,
+  getActiveThemeId,
   getTheme,
   installGlobalThemeApi,
   listThemes,
   normalizeColorMode,
+  notifyActiveThemeColorChange,
+  notifyActiveThemeContextChange,
+  registerDiscoveredManifests,
   registerTheme,
+  resolveColorMode,
+  subscribeThemes,
+  unmountActiveTheme,
 } from "./registry.js";
-
-import "./studio.js";
-import "./glass-center.js";
-
-installGlobalThemeApi();
-
-export {
-  DEFAULT_THEME_ID,
-  applyTheme,
-  getTheme,
-  listThemes,
-  normalizeColorMode,
-  registerTheme,
-};

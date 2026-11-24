@@ -1,0 +1,11 @@
+{
+  "id": "glass-center",
+  "name": "空间指挥舱",
+  "subtitle": "Spatial Bento Cockpit · 三区空间画布 + 底部悬浮 Dock",
+  "description": "完全重构的页面信息架构：顶部半透明指挥条聚合作用域与快捷保存，首屏 Bento 驾驶舱直连实时诊断与一键平台芯片，创作台内嵌模拟聊天气泡真预览与泳道节点流水线。",
+  "badge": "空间感",
+  "preview": "cockpit",
+  "order": 20,
+  "entry": "index.js",
+  "styles": ["theme.css"]
+}
