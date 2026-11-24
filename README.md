@@ -163,12 +163,15 @@ astrbot_plugin_rika_share/
 ├── .astrbot-plugin/i18n/    # 多语言文案
 ├── views/rika/              # 插件控制面板前端与 themes/ 主题包
 ├── link_parser/             # 核心包（adapters / config / models / output / services / utils / webui）
-├── docs/                    # 架构备忘 docs/ARCHITECTURE.md 与卡片预览图
+├── docs/                    # 架构备忘 docs/ARCHITECTURE.md、模块开发指南与预览图
 └── scripts/                 # 渲染回归与独立冒烟测试脚本
 ```
 
-更多架构约定、扩展机制（新增平台 / 外部联动 / 新增卡片样式 / 新增网页主题）与历史变更请查阅：
+更多架构约定、扩展机制与历史变更请查阅：
 - 开发者备忘与架构文档：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- 解析器（平台适配器）开发指南：[`docs/PARSER_GUIDE.md`](docs/PARSER_GUIDE.md)
+- 卡片主题（Card Style）开发指南：[`docs/CARD_STYLE_GUIDE.md`](docs/CARD_STYLE_GUIDE.md)
+- 网页主题（WebUI Theme）开发指南：[`docs/WEB_THEME_GUIDE.md`](docs/WEB_THEME_GUIDE.md)
 - 完整变更日志：[`CHANGELOG.md`](CHANGELOG.md)
 
 ---

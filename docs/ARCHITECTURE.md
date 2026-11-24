@@ -34,7 +34,7 @@ astrbot_plugin_rika_share/
 ├── .astrbot-plugin/i18n/        # AstrBot 插件及 View 多语言文案
 ├── views/rika/                  # AstrBot 4.x WebUI 插件视图（设置 / 调试 / 外观）
 │   └── themes/                  # 可插拔网页主题注册表与主题包
-├── docs/                        # 架构备忘（本文）与预览图
+├── docs/                        # 架构备忘（本文）、模块开发指南与预览图
 ├── scripts/                     # 独立辅助/回归脚本（输出统一落在 scripts/.out/）
 └── link_parser/
     ├── config/                  # 配置子包：schema（唯一来源）/ nodes（分模式节点规则）/ groups（分群稀疏覆写）/ runtime（ContextVar 作用域）
@@ -48,17 +48,17 @@ astrbot_plugin_rika_share/
 ```
 
 ### 四大「自动发现 + 自注册」扩展点
-1. **新增平台适配器**：在 `link_parser/adapters/` 新建 `<name>.py`，继承 `BaseParser` 并调用 `register_adapter(AdapterSpec(...))`。
+1. **新增平台适配器**（详见 [解析器开发指南](PARSER_GUIDE.md)）：在 `link_parser/adapters/` 新建 `<name>.py`，继承 `BaseParser` 并调用 `register_adapter(AdapterSpec(...))`。
    - `adapters/__init__.py` 自动发现（`_` 前缀与 `base`/`registry` 除外），按 `AdapterSpec.priority` 排序。
    - **顺序敏感**：`priority` 同时决定解析器构建顺序、JSON 卡片认领顺序及 WebUI 开关排序。
-2. **外部插件联动**：外部插件在自己目录放 `rikashare_bridge.py` 暴露 `register(api)`，由 `adapters/_external.py` 在 `_PLATFORM_HANDLERS` 生成前拉取注册。
+2. **外部插件联动**（详见 [解析器开发指南（外部桥接章节）](PARSER_GUIDE.md)）：外部插件在自己目录放 `rikashare_bridge.py` 暴露 `register(api)`，由 `adapters/_external.py` 在 `_PLATFORM_HANDLERS` 生成前拉取注册。
    - 外部桥接不得在模块顶层自注册（防止本插件重载后注册表重建而桥接模块因 `sys.modules` 缓存跳过注册）。
    - `ModuleNotFoundError` 需判断缺失模块是否为候选根本身/前缀，避免未安装插件误刷 WARNING。
    - 与 `astrbot_plugin_multincm` 共存时，通过 `extra["suppress_text_output"]`、`extra["music_card"]`、`extra["audio_as_file"]` 协作（QQ 系支持先发解析卡片图再发 `Comp.Music` 卡片替代语音）。
-3. **新增卡片样式**：在 `link_parser/services/card_render/styles/` 新建 `<name>.py`，继承 `CardStyle` 并调用 `register_style(StyleSpec(...))`。
+3. **新增卡片样式**（详见 [卡片主题开发指南](CARD_STYLE_GUIDE.md)）：在 `link_parser/services/card_render/styles/` 新建 `<name>.py`，继承 `CardStyle` 并调用 `register_style(StyleSpec(...))`。
    - 改动样式视觉后须将类属性 `version` +1，否则命中缓存旧图；无封面/超长文/无头像均须安全降级。
    - **动态人格水印兼容性**：标准样式通过 `self.footer_block(...)` 绘制页脚，系统会在底卡渲染阶段自动留出右侧安全宽并写入 `.anchor.json` 坐标，跨人格（`RENDER_PERSONA_WATERMARK`）复用同一份无水印 Base Card 仅叠印署名。若自定义样式不走 `footer_block`，请设类属性 `supports_dynamic_footer = False` 让渲染器自动回退到按署名分键整卡渲染。
-4. **新增网页布局主题**：在 `views/rika/themes/` 新建主题模块调用 `registerTheme(...)`（可同时声明 `layout`、`navMode`、`light`/`dark` 变量及布局级 `css`）并在 `themes/index.js` 引入，即可自动出现在「主题与兜底」中并同步响应 AstrBot `light/dark`。
+4. **新增网页布局主题**（详见 [网页主题开发指南](WEB_THEME_GUIDE.md)）：在 `views/rika/themes/` 新建主题模块调用 `registerTheme(...)`（可同时声明 `layout`、`navMode`、`light`/`dark` 变量及布局级 `css`）并在 `themes/index.js` 引入，即可自动出现在「主题与兜底」中并同步响应 AstrBot `light/dark`。
 
 ---
 
