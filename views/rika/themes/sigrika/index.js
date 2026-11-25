@@ -210,15 +210,243 @@ function buildSky() {
 
 /* ------------------------------ 日灵伙伴 ------------------------------ */
 
+let soliSeq = 0;
+
+function buildSoliskinEar(isRight, ids) {
+  const wrapAttrs = isRight ? { transform: "translate(184 0) scale(-1 1)" } : {};
+  /* 头顶高耸尖长棱角晶耳 + 发光耳尖 + 折线符文脉络 + 耳根前置小圆绒球 */
+  return s("g", wrapAttrs, [
+    s("g", { transform: "translate(68 58)" }, [
+      s("g", { class: "sg-soli-ear" }, [
+        s("path", {
+          class: "sg-soli-fill",
+          fill: `url(#${ids.body})`,
+          d: "M8 2L5 -22L-7 -50L-15 -22L-6 5Q1 7 8 2Z",
+        }),
+        s("path", {
+          class: "sg-soli-ear-facet",
+          d: "M-7 -50L-1.5 -21L-6 5L-15 -22Z",
+        }),
+        s("path", {
+          class: "sg-soli-ear-tip",
+          fill: `url(#${ids.earTip})`,
+          d: "M5 -22L-7 -50L-15 -22Q-5 -17 5 -22Z",
+        }),
+        s("path", {
+          class: "sg-soli-outline",
+          d: "M7.2 0L5 -22L-7 -50L-15 -22L-6.5 3.5",
+        }),
+        s("path", {
+          class: "sg-soli-ear-vein",
+          d: "M0 0L-2.2 -15L-6.8 -23L-6.8 -39",
+        }),
+        s("circle", { class: "sg-soli-mark-dot", cx: -2.2, cy: -15, r: 1.7 }),
+        s("ellipse", {
+          class: "sg-soli-ear-bud",
+          fill: `url(#${ids.body})`,
+          cx: -9.5,
+          cy: 3.5,
+          rx: 6.8,
+          ry: 5.4,
+          transform: "rotate(-22 -9.5 3.5)",
+        }),
+        s("ellipse", {
+          class: "sg-soli-bud-shine",
+          cx: -11.2,
+          cy: 1.8,
+          rx: 2.6,
+          ry: 1.5,
+          transform: "rotate(-22 -11.2 1.8)",
+        }),
+      ]),
+    ]),
+  ]);
+}
+
+function buildSoliskinArm(isRight, ids) {
+  const wrapAttrs = isRight ? { transform: "translate(184 0) scale(-1 1)" } : {};
+  /* 身体中下部向两侧伸展的宽袖耳翼（肩部无接缝融合）+ 暖白双环纹与圆环符文 */
+  return s("g", wrapAttrs, [
+    s("g", { transform: "translate(56 106)" }, [
+      s("g", { class: "sg-soli-arm" }, [
+        s("path", {
+          class: "sg-soli-fill",
+          fill: `url(#${ids.body})`,
+          d: "M6 -12C-8 -7 -26 1 -41 -5Q-48 -8 -50 -2C-51 9 -37 21 -20 19C-8 17 1 15 7 13Z",
+        }),
+        s("path", {
+          class: "sg-soli-tip-glow",
+          fill: `url(#${ids.armTip})`,
+          d: "M-24 -1C-32 0 -38 -3 -41 -5Q-48 -8 -50 -2C-51 8 -39 19 -24 19C-21 12 -21 5 -24 -1Z",
+        }),
+        s("path", { class: "sg-soli-mark-line", d: "M-47 -1Q-31 6 -11 6" }),
+        s("path", { class: "sg-soli-mark-band", d: "M-38 -3.5Q-33 7 -37.5 15.5" }),
+        s("path", { class: "sg-soli-mark-band", d: "M-24.5 -1Q-19.5 8.5 -24 18" }),
+        s("circle", { class: "sg-soli-mark-ring", cx: -31.5, cy: 11.2, r: 2.8 }),
+        s("circle", { class: "sg-soli-mark-dot", cx: -42.5, cy: 4.5, r: 1.5 }),
+        s("path", {
+          class: "sg-soli-outline",
+          d: "M2 -10.5C-10 -6 -27 1 -41 -5Q-48 -8 -50 -2C-51 9 -37 21 -20 19C-9 17.5 -1 15.5 4 14",
+        }),
+      ]),
+    ]),
+  ]);
+}
+
 function buildSoliskin(onClick) {
+  const uid = `sg-soli-${++soliSeq}`;
+  const ids = {
+    body: `${uid}-body`,
+    dawn: `${uid}-dawn`,
+    earTip: `${uid}-ear-tip`,
+    armTip: `${uid}-arm-tip`,
+    clip: `${uid}-clip`,
+  };
+
+  /* 八芒朝霞太阳纹（饱满八瓣日光芒 + 圆润日核） */
+  const sunRays = Array.from({ length: 8 }, (_, i) => {
+    const outer = i % 2 === 0 ? -16.2 : -14.6;
+    return s("polygon", {
+      class: "sg-soli-sun-ray",
+      points: `0,${outer} 2.8,-9.8 0,-7.5 -2.8,-9.8`,
+      transform: `rotate(${i * 45})`,
+    });
+  });
+
+  const svg = s(
+    "svg",
+    { class: "sg-soli-svg", viewBox: "0 0 184 168", "aria-hidden": "true" },
+    [
+      s("defs", {}, [
+        s("radialGradient", { id: ids.body, cx: "38%", cy: "26%", r: "74%" }, [
+          s("stop", { offset: "0%", class: "sg-stop-body-hi" }),
+          s("stop", { offset: "55%", class: "sg-stop-body-mid" }),
+          s("stop", { offset: "100%", class: "sg-stop-body-low" }),
+        ]),
+        s("linearGradient", { id: ids.dawn, x1: "20%", y1: "6%", x2: "80%", y2: "96%" }, [
+          s("stop", { offset: "0%", class: "sg-stop-dawn-top" }),
+          s("stop", { offset: "48%", class: "sg-stop-dawn-mid" }),
+          s("stop", { offset: "100%", class: "sg-stop-dawn-bot" }),
+        ]),
+        s("linearGradient", { id: ids.earTip, x1: "35%", y1: "0%", x2: "55%", y2: "100%" }, [
+          s("stop", { offset: "0%", class: "sg-stop-tip-hi" }),
+          s("stop", { offset: "100%", class: "sg-stop-tip-fade" }),
+        ]),
+        s("radialGradient", { id: ids.armTip, cx: "12%", cy: "36%", r: "85%" }, [
+          s("stop", { offset: "0%", class: "sg-stop-tip-hi" }),
+          s("stop", { offset: "100%", class: "sg-stop-tip-fade" }),
+        ]),
+        s("clipPath", { id: ids.clip }, [
+          s("circle", { cx: 92, cy: 86, r: 19.8 }),
+        ]),
+      ]),
+
+      /* 地面投影与背后柔光 */
+      s("ellipse", { class: "sg-soli-shadow", cx: 92, cy: 155, rx: 35, ry: 6 }),
+      s("circle", { class: "sg-soli-aura", cx: 92, cy: 96, r: 60 }),
+
+      /* 主体悬浮组 */
+      s("g", { class: "sg-soli-float" }, [
+        /* 头顶双层透视金色日冕光环 */
+        s("g", { class: "sg-soli-crown" }, [
+          s("ellipse", { class: "sg-soli-crown-outer", cx: 92, cy: 10.5, rx: 40, ry: 8.2 }),
+          s("ellipse", { class: "sg-soli-crown-inner", cx: 92, cy: 10.5, rx: 26, ry: 5 }),
+          s("path", {
+            class: "sg-soli-crown-spokes",
+            d: "M52 10.5H66M118 10.5H132M64 5.2L73.5 7.5M120 5.2L110.5 7.5M64 15.8L73.5 13.5M120 15.8L110.5 13.5M92 5.5V15.5",
+          }),
+          s("polygon", { class: "sg-soli-crown-gem", points: "92,7.4 96.5,10.5 92,13.6 87.5,10.5" }),
+        ]),
+
+        /* 圆润糯米团状青玉躯干 + 双层脸颊小绒毛 + 敦实小短足 */
+        s("path", {
+          class: "sg-soli-torso",
+          fill: `url(#${ids.body})`,
+          d:
+            "M92 51C112 51 124 61 126.5 74L133 70.5Q131 76 128 79L131.5 79.5Q129.5 83.5 127.5 85.5" +
+            "C132.5 102 130.5 123 118 135Q114.5 142.5 106 142.5Q99.5 142.5 97.5 138.5" +
+            "Q92 139.5 86.5 138.5Q84.5 142.5 78 142.5Q69.5 142.5 66 135" +
+            "C53.5 123 51.5 102 56.5 85.5Q54.5 83.5 52.5 79.5L56 79Q53 76 51 70.5L57.5 74" +
+            "C60 61 72 51 92 51Z",
+        }),
+
+        /* 两侧无缝衔接的长袖耳翼与头顶晶耳（含前置耳根圆绒球） */
+        buildSoliskinArm(false, ids),
+        buildSoliskinArm(true, ids),
+        buildSoliskinEar(false, ids),
+        buildSoliskinEar(true, ids),
+
+        /* 躯干柔和高光与星尘细闪 */
+        s("ellipse", {
+          class: "sg-soli-torso-shine",
+          cx: 74,
+          cy: 63,
+          rx: 11.5,
+          ry: 5,
+          transform: "rotate(-24 74 63)",
+        }),
+        s("g", { class: "sg-soli-sparkles" }, [
+          s("circle", { cx: 64, cy: 93, r: 1.25 }),
+          s("circle", { cx: 120, cy: 91, r: 1.15 }),
+          s("circle", { cx: 68, cy: 121, r: 1.35 }),
+          s("circle", { cx: 116, cy: 119, r: 1.25 }),
+          s("circle", { cx: 79, cy: 132, r: 1.05 }),
+          s("circle", { cx: 92, cy: 57.5, r: 1.15 }),
+        ]),
+
+        /* 腹部对称荧光符文脉络与眼下托环 */
+        s("g", { class: "sg-soli-belly-runes" }, [
+          s("path", { class: "sg-soli-cradle", d: "M68 99A27.2 27.2 0 0 0 116 99" }),
+          s("circle", { class: "sg-soli-cradle-node", cx: 67.2, cy: 97.5, r: 2.2 }),
+          s("circle", { class: "sg-soli-cradle-node", cx: 116.8, cy: 97.5, r: 2.2 }),
+          s("path", { class: "sg-soli-leaf", d: "M62.5 103.5Q59.5 108.5 63.5 112.5Q66.5 107.5 62.5 103.5Z" }),
+          s("path", { class: "sg-soli-leaf", d: "M121.5 103.5Q124.5 108.5 120.5 112.5Q117.5 107.5 121.5 103.5Z" }),
+          s("path", {
+            class: "sg-soli-circuit",
+            d: "M69 116Q78.5 124 88.2 125V135.5M115 116Q105.5 124 95.8 125V135.5M74 125Q79.5 129.5 85 130.5M110 125Q104.5 129.5 99 130.5",
+          }),
+          s("circle", { class: "sg-soli-circuit-dot", cx: 88.2, cy: 137.8, r: 1.5 }),
+          s("circle", { class: "sg-soli-circuit-dot", cx: 95.8, cy: 137.8, r: 1.5 }),
+        ]),
+
+        /* 正中央「朝霞暖阳」大圆盘核心独眼 */
+        s("circle", { class: "sg-soli-socket", cx: 92, cy: 86, r: 23 }),
+        s("g", { "clip-path": `url(#${ids.clip})` }, [
+          s("circle", { class: "sg-soli-orb", fill: `url(#${ids.dawn})`, cx: 92, cy: 86, r: 19.8 }),
+          s("g", { transform: "translate(92 86)" }, [
+            s("g", { class: "sg-soli-sun" }, [
+              ...sunRays,
+              s("circle", { class: "sg-soli-sun-disc", cx: 0, cy: 0, r: 6.1 }),
+            ]),
+          ]),
+          /* 未保存改动时浮现的微垂烦恼眼睑 */
+          s("path", { class: "sg-soli-worry-lid", d: "M70 64H114V77Q92 84 70 77Z" }),
+          s("ellipse", {
+            class: "sg-soli-orb-gloss",
+            cx: 83.8,
+            cy: 76.5,
+            rx: 6,
+            ry: 3.2,
+            transform: "rotate(-30 83.8 76.5)",
+          }),
+        ]),
+        s("circle", { class: "sg-soli-orb-rim", cx: 92, cy: 86, r: 19.8 }),
+      ]),
+    ],
+  );
+
+  const badge = h(
+    "span",
+    { class: "sg-soli-alert", "aria-hidden": "true" },
+    starSvg("sg-soli-alert-star", 9),
+    h("b", null, "!"),
+  );
+
   return h(
     "button",
-    { type: "button", class: "sg-soli", title: "日灵", "aria-label": "日灵伙伴：查看保存提醒", onclick: onClick },
-    h("span", { class: "sg-soli-halo" }),
-    h("span", { class: "sg-soli-wing is-l" }),
-    h("span", { class: "sg-soli-wing is-r" }),
-    h("span", { class: "sg-soli-body" }, h("span", { class: "sg-soli-eye" }), h("span", { class: "sg-soli-shine" })),
-    h("span", { class: "sg-soli-shadow" }),
+    { type: "button", class: "sg-soli", title: "日灵 · 小哆", "aria-label": "日灵伙伴：查看保存提醒", onclick: onClick },
+    svg,
+    badge,
   );
 }
 
@@ -380,6 +608,7 @@ export default {
       } else {
         const lines = [
           "日灵：一切都同步好啦，可以安心小憩～",
+          "日灵：哆的声音，是太阳，是朝霞的颜色～ ✦",
           "日灵蹭了蹭你的手心 ✦",
           "日灵：今天也一起走回家吧！",
         ];

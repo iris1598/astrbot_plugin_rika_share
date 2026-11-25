@@ -881,142 +881,398 @@ body {
 }
 
 .sg-soli {
+  --sg-soli-line: #43856d;
+  --sg-soli-body-hi: #f8fde8;
+  --sg-soli-body-mid: #d3f0d2;
+  --sg-soli-body-low: #8fd2ae;
+  --sg-soli-facet: rgba(88, 178, 138, 0.24);
+  --sg-soli-tip-hi: #fffce6;
+  --sg-soli-mark: #fffef5;
+  --sg-soli-rune: #3dbf90;
+  --sg-soli-rune-glow: rgba(124, 245, 192, 0.6);
+  --sg-soli-crown: #df9a24;
+  --sg-soli-crown-hi: #fff4c2;
+  --sg-soli-dawn-top: #ffe26a;
+  --sg-soli-dawn-mid: #ffad76;
+  --sg-soli-dawn-bot: #f6a4c6;
+  --sg-soli-socket: #effae9;
+
   position: fixed;
-  right: 26px;
-  bottom: 22px;
+  right: 18px;
+  bottom: 16px;
   z-index: 60;
-  width: 78px;
-  height: 84px;
+  width: 114px;
+  height: 104px;
   padding: 0;
   border: none;
   background: transparent;
   cursor: pointer;
-  animation: sg-bob 3.6s ease-in-out infinite;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+[data-theme="dark"] .sg-soli {
+  --sg-soli-line: #317460;
+  --sg-soli-body-hi: #f6feea;
+  --sg-soli-body-mid: #bfecc8;
+  --sg-soli-body-low: #68c59d;
+  --sg-soli-facet: rgba(45, 140, 108, 0.28);
+  --sg-soli-tip-hi: #fffad8;
+  --sg-soli-mark: #fbfff6;
+  --sg-soli-rune: #adffd6;
+  --sg-soli-rune-glow: rgba(140, 255, 204, 0.8);
+  --sg-soli-crown: #ffdc78;
+  --sg-soli-crown-hi: #fffbe0;
+  --sg-soli-dawn-top: #ffe878;
+  --sg-soli-dawn-mid: #ffb07c;
+  --sg-soli-dawn-bot: #ffaaca;
+  --sg-soli-socket: #e3f8e4;
 }
 
 .sg-soli:focus-visible {
   outline: 2px dashed var(--sg-marigold);
   outline-offset: 4px;
-  border-radius: 50%;
+  border-radius: 22px;
 }
 
-.sg-soli-halo {
-  position: absolute;
-  left: 50%;
-  top: 46%;
-  width: 92px;
-  height: 92px;
-  translate: -50% -50%;
-  border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--sg-soliskin-glow) 45%, transparent), transparent 66%);
+.sg-soli-svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  display: block;
+  filter: drop-shadow(0 8px 16px rgba(78, 54, 126, 0.2));
+  transition: filter 0.22s ease, transform 0.22s ease;
 }
 
-.sg-soli-body {
-  position: absolute;
-  left: 50%;
-  top: 14px;
-  width: 58px;
-  height: 52px;
-  translate: -50% 0;
-  border-radius: 52% 52% 46% 46% / 58% 58% 42% 42%;
-  background:
-    radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.85) 0 9%, transparent 10%),
-    radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--sg-soliskin-glow) 90%, #fff), var(--sg-soliskin) 78%);
-  border: 1.5px solid color-mix(in srgb, var(--sg-soliskin) 70%, #1b5d55);
-  box-shadow:
-    inset 0 -6px 10px color-mix(in srgb, var(--sg-soliskin) 60%, #0b3f39),
-    0 6px 16px -6px color-mix(in srgb, var(--sg-soliskin) 90%, transparent);
+[data-theme="dark"] .sg-soli-svg {
+  filter:
+    drop-shadow(0 10px 20px rgba(6, 4, 18, 0.65))
+    drop-shadow(0 0 14px rgba(103, 228, 207, 0.26));
 }
 
-.sg-soli-eye {
-  position: absolute;
-  left: 50%;
-  top: 46%;
-  width: 22px;
-  height: 22px;
-  translate: -50% -50%;
-  border-radius: 50%;
-  border: 2.5px solid color-mix(in srgb, var(--sg-soliskin) 60%, #0d4a44);
-  background: radial-gradient(circle, color-mix(in srgb, var(--sg-soliskin-glow) 60%, #fff) 0 30%, transparent 32%);
-  transition: height 0.15s ease;
+.sg-soli:hover .sg-soli-svg {
+  transform: translateY(-2px) scale(1.03);
 }
 
-.sg-soli-shine {
-  position: absolute;
-  right: 9px;
-  top: 10px;
-  width: 6px;
-  height: 10px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.7);
-  rotate: 25deg;
+/* 渐变停靠点与主题色联动 */
+.sg-stop-body-hi {
+  stop-color: var(--sg-soli-body-hi);
 }
 
-.sg-soli-wing {
-  position: absolute;
-  top: 4px;
-  width: 26px;
-  height: 30px;
-  background: linear-gradient(160deg, color-mix(in srgb, var(--sg-soliskin-glow) 90%, #fff), var(--sg-soliskin));
-  border: 1.5px solid color-mix(in srgb, var(--sg-soliskin) 70%, #1b5d55);
-  border-radius: 4px 80% 6px 80%;
-  opacity: 0.92;
+.sg-stop-body-mid {
+  stop-color: var(--sg-soli-body-mid);
 }
 
-.sg-soli-wing.is-l {
-  left: 2px;
-  rotate: -28deg;
-  transform-origin: 100% 100%;
-  animation: sg-wing-l 2.4s ease-in-out infinite;
+.sg-stop-body-low {
+  stop-color: var(--sg-soli-body-low);
 }
 
-.sg-soli-wing.is-r {
-  right: 2px;
-  rotate: 28deg;
-  transform: scaleX(-1);
-  transform-origin: 0 100%;
-  animation: sg-wing-r 2.4s ease-in-out infinite;
+.sg-stop-dawn-top {
+  stop-color: var(--sg-soli-dawn-top);
+}
+
+.sg-stop-dawn-mid {
+  stop-color: var(--sg-soli-dawn-mid);
+}
+
+.sg-stop-dawn-bot {
+  stop-color: var(--sg-soli-dawn-bot);
+}
+
+.sg-stop-tip-hi {
+  stop-color: var(--sg-soli-tip-hi);
+  stop-opacity: 0.95;
+}
+
+.sg-stop-tip-fade {
+  stop-color: var(--sg-soli-tip-hi);
+  stop-opacity: 0;
+}
+
+/* 背后柔光与地面投影 */
+.sg-soli-aura {
+  fill: var(--sg-soliskin-glow);
+  opacity: 0.24;
+  filter: blur(10px);
+  transition: opacity 0.25s ease;
+}
+
+[data-theme="dark"] .sg-soli-aura {
+  opacity: 0.2;
+}
+
+.sg-soli:hover .sg-soli-aura {
+  opacity: 0.4;
 }
 
 .sg-soli-shadow {
-  position: absolute;
-  left: 50%;
-  bottom: 0;
-  width: 40px;
-  height: 7px;
-  translate: -50% 0;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--sg-wisteria) 30%, transparent);
+  fill: color-mix(in srgb, var(--sg-wisteria) 28%, transparent);
   filter: blur(2px);
+  transform-origin: 92px 155px;
   animation: sg-shadow 3.6s ease-in-out infinite;
 }
 
-.sg-soli.is-worried .sg-soli-eye {
-  height: 9px;
-  border-radius: 0 0 50% 50%;
-  border-top-color: transparent;
+[data-theme="dark"] .sg-soli-shadow {
+  fill: rgba(5, 3, 14, 0.55);
 }
 
-.sg-soli.is-worried::after {
-  content: "!";
+/* 悬浮主体与头顶金色日冕光环 */
+.sg-soli-float {
+  animation: sg-bob 3.6s ease-in-out infinite;
+}
+
+.sg-soli-crown {
+  transform-origin: 92px 10.5px;
+  animation: sg-crown-pulse 4.2s ease-in-out infinite;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--sg-gold) 65%, transparent));
+}
+
+.sg-soli-crown-outer {
+  fill: none;
+  stroke: var(--sg-soli-crown);
+  stroke-width: 2.5;
+}
+
+.sg-soli-crown-inner {
+  fill: none;
+  stroke: var(--sg-soli-crown-hi);
+  stroke-width: 1.7;
+}
+
+.sg-soli-crown-spokes {
+  fill: none;
+  stroke: var(--sg-soli-crown);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  opacity: 0.9;
+}
+
+.sg-soli-crown-gem {
+  fill: var(--sg-soli-crown-hi);
+  stroke: var(--sg-soli-crown);
+  stroke-width: 1.1;
+}
+
+/* 躯干、高耸晶耳、耳根绒球与两侧长耳翼 */
+.sg-soli-torso,
+.sg-soli-ear-bud {
+  stroke: var(--sg-soli-line);
+  stroke-width: 1.9;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.sg-soli-fill {
+  stroke: none;
+}
+
+.sg-soli-outline {
+  fill: none;
+  stroke: var(--sg-soli-line);
+  stroke-width: 1.9;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.sg-soli-bud-shine {
+  fill: rgba(255, 255, 255, 0.62);
+  pointer-events: none;
+}
+
+.sg-soli-ear-facet {
+  fill: var(--sg-soli-facet);
+  pointer-events: none;
+}
+
+.sg-soli-ear-tip,
+.sg-soli-tip-glow {
+  pointer-events: none;
+}
+
+.sg-soli-ear-vein {
+  fill: none;
+  stroke: var(--sg-soli-mark);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.92;
+}
+
+.sg-soli-mark-line {
+  fill: none;
+  stroke: var(--sg-soli-mark);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
+.sg-soli-mark-band {
+  fill: none;
+  stroke: var(--sg-soli-mark);
+  stroke-width: 2.3;
+  stroke-linecap: round;
+  opacity: 0.92;
+}
+
+.sg-soli-mark-ring {
+  fill: none;
+  stroke: var(--sg-soli-mark);
+  stroke-width: 1.6;
+  opacity: 0.92;
+}
+
+.sg-soli-mark-dot {
+  fill: var(--sg-soli-mark);
+}
+
+.sg-soli-ear {
+  transform-origin: 0px 0px;
+  animation: sg-ear-sway 3.6s ease-in-out infinite;
+  transition: rotate 0.25s ease;
+}
+
+.sg-soli-arm {
+  transform-origin: 0px 0px;
+  animation: sg-arm-flap 3.6s ease-in-out infinite;
+  transition: rotate 0.25s ease;
+}
+
+.sg-soli:hover .sg-soli-ear {
+  animation-duration: 1.8s;
+}
+
+.sg-soli:hover .sg-soli-arm {
+  animation-duration: 1.4s;
+}
+
+.sg-soli-torso-shine {
+  fill: rgba(255, 255, 255, 0.65);
+}
+
+.sg-soli-sparkles circle {
+  fill: #ffffff;
+  opacity: 0.72;
+}
+
+/* 腹部对称荧光符文与眼下托环 */
+.sg-soli-belly-runes {
+  filter: drop-shadow(0 0 3px var(--sg-soli-rune-glow));
+}
+
+.sg-soli-cradle,
+.sg-soli-circuit {
+  fill: none;
+  stroke: var(--sg-soli-rune);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sg-soli-cradle-node {
+  fill: var(--sg-soli-body-hi);
+  stroke: var(--sg-soli-rune);
+  stroke-width: 1.6;
+}
+
+.sg-soli-leaf,
+.sg-soli-circuit-dot {
+  fill: var(--sg-soli-rune);
+  opacity: 0.88;
+}
+
+/* 正中央「朝霞暖阳」大圆盘核心独眼 */
+.sg-soli-socket {
+  fill: var(--sg-soli-socket);
+  stroke: color-mix(in srgb, var(--sg-soli-line) 55%, transparent);
+  stroke-width: 1.5;
+}
+
+.sg-soli-orb-rim {
+  fill: none;
+  stroke: color-mix(in srgb, var(--sg-gold) 72%, #ffffff);
+  stroke-width: 1.6;
+}
+
+.sg-soli-sun {
+  animation: sg-spin 28s linear infinite;
+  filter: drop-shadow(0 1px 2px rgba(180, 72, 32, 0.28));
+}
+
+.sg-soli:hover .sg-soli-sun {
+  animation-duration: 6s;
+}
+
+.sg-soli-sun-ray,
+.sg-soli-sun-disc {
+  fill: #fffdf5;
+}
+
+.sg-soli-orb-gloss {
+  fill: rgba(255, 255, 255, 0.52);
+}
+
+.sg-soli-worry-lid {
+  fill: color-mix(in srgb, var(--sg-soli-body-mid) 92%, var(--sg-soli-line));
+  stroke: var(--sg-soli-line);
+  stroke-width: 1.5;
+  transform: translateY(-20px);
+  transition: transform 0.24s cubic-bezier(0.3, 1.3, 0.4, 1);
+}
+
+/* 未保存提醒态（烦恼着走在回家的路上） */
+.sg-soli-alert {
   position: absolute;
-  right: 4px;
-  top: -4px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
+  right: 8px;
+  top: 2px;
+  padding: 2px 7px 2px 5px;
+  border-radius: 999px;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: 2px;
+  font-family: var(--font-hand);
   font-size: 12px;
-  font-weight: 800;
+  line-height: 1.1;
   color: #fff;
-  background: var(--warn);
-  box-shadow: 0 2px 6px -1px color-mix(in srgb, var(--warn) 70%, transparent);
+  background: linear-gradient(135deg, var(--sg-marigold), var(--sg-gold));
+  border: 1.5px solid rgba(255, 253, 246, 0.9);
+  box-shadow: 0 4px 10px -2px color-mix(in srgb, var(--sg-marigold) 80%, transparent);
+  opacity: 0;
+  transform: scale(0.5) translateY(6px);
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.28s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+
+.sg-soli-alert b {
+  font-weight: 800;
+}
+
+.sg-soli-alert-star path {
+  fill: currentColor;
+}
+
+.sg-soli.is-worried .sg-soli-alert {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+
+.sg-soli.is-worried .sg-soli-worry-lid {
+  transform: translateY(0);
+}
+
+.sg-soli.is-worried .sg-soli-ear {
+  animation: sg-ear-worry 1.8s ease-in-out infinite;
+}
+
+.sg-soli.is-worried .sg-soli-arm {
+  animation: sg-arm-worry 1.2s ease-in-out infinite;
+}
+
+.sg-soli.is-worried .sg-soli-orb-rim {
+  stroke: var(--sg-marigold);
 }
 
 .sg-soli.is-hop {
-  animation: sg-hop 0.6s cubic-bezier(0.3, 1.6, 0.5, 1), sg-bob 3.6s ease-in-out 0.6s infinite;
+  animation: sg-hop 0.6s cubic-bezier(0.3, 1.6, 0.5, 1);
 }
 
 @keyframes sg-bob {
@@ -1025,39 +1281,71 @@ body {
     transform: translateY(0);
   }
   50% {
-    transform: translateY(-7px);
+    transform: translateY(-6px);
   }
 }
 
 @keyframes sg-shadow {
   0%,
   100% {
-    scale: 1;
+    transform: scale(1);
     opacity: 0.9;
   }
   50% {
-    scale: 0.78;
+    transform: scale(0.8);
     opacity: 0.55;
   }
 }
 
-@keyframes sg-wing-l {
+@keyframes sg-crown-pulse {
   0%,
   100% {
-    rotate: -28deg;
+    transform: translateY(0) scale(1);
+    opacity: 0.88;
   }
   50% {
-    rotate: -40deg;
+    transform: translateY(-2px) scale(1.04);
+    opacity: 1;
   }
 }
 
-@keyframes sg-wing-r {
+@keyframes sg-ear-sway {
   0%,
   100% {
-    rotate: 28deg;
+    transform: rotate(0deg);
   }
   50% {
-    rotate: 40deg;
+    transform: rotate(-3.5deg);
+  }
+}
+
+@keyframes sg-ear-worry {
+  0%,
+  100% {
+    transform: rotate(-8deg);
+  }
+  50% {
+    transform: rotate(-12deg);
+  }
+}
+
+@keyframes sg-arm-flap {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(7deg);
+  }
+}
+
+@keyframes sg-arm-worry {
+  0%,
+  100% {
+    transform: rotate(-4deg);
+  }
+  50% {
+    transform: rotate(10deg);
   }
 }
 
@@ -1065,11 +1353,11 @@ body {
   0% {
     transform: translateY(0) scale(1, 1);
   }
-  30% {
-    transform: translateY(2px) scale(1.12, 0.88);
+  28% {
+    transform: translateY(3px) scale(1.1, 0.9);
   }
   60% {
-    transform: translateY(-18px) scale(0.94, 1.08);
+    transform: translateY(-16px) scale(0.95, 1.07);
   }
   100% {
     transform: translateY(0) scale(1, 1);
@@ -1182,7 +1470,11 @@ body {
   .sg-portrait-ring,
   .sg-pinwheel,
   .sg-soli,
-  .sg-soli-wing,
+  .sg-soli-float,
+  .sg-soli-crown,
+  .sg-soli-ear,
+  .sg-soli-arm,
+  .sg-soli-sun,
   .sg-soli-shadow {
     animation: none !important;
   }
