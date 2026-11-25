@@ -3,7 +3,7 @@
   <h1>莉卡解析（astrbot_plugin_rika_share）</h1>
   <p>面向 <strong>AstrBot 4.x</strong> 的多平台链接与卡片分享自动解析插件</p>
 
-  ![Version](https://img.shields.io/badge/version-v3.5.0-6d28d9)
+  ![Version](https://img.shields.io/badge/version-v3.6.0-6d28d9)
   ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.0.0-3b82f6)
   ![License](https://img.shields.io/badge/license-MIT-10b981)
 </div>

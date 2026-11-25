@@ -327,7 +327,7 @@ export default {
           "div",
           { class: "brand-text" },
           h("strong", null, "莉卡解析"),
-          h("span", null, store.meta?.version || "v3.5.0"),
+          h("span", null, store.meta?.version || "v3.6.0"),
         ),
       ),
       h(
