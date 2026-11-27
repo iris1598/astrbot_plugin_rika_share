@@ -238,8 +238,17 @@ def coerce_node_rules(raw: Any) -> tuple[str, str | None]:
 
 
 def detect_content_mode(result: Any) -> str:
-    """根据 :class:`ParseResult` 实际内容自动归类为 ``video`` / ``gallery`` / ``dynamic``。"""
+    """根据 :class:`ParseResult` 实际内容自动归类为 ``video`` / ``gallery`` / ``dynamic``。
+
+    例外：外部解析器声明 ``extra["music_card"]``（网易云联动歌曲）时恒归 ``dynamic``
+    —— ``music_card`` 输出节点只存在于 dynamic 模式，而歌曲封面会以 ``ImageContent``
+    挂进 ``graphics`` 供卡片渲染，仅按内容推断会被误归 ``gallery``。
+    """
     from ..models import ImageContent, VideoContent
+
+    # 显式声明优先于内容推断（详见上方 docstring 的例外说明）
+    if getattr(result, "extra", None) and result.extra.get("music_card"):
+        return "dynamic"
 
     contents = getattr(result, "contents", ()) or ()
     graphics = getattr(result, "graphics", ()) or ()
